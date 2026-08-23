@@ -4,7 +4,6 @@ import { ComputerClient } from "./client/computer-client.js";
 import {
   messageSchema,
   monitorAutonomousSchema,
-  monitorIdSchema,
   startTaskSchema,
   taskIdSchema,
   workspaceIdSchema,
@@ -60,12 +59,41 @@ export function createMcpServer(client: ComputerClient): McpServer {
     "cptr_monitor_autonomous",
     {
       title: "Monitor a CPTR engineering goal",
-      description: "Use this when the user wants CPTR to continue supervising, verifying, repairing, and accepting an engineering goal after this MCP call ends.",
+      description: "Use this to create or manage a persistent CPTR engineering monitor: create, inspect status/events/evidence, steer, cancel, or approve a pending action.",
       inputSchema: monitorAutonomousSchema,
-      outputSchema: { monitor_id: z.string(), status: z.string(), scope_count: z.number(), verified_count: z.number() },
+      outputSchema: {
+        monitor_id: z.string().optional(),
+        goal_id: z.string().optional(),
+        status: z.string().optional(),
+        scope_count: z.number().optional(),
+        verified_count: z.number().optional(),
+        current_scope: z.string().nullable().optional(),
+        original_goal: z.string().optional(),
+        acceptance_criteria: z.array(z.string()).optional(),
+        approval_id: z.string().nullable().optional(),
+        approval: z.record(z.string(), z.unknown()).optional(),
+        scopes: z.array(z.record(z.string(), z.unknown())).optional(),
+        events: z.array(z.record(z.string(), z.unknown())).optional(),
+        evidence: z.array(z.record(z.string(), z.unknown())).optional(),
+        task_id: z.string().optional(),
+        message_id: z.string().optional(),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
-    async (input) => result(await client.monitorAutonomous(input)),
+    async (input) => {
+      if (input.action === "create" || !input.action) {
+        if (!input.workspace_id || !input.goal || !input.acceptance_criteria?.length || !input.model_id) {
+          throw new Error("create requires workspace_id, goal, acceptance_criteria, and model_id");
+        }
+      } else if (!input.monitor_id) {
+        throw new Error("this monitor action requires monitor_id");
+      } else if (input.action === "steer" && !input.content) {
+        throw new Error("steer requires content");
+      } else if (input.action === "approve" && (!input.approval_id || input.approved === undefined)) {
+        throw new Error("approve requires approval_id and approved");
+      }
+      return result(await client.monitorAutonomous(input));
+    },
   );
 
   server.registerTool(

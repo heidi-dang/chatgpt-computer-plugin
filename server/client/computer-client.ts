@@ -1,4 +1,4 @@
-import type { GitDiff, Monitor, Task, TaskOutput, Workspace } from "../types.js";
+import type { GitDiff, Task, TaskOutput, Workspace } from "../types.js";
 
 export class ComputerApiError extends Error {
   readonly status: number;
@@ -52,13 +52,37 @@ export class ComputerClient {
   }
 
   async monitorAutonomous(input: {
-    workspace_id: string;
-    goal: string;
-    acceptance_criteria: string[];
-    model_id: string;
+    action?: "create" | "status" | "events" | "evidence" | "steer" | "cancel" | "approve";
+    monitor_id?: string;
+    workspace_id?: string;
+    goal?: string;
+    acceptance_criteria?: string[];
+    model_id?: string;
     idempotency_key?: string;
-  }): Promise<Monitor> {
-    return this.request("/autonomous", { method: "POST", body: input });
+    content?: string;
+    approval_id?: string;
+    approved?: boolean;
+  }): Promise<Record<string, unknown>> {
+    const action = input.action ?? "create";
+    const monitorId = input.monitor_id;
+    if (action === "create") return this.request("/autonomous", { method: "POST", body: input });
+    if (!monitorId) throw new ComputerApiError(400, "monitor_id is required for this action", "invalid_monitor_action");
+    if (action === "status") return this.request(`/autonomous/${encodeURIComponent(monitorId)}`);
+    if (action === "events") return this.request(`/autonomous/${encodeURIComponent(monitorId)}/events`);
+    if (action === "evidence") return this.request(`/autonomous/${encodeURIComponent(monitorId)}/evidence`);
+    if (action === "steer") {
+      return this.request(`/autonomous/${encodeURIComponent(monitorId)}/messages`, {
+        method: "POST",
+        body: { content: input.content },
+      });
+    }
+    if (action === "cancel") {
+      return this.request(`/autonomous/${encodeURIComponent(monitorId)}/cancel`, { method: "POST" });
+    }
+    return this.request(`/autonomous/${encodeURIComponent(monitorId)}/approve`, {
+      method: "POST",
+      body: { approval_id: input.approval_id, approved: input.approved },
+    });
   }
 
   async getTask(taskId: string): Promise<Task> {

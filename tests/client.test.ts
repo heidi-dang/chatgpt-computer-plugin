@@ -44,3 +44,28 @@ test("converts request timeouts to a bounded public error", async () => {
     return true;
   });
 });
+
+test("routes persistent monitor actions to the scoped Control API", async () => {
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seen.push({ url: String(input), init });
+      return new Response(JSON.stringify({ monitor_id: "mon-1", status: "RUNNING" }), { status: 200 });
+    },
+  });
+
+  await client.monitorAutonomous({ action: "status", monitor_id: "mon-1" });
+  await client.monitorAutonomous({ action: "evidence", monitor_id: "mon-1" });
+  await client.monitorAutonomous({ action: "steer", monitor_id: "mon-1", content: "Continue" });
+  await client.monitorAutonomous({ action: "approve", monitor_id: "mon-1", approval_id: "approval-1", approved: true });
+
+  assert.deepEqual(seen.map((request) => request.url), [
+    "http://cptr.test/api/control/v1/autonomous/mon-1",
+    "http://cptr.test/api/control/v1/autonomous/mon-1/evidence",
+    "http://cptr.test/api/control/v1/autonomous/mon-1/messages",
+    "http://cptr.test/api/control/v1/autonomous/mon-1/approve",
+  ]);
+  assert.equal((seen[3].init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+});

@@ -24,7 +24,7 @@ The MCP endpoint is `http://${HOST}:${PORT}/mcp` and health is `/health`.
 
 ## Tools
 
-The adapter provides `cptr_list_workspaces`, `cptr_get_workspace`, `cptr_start_task`, `cptr_monitor_autonomous`, `cptr_get_task`, `cptr_get_task_output`, `cptr_send_message`, `cptr_cancel_task`, and `cptr_get_diff`. `cptr_monitor_autonomous` starts or resumes a durable CPTR supervisor; it does not keep an endless polling loop in MCP.
+The adapter provides `cptr_list_workspaces`, `cptr_get_workspace`, `cptr_start_task`, `cptr_monitor_autonomous`, `cptr_get_task`, `cptr_get_task_output`, `cptr_send_message`, `cptr_cancel_task`, and `cptr_get_diff`. `cptr_monitor_autonomous` starts or manages a durable CPTR supervisor with `action` values `create`, `status`, `events`, `evidence`, `steer`, `cancel`, and `approve`; it does not keep an endless polling loop in MCP.
 
 Tool schemas are bounded with Zod and each tool declares read/write/destructive annotations. Annotations guide client behavior but do not replace CPTR authentication or authorization.
 
@@ -39,5 +39,6 @@ For local inspection, run `npx @modelcontextprotocol/inspector@latest`, select S
 - The CPTR token is read from the environment and is never returned in tool results or normalized errors.
 - CPTR enforces workspace ownership and scopes such as `workspace:read`, `task:read`, `task:write`, `autonomous:run`, and `git:read`.
 - This adapter does not grant `git:write` or `deploy:write`.
+- External/destructive autonomous assignments pause in CPTR with a durable approval record; the MCP `approve` action only forwards the scoped decision and cannot bypass CPTR policy.
 - No widget is included yet.
 - CPTR inherits its host-level security model; do not expose it to untrusted users without an appropriate authentication and network boundary.
