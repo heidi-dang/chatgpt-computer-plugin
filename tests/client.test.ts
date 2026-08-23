@@ -45,7 +45,7 @@ test("converts request timeouts to a bounded public error", async () => {
   });
 });
 
-test("routes persistent monitor actions to the scoped Control API", async () => {
+test("routes dedicated autonomous operations to the scoped Control API", async () => {
   const seen: Array<{ url: string; init?: RequestInit }> = [];
   const client = new ComputerClient({
     baseUrl: "http://cptr.test",
@@ -56,15 +56,26 @@ test("routes persistent monitor actions to the scoped Control API", async () => 
     },
   });
 
-  await client.monitorAutonomous({ action: "status", monitor_id: "mon-1" });
-  await client.monitorAutonomous({ action: "evidence", monitor_id: "mon-1" });
-  await client.monitorAutonomous({ action: "steer", monitor_id: "mon-1", content: "Continue" });
-  await client.monitorAutonomous({ action: "approve", monitor_id: "mon-1", approval_id: "approval-1", approved: true });
+  await client.createAutonomous({
+    workspace_id: "ws-1",
+    goal: "Repair the fixture",
+    acceptance_criteria: ["tests pass"],
+    model_id: "model-1",
+  });
+  await client.getAutonomous("mon-1");
+  await client.getAutonomousEvents("mon-1");
+  await client.getAutonomousEvidence("mon-1");
+  await client.steerAutonomous("mon-1", "Continue");
+  await client.cancelAutonomous("mon-1");
+  await client.approveAutonomous("mon-1", "approval-1", true);
 
   assert.deepEqual(seen.map((request) => request.url), [
+    "http://cptr.test/api/control/v1/autonomous",
     "http://cptr.test/api/control/v1/autonomous/mon-1",
+    "http://cptr.test/api/control/v1/autonomous/mon-1/events",
     "http://cptr.test/api/control/v1/autonomous/mon-1/evidence",
     "http://cptr.test/api/control/v1/autonomous/mon-1/messages",
+    "http://cptr.test/api/control/v1/autonomous/mon-1/cancel",
     "http://cptr.test/api/control/v1/autonomous/mon-1/approve",
   ]);
   assert.equal((seen[3].init?.headers as Record<string, string>).Authorization, "Bearer secret-token");

@@ -1,10 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { z } from "zod";
 import { ComputerClient } from "./client/computer-client.js";
+import { z } from "zod";
 import {
+  approveAutonomousSchema,
   messageSchema,
   monitorAutonomousSchema,
+  monitorIdSchema,
   startTaskSchema,
+  steerAutonomousSchema,
   taskIdSchema,
   workspaceIdSchema,
 } from "./schemas/tools.js";
@@ -15,6 +18,21 @@ function result<T extends Record<string, unknown>>(value: T) {
     content: [{ type: "text" as const, text: JSON.stringify(value) }],
   };
 }
+
+const autonomousSummaryOutputSchema = {
+  monitor_id: z.string().optional(),
+  goal_id: z.string().optional(),
+  workspace_id: z.string().optional(),
+  status: z.string().optional(),
+  scope_count: z.number().optional(),
+  verified_count: z.number().optional(),
+  current_scope: z.string().nullable().optional(),
+  original_goal: z.string().optional(),
+  acceptance_criteria: z.array(z.string()).optional(),
+  approval_id: z.string().nullable().optional(),
+  approval: z.record(z.string(), z.unknown()).optional(),
+  scopes: z.array(z.record(z.string(), z.unknown())).optional(),
+};
 
 export function createMcpServer(client: ComputerClient): McpServer {
   const server = new McpServer({ name: "chatgpt-computer-plugin", version: "0.1.0" });
@@ -59,41 +77,95 @@ export function createMcpServer(client: ComputerClient): McpServer {
     "cptr_monitor_autonomous",
     {
       title: "Monitor a CPTR engineering goal",
-      description: "Use this to create or manage a persistent CPTR engineering monitor: create, inspect status/events/evidence, steer, cancel, or approve a pending action.",
+      description: "Use this to create a persistent CPTR engineering monitor. The monitor continues server-side after the MCP call ends.",
       inputSchema: monitorAutonomousSchema,
+      outputSchema: autonomousSummaryOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (input) => result(await client.createAutonomous(input)),
+  );
+
+  server.registerTool(
+    "cptr_get_autonomous",
+    {
+      title: "Get a CPTR autonomous monitor",
+      description: "Use this to inspect the durable status of a CPTR autonomous monitor.",
+      inputSchema: monitorIdSchema,
+      outputSchema: autonomousSummaryOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ monitor_id }) => result(await client.getAutonomous(monitor_id)),
+  );
+
+  server.registerTool(
+    "cptr_get_autonomous_events",
+    {
+      title: "Get CPTR autonomous events",
+      description: "Use this to inspect durable lifecycle events for a CPTR autonomous monitor.",
+      inputSchema: monitorIdSchema,
       outputSchema: {
         monitor_id: z.string().optional(),
-        goal_id: z.string().optional(),
-        status: z.string().optional(),
-        scope_count: z.number().optional(),
-        verified_count: z.number().optional(),
-        current_scope: z.string().nullable().optional(),
-        original_goal: z.string().optional(),
-        acceptance_criteria: z.array(z.string()).optional(),
-        approval_id: z.string().nullable().optional(),
-        approval: z.record(z.string(), z.unknown()).optional(),
-        scopes: z.array(z.record(z.string(), z.unknown())).optional(),
         events: z.array(z.record(z.string(), z.unknown())).optional(),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ monitor_id }) => result(await client.getAutonomousEvents(monitor_id)),
+  );
+
+  server.registerTool(
+    "cptr_get_autonomous_evidence",
+    {
+      title: "Get CPTR autonomous evidence",
+      description: "Use this to inspect persisted worker and independent verification evidence for a CPTR autonomous monitor.",
+      inputSchema: monitorIdSchema,
+      outputSchema: {
+        monitor_id: z.string().optional(),
         evidence: z.array(z.record(z.string(), z.unknown())).optional(),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ monitor_id }) => result(await client.getAutonomousEvidence(monitor_id)),
+  );
+
+  server.registerTool(
+    "cptr_steer_autonomous",
+    {
+      title: "Steer a CPTR autonomous monitor",
+      description: "Use this to send a scoped follow-up message to a running CPTR autonomous monitor.",
+      inputSchema: steerAutonomousSchema,
+      outputSchema: {
         task_id: z.string().optional(),
         message_id: z.string().optional(),
+        status: z.string().optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
-    async (input) => {
-      if (input.action === "create" || !input.action) {
-        if (!input.workspace_id || !input.goal || !input.acceptance_criteria?.length || !input.model_id) {
-          throw new Error("create requires workspace_id, goal, acceptance_criteria, and model_id");
-        }
-      } else if (!input.monitor_id) {
-        throw new Error("this monitor action requires monitor_id");
-      } else if (input.action === "steer" && !input.content) {
-        throw new Error("steer requires content");
-      } else if (input.action === "approve" && (!input.approval_id || input.approved === undefined)) {
-        throw new Error("approve requires approval_id and approved");
-      }
-      return result(await client.monitorAutonomous(input));
+    async ({ monitor_id, content }) => result(await client.steerAutonomous(monitor_id, content)),
+  );
+
+  server.registerTool(
+    "cptr_cancel_autonomous",
+    {
+      title: "Cancel a CPTR autonomous monitor",
+      description: "Use this when the user explicitly wants to stop a running CPTR autonomous monitor.",
+      inputSchema: monitorIdSchema,
+      outputSchema: autonomousSummaryOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
+    async ({ monitor_id }) => result(await client.cancelAutonomous(monitor_id)),
+  );
+
+  server.registerTool(
+    "cptr_approve_autonomous",
+    {
+      title: "Approve a CPTR autonomous action",
+      description: "Use this only when the user explicitly approves a pending CPTR action. Approval may release an external or destructive operation, so CPTR policy remains authoritative.",
+      inputSchema: approveAutonomousSchema,
+      outputSchema: autonomousSummaryOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    },
+    async ({ monitor_id, approval_id, approved }) =>
+      result(await client.approveAutonomous(monitor_id, approval_id, approved)),
   );
 
   server.registerTool(
