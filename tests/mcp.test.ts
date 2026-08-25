@@ -21,6 +21,15 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
 
   assert.deepEqual(
     [
+      "cptr_code_list_files",
+      "cptr_code_read_file",
+      "cptr_code_search_files",
+      "cptr_code_write_file",
+      "cptr_code_edit_file",
+      "cptr_code_run_command",
+      "cptr_code_get_command",
+      "cptr_code_cancel_command",
+      "cptr_execute_task",
       "cptr_monitor_autonomous",
       "cptr_get_autonomous",
       "cptr_get_autonomous_events",
@@ -31,6 +40,20 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
     ].every((name) => tools.has(name)),
     true,
   );
+  assert.equal(tools.get("cptr_code_list_files")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_code_read_file")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_code_search_files")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_code_write_file")?.annotations?.destructiveHint, true);
+  assert.equal(tools.get("cptr_code_edit_file")?.annotations?.destructiveHint, true);
+  assert.equal(tools.get("cptr_code_run_command")?.annotations?.openWorldHint, true);
+  assert.equal(tools.get("cptr_code_run_command")?.inputSchema.properties?.model_id, undefined);
+  assert.equal(tools.get("cptr_execute_task")?.annotations?.readOnlyHint, false);
+  assert.equal(tools.get("cptr_execute_task")?.annotations?.destructiveHint, false);
+  assert.equal(tools.get("cptr_execute_task")?.annotations?.openWorldHint, true);
+  const directInputSchema = tools.get("cptr_execute_task")?.inputSchema as
+    | { properties?: Record<string, { maximum?: number }> }
+    | undefined;
+  assert.equal(directInputSchema?.properties?.wait_seconds?.maximum, 60);
   assert.equal(tools.get("cptr_monitor_autonomous")?.annotations?.readOnlyHint, false);
   assert.equal(tools.get("cptr_monitor_autonomous")?.annotations?.destructiveHint, false);
   assert.equal(tools.get("cptr_get_autonomous")?.annotations?.readOnlyHint, true);
@@ -44,6 +67,89 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
   }
+
+  await client.close();
+  await server.close();
+});
+
+
+test("invokes every direct-coding tool through MCP without a CPTR model input", async () => {
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async (input, init) => {
+      const url = String(input);
+      seen.push({ url, init });
+      const payload = url.includes("/coding/list")
+        ? { workspace_id: "ws-1", path: ".", entries: "src/app.ts" }
+        : url.includes("/coding/read")
+          ? {
+              workspace_id: "ws-1",
+              path: "src/app.ts",
+              content: "export {};\n",
+              start_line: 1,
+              end_line: 1,
+              total_lines: 1,
+              size: 11,
+            }
+          : url.includes("/coding/search")
+            ? { workspace_id: "ws-1", path: "src", matches: "src/app.ts:1:export {}" }
+            : url.includes("/coding/write")
+              ? { workspace_id: "ws-1", path: "src/app.ts", bytes_written: 11 }
+              : url.includes("/coding/edit")
+                ? {
+                    workspace_id: "ws-1",
+                    path: "src/app.ts",
+                    replaced_characters: 2,
+                    inserted_characters: 12,
+                  }
+                : {
+                    command_id: "command-1",
+                    status: "COMPLETE",
+                    exit_code: 0,
+                    output: "ok",
+                    next_offset: 2,
+                  };
+      return new Response(JSON.stringify(payload), { status: 200 });
+    },
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [
+    { name: "cptr_code_list_files", arguments: { workspace_id: "ws-1" } },
+    { name: "cptr_code_read_file", arguments: { workspace_id: "ws-1", path: "src/app.ts" } },
+    { name: "cptr_code_search_files", arguments: { workspace_id: "ws-1", query: "export" } },
+    {
+      name: "cptr_code_write_file",
+      arguments: { workspace_id: "ws-1", path: "src/app.ts", content: "export {};\n" },
+    },
+    {
+      name: "cptr_code_edit_file",
+      arguments: { workspace_id: "ws-1", path: "src/app.ts", target: "{}", replacement: "{ value: 1 }" },
+    },
+    { name: "cptr_code_run_command", arguments: { workspace_id: "ws-1", command: "npm test" } },
+    { name: "cptr_code_get_command", arguments: { workspace_id: "ws-1", command_id: "command-1" } },
+    { name: "cptr_code_cancel_command", arguments: { workspace_id: "ws-1", command_id: "command-1" } },
+  ];
+
+  for (const tool of calls) {
+    const result = await client.callTool(tool);
+    assert.equal(result.isError, undefined, `${tool.name} should complete without an MCP error`);
+    assert.ok(result.structuredContent, `${tool.name} should return structured content`);
+  }
+
+  assert.equal(seen.length, 8);
+  for (const request of seen) {
+    const body = request.init?.body ? JSON.parse(String(request.init.body)) : {};
+    assert.equal(body.model_id, undefined);
+    assert.equal((request.init?.headers as Record<string, string>).Authorization, "Bearer test-token");
+  }
+  assert.equal(seen[6].url.includes("offset=0&wait_seconds=0"), true);
+  assert.equal(seen[7].url.endsWith("/coding/commands/command-1/cancel"), true);
 
   await client.close();
   await server.close();

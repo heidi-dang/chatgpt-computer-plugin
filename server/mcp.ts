@@ -3,6 +3,15 @@ import { ComputerClient } from "./client/computer-client.js";
 import { z } from "zod";
 import {
   approveAutonomousSchema,
+  codingCommandCancelSchema,
+  codingCommandSchema,
+  codingCommandStatusSchema,
+  codingEditSchema,
+  codingListSchema,
+  codingReadSchema,
+  codingSearchSchema,
+  codingWriteSchema,
+  executeTaskSchema,
   messageSchema,
   monitorAutonomousSchema,
   monitorIdSchema,
@@ -68,6 +77,141 @@ export function createMcpServer(client: ComputerClient): McpServer {
   );
 
   server.registerTool(
+    "cptr_code_list_files",
+    {
+      title: "List files in an authorized CPTR workspace",
+      description:
+        "Use this to inspect the selected CPTR workspace before ChatGPT directly edits code. It cannot access paths outside that workspace.",
+      inputSchema: codingListSchema,
+      outputSchema: { workspace_id: z.string(), path: z.string(), entries: z.string() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async (input) => result(await client.listCodingFiles(input)),
+  );
+
+  server.registerTool(
+    "cptr_code_read_file",
+    {
+      title: "Read an authorized CPTR workspace file",
+      description:
+        "Use this to read source code in the selected CPTR workspace before ChatGPT edits it. Environment files, binary files, paths outside the workspace, and oversized files are rejected by CPTR.",
+      inputSchema: codingReadSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        path: z.string(),
+        content: z.string(),
+        start_line: z.number().int(),
+        end_line: z.number().int(),
+        total_lines: z.number().int(),
+        size: z.number().int(),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async (input) => result(await client.readCodingFile(input)),
+  );
+
+  server.registerTool(
+    "cptr_code_search_files",
+    {
+      title: "Search an authorized CPTR workspace",
+      description:
+        "Use this to locate symbols, text, or files in the selected CPTR workspace before ChatGPT edits code.",
+      inputSchema: codingSearchSchema,
+      outputSchema: { workspace_id: z.string(), path: z.string(), matches: z.string() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async (input) => result(await client.searchCodingFiles(input)),
+  );
+
+  server.registerTool(
+    "cptr_code_write_file",
+    {
+      title: "Write a file in an authorized CPTR workspace",
+      description:
+        "Use this only when the user explicitly asks ChatGPT to create or replace code in the selected CPTR workspace. Read the existing file first when modifying it. CPTR rejects paths outside the workspace and environment files.",
+      inputSchema: codingWriteSchema,
+      outputSchema: { workspace_id: z.string(), path: z.string(), bytes_written: z.number().int() },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async (input) => result(await client.writeCodingFile(input)),
+  );
+
+  server.registerTool(
+    "cptr_code_edit_file",
+    {
+      title: "Apply an exact code edit in an authorized CPTR workspace",
+      description:
+        "Use this only when the user explicitly asks ChatGPT to modify code. It replaces an exact, unique target string and refuses ambiguous edits, so read the file first and then provide the precise target.",
+      inputSchema: codingEditSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        path: z.string(),
+        replaced_characters: z.number().int(),
+        inserted_characters: z.number().int(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async (input) => result(await client.editCodingFile(input)),
+  );
+
+  server.registerTool(
+    "cptr_code_run_command",
+    {
+      title: "Run a bounded validation command in an authorized CPTR workspace",
+      description:
+        "Use this only when the user explicitly asks ChatGPT to run a development or validation command in the selected CPTR workspace. CPTR rejects destructive commands. Commands that might contact external services require explicit user approval through allow_network=true.",
+      inputSchema: codingCommandSchema,
+      outputSchema: {
+        command_id: z.string(),
+        status: z.string(),
+        exit_code: z.number().int().nullable(),
+        output: z.string(),
+        next_offset: z.number().int(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+    },
+    async (input) => result(await client.runCodingCommand(input)),
+  );
+
+  server.registerTool(
+    "cptr_code_get_command",
+    {
+      title: "Get direct-coding command status and output",
+      description:
+        "Use this to retrieve completion status and incremental output from a command previously started through direct coding.",
+      inputSchema: codingCommandStatusSchema,
+      outputSchema: {
+        command_id: z.string(),
+        status: z.string(),
+        exit_code: z.number().int().nullable(),
+        output: z.string(),
+        next_offset: z.number().int(),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    },
+    async (input) => result(await client.getCodingCommand(input)),
+  );
+
+  server.registerTool(
+    "cptr_code_cancel_command",
+    {
+      title: "Cancel a direct-coding command",
+      description:
+        "Use this only when the user explicitly asks ChatGPT to stop a running direct-coding command.",
+      inputSchema: codingCommandCancelSchema,
+      outputSchema: {
+        command_id: z.string(),
+        status: z.string(),
+        exit_code: z.number().int().nullable(),
+        output: z.string(),
+        next_offset: z.number().int(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async (input) => result(await client.cancelCodingCommand(input)),
+  );
+
+  server.registerTool(
     "cptr_start_task",
     {
       title: "Start a CPTR task",
@@ -78,6 +222,28 @@ export function createMcpServer(client: ComputerClient): McpServer {
       _meta: oauthToolMetadata,
     },
     async (input) => result(await client.startTask(input)),
+  );
+
+  server.registerTool(
+    "cptr_execute_task",
+    {
+      title: "Execute a CPTR task now",
+      description:
+        "Use this only when the user explicitly asks ChatGPT to execute a contained task in a selected CPTR workspace. It starts an authorized CPTR task and waits up to 60 seconds for a result. If it remains active, return the task ID and use task-status tools rather than retrying. This tool does not grant additional CPTR permissions; CPTR authorization and approval policy remain authoritative.",
+      inputSchema: executeTaskSchema,
+      outputSchema: {
+        task_id: z.string(),
+        workspace_id: z.string(),
+        status: z.string(),
+        output: z.string(),
+        output_truncated: z.boolean(),
+        error: z.string().nullable().optional(),
+        completed: z.boolean(),
+        wait_seconds: z.number().int(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async (input) => result(await client.executeTask(input)),
   );
 
   server.registerTool(
