@@ -40,6 +40,10 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_approve_autonomous")?.annotations?.destructiveHint, true);
   assert.equal(tools.get("cptr_approve_autonomous")?.annotations?.openWorldHint, true);
   assert.equal(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.action, undefined);
+  assert.equal(tools.size, 15);
+  for (const tool of tools.values()) {
+    assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
+  }
 
   await client.close();
   await server.close();

@@ -6,6 +6,7 @@ export const monitorIdSchema = { monitor_id: z.string().min(1).max(200) };
 export const steerAutonomousSchema = {
   monitor_id: z.string().min(1).max(200),
   content: z.string().min(1).max(50_000),
+  idempotency_key: z.string().min(1).max(200).optional(),
 };
 export const approveAutonomousSchema = {
   monitor_id: z.string().min(1).max(200),
@@ -31,4 +32,5 @@ export const monitorAutonomousSchema = {
 export const messageSchema = {
   task_id: z.string().min(1).max(200),
   content: z.string().min(1).max(50_000),
+  idempotency_key: z.string().min(1).max(200).optional(),
 };
