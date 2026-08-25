@@ -29,6 +29,9 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_code_run_command",
       "cptr_code_get_command",
       "cptr_code_cancel_command",
+      "cptr_list_workspaces",
+      "cptr_get_workspace",
+      "cptr_start_task",
       "cptr_execute_task",
       "cptr_monitor_autonomous",
       "cptr_get_autonomous",
@@ -37,6 +40,11 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_steer_autonomous",
       "cptr_cancel_autonomous",
       "cptr_approve_autonomous",
+      "cptr_get_task",
+      "cptr_get_task_output",
+      "cptr_send_message",
+      "cptr_cancel_task",
+      "cptr_get_diff",
     ].every((name) => tools.has(name)),
     true,
   );
@@ -63,7 +71,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_approve_autonomous")?.annotations?.destructiveHint, true);
   assert.equal(tools.get("cptr_approve_autonomous")?.annotations?.openWorldHint, true);
   assert.equal(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.action, undefined);
-  assert.equal(tools.size, 15);
+  assert.equal(tools.size, 24);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
   }

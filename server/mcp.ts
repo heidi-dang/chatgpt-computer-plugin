@@ -85,6 +85,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: codingListSchema,
       outputSchema: { workspace_id: z.string(), path: z.string(), entries: z.string() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async (input) => result(await client.listCodingFiles(input)),
   );
@@ -106,6 +107,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
         size: z.number().int(),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async (input) => result(await client.readCodingFile(input)),
   );
@@ -119,6 +121,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: codingSearchSchema,
       outputSchema: { workspace_id: z.string(), path: z.string(), matches: z.string() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async (input) => result(await client.searchCodingFiles(input)),
   );
@@ -132,6 +135,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: codingWriteSchema,
       outputSchema: { workspace_id: z.string(), path: z.string(), bytes_written: z.number().int() },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async (input) => result(await client.writeCodingFile(input)),
   );
@@ -150,6 +154,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
         inserted_characters: z.number().int(),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async (input) => result(await client.editCodingFile(input)),
   );
@@ -169,6 +174,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
         next_offset: z.number().int(),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+      _meta: oauthToolMetadata,
     },
     async (input) => result(await client.runCodingCommand(input)),
   );
@@ -188,6 +194,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
         next_offset: z.number().int(),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async (input) => result(await client.getCodingCommand(input)),
   );
@@ -207,6 +214,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
         next_offset: z.number().int(),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async (input) => result(await client.cancelCodingCommand(input)),
   );
@@ -242,6 +250,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
         wait_seconds: z.number().int(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      _meta: oauthToolMetadata,
     },
     async (input) => result(await client.executeTask(input)),
   );
