@@ -73,10 +73,14 @@ export class ComputerClient {
     return this.request(`/autonomous/${encodeURIComponent(monitorId)}/evidence`);
   }
 
-  async steerAutonomous(monitorId: string, content: string): Promise<Record<string, unknown>> {
+  async steerAutonomous(
+    monitorId: string,
+    content: string,
+    idempotencyKey?: string,
+  ): Promise<Record<string, unknown>> {
     return this.request(`/autonomous/${encodeURIComponent(monitorId)}/messages`, {
       method: "POST",
-      body: { content },
+      body: { content, ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}) },
     });
   }
 
@@ -103,10 +107,14 @@ export class ComputerClient {
     return this.request(`/tasks/${encodeURIComponent(taskId)}/output`);
   }
 
-  async sendMessage(taskId: string, content: string): Promise<Record<string, unknown>> {
+  async sendMessage(
+    taskId: string,
+    content: string,
+    idempotencyKey?: string,
+  ): Promise<Record<string, unknown>> {
     return this.request(`/tasks/${encodeURIComponent(taskId)}/messages`, {
       method: "POST",
-      body: { content },
+      body: { content, ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}) },
     });
   }
 

@@ -65,7 +65,7 @@ test("routes dedicated autonomous operations to the scoped Control API", async (
   await client.getAutonomous("mon-1");
   await client.getAutonomousEvents("mon-1");
   await client.getAutonomousEvidence("mon-1");
-  await client.steerAutonomous("mon-1", "Continue");
+  await client.steerAutonomous("mon-1", "Continue", "steer-retry-1");
   await client.cancelAutonomous("mon-1");
   await client.approveAutonomous("mon-1", "approval-1", true);
 
@@ -79,4 +79,27 @@ test("routes dedicated autonomous operations to the scoped Control API", async (
     "http://cptr.test/api/control/v1/autonomous/mon-1/approve",
   ]);
   assert.equal((seen[3].init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+  assert.deepEqual(JSON.parse(String(seen[4].init?.body)), {
+    content: "Continue",
+    idempotency_key: "steer-retry-1",
+  });
+});
+
+test("forwards task steering idempotency keys", async () => {
+  let body = "";
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (_input, init) => {
+      body = String(init?.body ?? "");
+      return new Response(JSON.stringify({ task_id: "task-1", status: "QUEUED" }), { status: 200 });
+    },
+  });
+
+  await client.sendMessage("task-1", "STEERING_MARKER_1", "task-retry-1");
+
+  assert.deepEqual(JSON.parse(body), {
+    content: "STEERING_MARKER_1",
+    idempotency_key: "task-retry-1",
+  });
 });

@@ -19,6 +19,10 @@ function result<T extends Record<string, unknown>>(value: T) {
   };
 }
 
+const oauthToolMetadata = {
+  securitySchemes: [{ type: "oauth2", scopes: [] }],
+};
+
 const autonomousSummaryOutputSchema = {
   monitor_id: z.string().optional(),
   goal_id: z.string().optional(),
@@ -45,6 +49,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: {},
       outputSchema: { workspaces: z.array(z.record(z.string(), z.unknown())) },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async () => result(await client.listWorkspaces()),
   );
@@ -57,6 +62,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: workspaceIdSchema,
       outputSchema: { workspace_id: z.string(), name: z.string() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async ({ workspace_id }) => result(await client.getWorkspace(workspace_id)),
   );
@@ -69,6 +75,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: startTaskSchema,
       outputSchema: { id: z.string(), status: z.string(), workspace_id: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async (input) => result(await client.startTask(input)),
   );
@@ -81,6 +88,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: monitorAutonomousSchema,
       outputSchema: autonomousSummaryOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async (input) => result(await client.createAutonomous(input)),
   );
@@ -93,6 +101,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: monitorIdSchema,
       outputSchema: autonomousSummaryOutputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async ({ monitor_id }) => result(await client.getAutonomous(monitor_id)),
   );
@@ -108,6 +117,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
         events: z.array(z.record(z.string(), z.unknown())).optional(),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async ({ monitor_id }) => result(await client.getAutonomousEvents(monitor_id)),
   );
@@ -123,6 +133,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
         evidence: z.array(z.record(z.string(), z.unknown())).optional(),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async ({ monitor_id }) => result(await client.getAutonomousEvidence(monitor_id)),
   );
@@ -139,8 +150,10 @@ export function createMcpServer(client: ComputerClient): McpServer {
         status: z.string().optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
-    async ({ monitor_id, content }) => result(await client.steerAutonomous(monitor_id, content)),
+    async ({ monitor_id, content, idempotency_key }) =>
+      result(await client.steerAutonomous(monitor_id, content, idempotency_key)),
   );
 
   server.registerTool(
@@ -151,6 +164,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: monitorIdSchema,
       outputSchema: autonomousSummaryOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async ({ monitor_id }) => result(await client.cancelAutonomous(monitor_id)),
   );
@@ -163,6 +177,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: approveAutonomousSchema,
       outputSchema: autonomousSummaryOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+      _meta: oauthToolMetadata,
     },
     async ({ monitor_id, approval_id, approved }) =>
       result(await client.approveAutonomous(monitor_id, approval_id, approved)),
@@ -176,6 +191,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: taskIdSchema,
       outputSchema: { id: z.string(), status: z.string() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async ({ task_id }) => result(await client.getTask(task_id)),
   );
@@ -188,6 +204,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: taskIdSchema,
       outputSchema: { task_id: z.string(), status: z.string(), content: z.string() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async ({ task_id }) => result(await client.getTaskOutput(task_id)),
   );
@@ -200,8 +217,10 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: messageSchema,
       outputSchema: { task_id: z.string(), message_id: z.string(), status: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
-    async ({ task_id, content }) => result(await client.sendMessage(task_id, content)),
+    async ({ task_id, content, idempotency_key }) =>
+      result(await client.sendMessage(task_id, content, idempotency_key)),
   );
 
   server.registerTool(
@@ -212,6 +231,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: taskIdSchema,
       outputSchema: { id: z.string(), status: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async ({ task_id }) => result(await client.cancelTask(task_id)),
   );
@@ -224,6 +244,7 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: workspaceIdSchema,
       outputSchema: { diff: z.unknown().optional() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
     },
     async ({ workspace_id }) => result(await client.getDiff(workspace_id)),
   );
