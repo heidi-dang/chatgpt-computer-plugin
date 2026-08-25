@@ -1,4 +1,6 @@
 import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   authenticateMcpRequest,
@@ -7,6 +9,8 @@ import {
 } from "./auth.js";
 import { clientFromEnvironment } from "./client/computer-client.js";
 import { createMcpServer } from "./mcp.js";
+import { LiveGateway } from "./live-gateway.js";
+import { LiveTicketStore } from "./live-tickets.js";
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? "8787");
@@ -38,6 +42,22 @@ const oauthConfig: McpAuthConfig = {
       : undefined,
 };
 const client = clientFromEnvironment();
+const liveTickets = new LiveTicketStore({ streamUrl: `${publicOrigin}/live/stream` });
+const liveGateway = new LiveGateway(client, liveTickets);
+const workbenchBundle = (() => {
+  try {
+    return readFileSync(fileURLToPath(new URL("../web/dist/workbench.js", import.meta.url)), "utf8");
+  } catch {
+    return "document.body.textContent = 'CPTR Live Workbench bundle is not built';";
+  }
+})();
+const workbenchStyles = (() => {
+  try {
+    return readFileSync(fileURLToPath(new URL("../web/dist/workbench.css", import.meta.url)), "utf8");
+  } catch {
+    return "";
+  }
+})();
 
 function writeJson(res: import("node:http").ServerResponse, status: number, value: unknown, headers: Record<string, string> = {}) {
   res.writeHead(status, {
@@ -81,6 +101,19 @@ const httpServer = createServer(async (req, res) => {
     }));
     return;
   }
+  if (url.pathname === "/live/stream") {
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, {
+        "access-control-allow-origin": "*",
+        "access-control-allow-headers": "Authorization, Accept, Last-Event-ID",
+        "access-control-allow-methods": "GET, OPTIONS",
+        "cache-control": "no-store",
+      }).end();
+      return;
+    }
+    await liveGateway.handle(req, res);
+    return;
+  }
   if (url.pathname !== mcpPath || !req.method || !["GET", "POST", "DELETE"].includes(req.method)) {
     res.writeHead(404).end("Not Found");
     return;
@@ -102,7 +135,12 @@ const httpServer = createServer(async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Mcp-Session-Id");
   res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
-  const server = createMcpServer(client);
+  const server = createMcpServer(client, {
+    tickets: liveTickets,
+    widgetBundle: workbenchBundle,
+    widgetStyles: workbenchStyles,
+    connectDomain: publicOrigin,
+  });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   res.on("close", () => {
     void transport.close();

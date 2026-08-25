@@ -126,6 +126,30 @@ export class ComputerClient {
     return this.request(`/workspaces/${encodeURIComponent(workspaceId)}/git/diff`);
   }
 
+  async streamLive(
+    targetType: "task" | "monitor",
+    targetId: string,
+    afterSequence = 0,
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Math.max(this.timeoutMs, 60_000));
+    try {
+      const path = targetType === "task" ? "tasks" : "autonomous";
+      return await this.fetchImpl(
+        `${this.baseUrl}/api/control/v1/${path}/${encodeURIComponent(targetId)}/stream?after=${afterSequence}`,
+        {
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            Accept: "text/event-stream",
+          },
+          signal: controller.signal,
+        },
+      );
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   private async request<T>(
     path: string,
     options: { method?: string; body?: unknown } = {},

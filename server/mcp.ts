@@ -1,5 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ComputerClient } from "./client/computer-client.js";
+import { LiveTicketStore } from "./live-tickets.js";
+import { WORKBENCH_RESOURCE_URI, createWorkbenchResource } from "./ui/workbench-resource.js";
 import { z } from "zod";
 import {
   approveAutonomousSchema,
@@ -19,8 +21,28 @@ function result<T extends Record<string, unknown>>(value: T) {
   };
 }
 
+function workbenchResult<T extends Record<string, unknown>>(
+  value: T,
+  target: { targetType: "task" | "monitor"; targetId: string },
+  tickets: LiveTicketStore,
+) {
+  const stream = tickets.issue(target);
+  return {
+    ...result(value),
+    _meta: {
+      "cptr/live": stream,
+      ui: { resourceUri: WORKBENCH_RESOURCE_URI },
+    },
+  };
+}
+
 const oauthToolMetadata = {
   securitySchemes: [{ type: "oauth2", scopes: [] }],
+};
+
+const workbenchToolMetadata = {
+  ...oauthToolMetadata,
+  ui: { resourceUri: WORKBENCH_RESOURCE_URI },
 };
 
 const autonomousSummaryOutputSchema = {
@@ -38,8 +60,22 @@ const autonomousSummaryOutputSchema = {
   scopes: z.array(z.record(z.string(), z.unknown())).optional(),
 };
 
-export function createMcpServer(client: ComputerClient): McpServer {
+export function createMcpServer(
+  client: ComputerClient,
+  options: { tickets?: LiveTicketStore; widgetBundle?: string; widgetStyles?: string; connectDomain?: string } = {},
+): McpServer {
   const server = new McpServer({ name: "chatgpt-computer-plugin", version: "0.1.0" });
+  const tickets = options.tickets ?? new LiveTicketStore();
+  server.registerResource(
+    "cptr-live-workbench",
+    WORKBENCH_RESOURCE_URI,
+    {},
+    async () => createWorkbenchResource(
+      options.widgetBundle ?? "document.body.textContent = 'CPTR Live Workbench';",
+      options.connectDomain,
+      options.widgetStyles,
+    ),
+  );
 
   server.registerTool(
     "cptr_list_workspaces",
@@ -75,9 +111,12 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: startTaskSchema,
       outputSchema: { id: z.string(), status: z.string(), workspace_id: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-      _meta: oauthToolMetadata,
+      _meta: workbenchToolMetadata,
     },
-    async (input) => result(await client.startTask(input)),
+    async (input) => {
+      const task = await client.startTask(input);
+      return workbenchResult(task, { targetType: "task", targetId: task.id }, tickets);
+    },
   );
 
   server.registerTool(
@@ -88,9 +127,15 @@ export function createMcpServer(client: ComputerClient): McpServer {
       inputSchema: monitorAutonomousSchema,
       outputSchema: autonomousSummaryOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-      _meta: oauthToolMetadata,
+      _meta: workbenchToolMetadata,
     },
-    async (input) => result(await client.createAutonomous(input)),
+    async (input) => {
+      const monitor = await client.createAutonomous(input);
+      return workbenchResult(monitor, {
+        targetType: "monitor",
+        targetId: String(monitor.monitor_id),
+      }, tickets);
+    },
   );
 
   server.registerTool(

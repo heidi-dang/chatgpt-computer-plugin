@@ -103,3 +103,23 @@ test("forwards task steering idempotency keys", async () => {
     idempotency_key: "task-retry-1",
   });
 });
+
+test("streams CPTR activity with server-side auth and a replay cursor", async () => {
+  let seenUrl = "";
+  let seenHeaders: Record<string, string> = {};
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seenUrl = String(input);
+      seenHeaders = init?.headers as Record<string, string>;
+      return new Response("event: task.started\nid: 4\ndata: {}\n\n", { status: 200 });
+    },
+  });
+  const response = await client.streamLive("task", "task-1", 3);
+  assert.equal(response.ok, true);
+  assert.equal(seenUrl, "http://cptr.test/api/control/v1/tasks/task-1/stream?after=3");
+  assert.equal(seenHeaders.Authorization, "Bearer secret-token");
+  assert.equal(seenHeaders.Accept, "text/event-stream");
+  assert.equal(seenUrl.includes("secret-token"), false);
+});

@@ -2,7 +2,7 @@
 
 Thin MCP adapter for `heidi-dang/computer`. CPTR remains responsible for execution, persistence, authentication, autonomous supervision, verification, retries, approvals, and restart recovery. This repository only exposes the ChatGPT-facing MCP tools and forwards scoped requests to CPTR's `/api/control/v1` API.
 
-The first pass intentionally has no widget. The MCP connection may end while CPTR continues the server-side autonomous monitor.
+Task and autonomous creation results hydrate an inline MCP Apps Live Workbench. The widget is a view over CPTR's server-authoritative event stream; it does not run workers or replace the existing MCP tools. The MCP connection may end while CPTR continues the server-side autonomous monitor.
 
 ## Setup
 
@@ -36,7 +36,28 @@ Tool schemas are bounded with Zod and each tool declares read/write/destructive 
 
 ## Official MCP shape
 
-This server follows the current OpenAI Apps SDK guidance: the official TypeScript MCP SDK, Streamable HTTP at `/mcp`, explicit input/output schemas, and tool annotations. The closest official no-widget-compatible example is the Node MCP Apps server in `openai/openai-apps-sdk-examples`; this project does not register UI resources in the initial pass.
+This server follows the MCP Apps contract: the official TypeScript MCP SDK, Streamable HTTP at `/mcp`, explicit input/output schemas, tool annotations, a `text/html;profile=mcp-app` resource, and hidden result metadata containing the versioned `ui://cptr/live-workbench.html` resource reference. The resource uses the portable `ui/*` postMessage bridge first and feature-detects ChatGPT's optional `window.openai` helpers for display mode and intrinsic sizing.
+
+## CPTR Live Workbench
+
+`cptr_start_task` and `cptr_monitor_autonomous` attach target-bound, short-lived widget metadata in result `_meta`; the opaque stream ticket is not placed in visible tool content or a URL. The widget calls the plugin's `/live/stream` gateway with the ticket in an `Authorization` header. The gateway forwards the private CPTR bearer server-side to:
+
+```text
+GET /api/control/v1/tasks/{task_id}/stream
+GET /api/control/v1/autonomous/{monitor_id}/stream
+```
+
+CPTR persists bounded, redacted per-target events with monotonic sequences and sends an initial safe snapshot followed by replayable SSE. The widget reconnects with its last sequence, deduplicates events, and stops on terminal status. Slow streams are disconnected so they can reconnect and replay instead of growing memory without bound. The task and monitor streams intentionally omit prompts, raw output projections, and chain-of-thought from their snapshots; activity events are bounded and redacted before persistence.
+
+The widget provides Activity, Terminal, Tools, Changes, and Evidence views, plus scoped Stop and Steer actions. Stop and Steer call the existing MCP tools and include caller-generated idempotency keys for steering. CPTR remains authoritative for ownership, cancellation quiescence, approval, steering provenance, and terminal state.
+
+Build the browser module and server bundle with:
+
+```bash
+npm run build
+```
+
+The build emits an ignored `web/dist/` bundle; the Node server inlines the generated JavaScript and CSS into the registered MCP Apps resource. Local rendered QA can use a disposable static preview, but a real ChatGPT Developer Mode acceptance run is still required to verify the host's MCP Apps bridge and live CPTR stream end to end.
 
 For local inspection, run `npx @modelcontextprotocol/inspector@latest`, select Streamable HTTP, and enter the configured `/mcp` URL. In ChatGPT Developer Mode, expose the endpoint through an HTTPS tunnel or deployment, add the `/mcp` URL as a connector, and refresh the connector after tool/schema changes.
 
@@ -46,5 +67,5 @@ For local inspection, run `npx @modelcontextprotocol/inspector@latest`, select S
 - CPTR enforces workspace ownership and scopes such as `workspace:read`, `task:read`, `task:write`, `autonomous:run`, and `git:read`.
 - This adapter does not grant `git:write` or `deploy:write`.
 - External/destructive autonomous assignments pause in CPTR with a durable approval record; the MCP `cptr_approve_autonomous` tool only forwards the scoped decision and cannot bypass CPTR policy.
-- No widget is included yet.
+- The widget is a bounded activity projection and is not a substitute for the durable CPTR APIs or the existing 15-tool surface.
 - CPTR inherits its host-level security model; do not expose it to untrusted users without an appropriate authentication and network boundary.

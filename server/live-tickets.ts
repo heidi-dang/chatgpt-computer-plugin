@@ -1,0 +1,71 @@
+import { randomBytes } from "node:crypto";
+
+export type LiveTarget = { targetType: "task" | "monitor"; targetId: string };
+
+export type WidgetStreamMetadata = LiveTarget & {
+  ticket: string;
+  streamUrl: string;
+  expiresAt: number;
+};
+
+type TicketClaims = LiveTarget & { expiresAt: number };
+
+export class LiveTicketStore {
+  private readonly tickets = new Map<string, TicketClaims>();
+  private readonly now: () => number;
+  private readonly ttlMs: number;
+  private readonly streamUrl: string;
+  private readonly maxTickets: number;
+
+  constructor(options: { now?: () => number; ttlMs?: number; streamUrl?: string; maxTickets?: number } = {}) {
+    this.now = options.now ?? (() => Date.now());
+    this.ttlMs = Math.max(1_000, options.ttlMs ?? 5 * 60_000);
+    this.streamUrl = options.streamUrl ?? "/live/stream";
+    this.maxTickets = Math.max(1, options.maxTickets ?? 4_096);
+  }
+
+  get size(): number {
+    this.pruneExpired(this.now());
+    return this.tickets.size;
+  }
+
+  private pruneExpired(now: number): void {
+    for (const [ticket, claims] of this.tickets) {
+      if (claims.expiresAt <= now) this.tickets.delete(ticket);
+    }
+  }
+
+  private evictOldestIfFull(): void {
+    while (this.tickets.size >= this.maxTickets) {
+      const oldest = this.tickets.keys().next().value;
+      if (typeof oldest !== "string") return;
+      this.tickets.delete(oldest);
+    }
+  }
+
+  issue(target: LiveTarget): WidgetStreamMetadata {
+    const now = this.now();
+    this.pruneExpired(now);
+    this.evictOldestIfFull();
+    const ticket = randomBytes(32).toString("base64url");
+    const expiresAt = now + this.ttlMs;
+    this.tickets.set(ticket, { ...target, expiresAt });
+    return { ...target, ticket, expiresAt, streamUrl: this.streamUrl };
+  }
+
+  validate(ticket: string, target?: LiveTarget): TicketClaims | null {
+    const claims = this.tickets.get(ticket);
+    if (!claims || claims.expiresAt <= this.now()) {
+      if (claims) this.tickets.delete(ticket);
+      return null;
+    }
+    if (target && (claims.targetType !== target.targetType || claims.targetId !== target.targetId)) {
+      return null;
+    }
+    return { ...claims };
+  }
+
+  revoke(ticket: string): void {
+    this.tickets.delete(ticket);
+  }
+}
