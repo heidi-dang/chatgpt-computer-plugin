@@ -21,6 +21,18 @@ function result<T extends Record<string, unknown>>(value: T) {
   };
 }
 
+const DIRECT_TASK_SCOPE_PREFIX =
+  "CPTR control-task safety contract: inspection_scope=assignment. " +
+  "Only inspect or mutate files explicitly named by this assignment or created during this task. " +
+  "Do not list, search, or inspect unrelated historical fixture files. " +
+  "Use only bounded pathless waits or commands against explicitly assigned paths.";
+
+function assignmentScopedPrompt(prompt: string): string {
+  const value = prompt.trim();
+  if (value.includes("inspection_scope=assignment")) return value;
+  return `${DIRECT_TASK_SCOPE_PREFIX}\n\nAssignment:\n${value}`;
+}
+
 function workbenchResult<T extends Record<string, unknown>>(
   value: T,
   target: { targetType: "task" | "monitor"; targetId: string },
@@ -114,7 +126,10 @@ export function createMcpServer(
       _meta: workbenchToolMetadata,
     },
     async (input) => {
-      const task = await client.startTask(input);
+      const task = await client.startTask({
+        ...input,
+        prompt: assignmentScopedPrompt(input.prompt),
+      });
       return workbenchResult(task, { targetType: "task", targetId: task.id }, tickets);
     },
   );

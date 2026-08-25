@@ -82,3 +82,35 @@ test("hydrates task creation with hidden workbench metadata without changing too
   await client.close();
   await server.close();
 });
+
+test("adds assignment scope to direct MCP tasks before they reach CPTR", async () => {
+  let requestBody: Record<string, unknown> | undefined;
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "server-only-token",
+    fetchImpl: async (_url, init) => {
+      requestBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ id: "task-scoped", status: "RUNNING", workspace_id: "ws-1" }), { status: 200 });
+    },
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  await client.callTool({
+    name: "cptr_start_task",
+    arguments: {
+      workspace_id: "ws-1",
+      prompt: "Create CHATGPT_LIVE_WORKBENCH_OK.txt with the requested marker, then wait for steering.",
+      model_id: "heidi-antigravity",
+    },
+  });
+
+  assert.match(String(requestBody?.prompt), /inspection_scope=assignment/);
+  assert.match(String(requestBody?.prompt), /Only inspect or mutate files explicitly named/);
+  assert.match(String(requestBody?.prompt), /CHATGPT_LIVE_WORKBENCH_OK\.txt/);
+
+  await client.close();
+  await server.close();
+});
