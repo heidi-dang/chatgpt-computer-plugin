@@ -103,3 +103,199 @@ test("forwards task steering idempotency keys", async () => {
     idempotency_key: "task-retry-1",
   });
 });
+
+test("executes an already-complete CPTR task without exposing raw agent events", async () => {
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seen.push({ url: String(input), init });
+      return new Response(
+        JSON.stringify({
+          id: "task-1",
+          workspace_id: "ws-1",
+          chat_id: "chat-1",
+          message_id: "message-1",
+          status: "COMPLETE",
+          prompt: "Inspect the fixture",
+          model_id: "model-1",
+          output: "Fixture inspected.",
+          raw_output: [{ type: "internal-event" }],
+          error: null,
+        }),
+        { status: 200 },
+      );
+    },
+  });
+
+  const result = await client.executeTask({
+    workspace_id: "ws-1",
+    prompt: "Inspect the fixture",
+    model_id: "model-1",
+    wait_seconds: 5,
+  });
+
+  assert.deepEqual(result, {
+    task_id: "task-1",
+    workspace_id: "ws-1",
+    status: "COMPLETE",
+    output: "Fixture inspected.",
+    output_truncated: false,
+    error: null,
+    completed: true,
+    wait_seconds: 5,
+  });
+  assert.deepEqual(seen.map((request) => request.url), ["http://cptr.test/api/control/v1/tasks"]);
+  assert.equal((seen[0].init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+});
+
+test("bounds direct-execution output before returning it to ChatGPT", async () => {
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({
+          id: "task-1",
+          workspace_id: "ws-1",
+          chat_id: "chat-1",
+          message_id: "message-1",
+          status: "COMPLETE",
+          prompt: "Inspect the fixture",
+          model_id: "model-1",
+          output: "x".repeat(20_001),
+          error: null,
+        }),
+        { status: 200 },
+      ),
+  });
+
+  const result = await client.executeTask({
+    workspace_id: "ws-1",
+    prompt: "Inspect the fixture",
+    model_id: "model-1",
+  });
+
+  assert.equal(result.output_truncated, true);
+  assert.equal(result.output.endsWith("[Output truncated by the MCP adapter.]"), true);
+  assert.equal(result.output.length, 20_040);
+});
+
+
+test("polls a running direct task until it reaches a terminal status", async () => {
+  let calls = 0;
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async () => {
+      calls += 1;
+      const status = calls === 1 ? "RUNNING" : "COMPLETE";
+      return new Response(
+        JSON.stringify({
+          id: "task-1",
+          workspace_id: "ws-1",
+          chat_id: "chat-1",
+          message_id: "message-1",
+          status,
+          prompt: "Inspect the fixture",
+          model_id: "model-1",
+          output: status === "COMPLETE" ? "Fixture inspected." : "",
+          error: null,
+        }),
+        { status: 200 },
+      );
+    },
+  });
+
+  const result = await client.executeTask({
+    workspace_id: "ws-1",
+    prompt: "Inspect the fixture",
+    model_id: "model-1",
+    wait_seconds: 1,
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(result.completed, true);
+  assert.equal(result.status, "COMPLETE");
+});
+
+
+test("routes direct ChatGPT coding operations only through scoped workspace endpoints", async () => {
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const response = {
+    workspace_id: "ws-1",
+    path: "src/app.ts",
+    command_id: "command-1",
+    status: "COMPLETE",
+    exit_code: 0,
+    output: "ok",
+    next_offset: 2,
+    content: "export {};\n",
+    start_line: 1,
+    end_line: 1,
+    total_lines: 1,
+    size: 11,
+    entries: "src/app.ts",
+    matches: "src/app.ts:1:export {}",
+    bytes_written: 11,
+    replaced_characters: 1,
+    inserted_characters: 1,
+  };
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seen.push({ url: String(input), init });
+      return new Response(JSON.stringify(response), { status: 200 });
+    },
+  });
+
+  await client.listCodingFiles({ workspace_id: "ws-1" });
+  await client.readCodingFile({ workspace_id: "ws-1", path: "src/app.ts" });
+  await client.searchCodingFiles({ workspace_id: "ws-1", query: "export" });
+  await client.writeCodingFile({ workspace_id: "ws-1", path: "src/app.ts", content: "export {};\n" });
+  await client.editCodingFile({
+    workspace_id: "ws-1",
+    path: "src/app.ts",
+    target: "{}",
+    replacement: "{ value: 1 }",
+  });
+  await client.runCodingCommand({ workspace_id: "ws-1", command: "npm test" });
+  await client.getCodingCommand({ workspace_id: "ws-1", command_id: "command-1" });
+  await client.cancelCodingCommand({ workspace_id: "ws-1", command_id: "command-1" });
+
+  assert.deepEqual(seen.map((request) => request.url), [
+    "http://cptr.test/api/control/v1/workspaces/ws-1/coding/list",
+    "http://cptr.test/api/control/v1/workspaces/ws-1/coding/read",
+    "http://cptr.test/api/control/v1/workspaces/ws-1/coding/search",
+    "http://cptr.test/api/control/v1/workspaces/ws-1/coding/write",
+    "http://cptr.test/api/control/v1/workspaces/ws-1/coding/edit",
+    "http://cptr.test/api/control/v1/workspaces/ws-1/coding/commands",
+    "http://cptr.test/api/control/v1/workspaces/ws-1/coding/commands/command-1?offset=0&wait_seconds=0",
+    "http://cptr.test/api/control/v1/workspaces/ws-1/coding/commands/command-1/cancel",
+  ]);
+  const commandBody = JSON.parse(String(seen[5].init?.body));
+  assert.equal(commandBody.model_id, undefined);
+  assert.equal((seen[5].init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+});
+
+test("streams CPTR activity with server-side auth and a replay cursor", async () => {
+  let seenUrl = "";
+  let seenHeaders: Record<string, string> = {};
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seenUrl = String(input);
+      seenHeaders = init?.headers as Record<string, string>;
+      return new Response("event: task.started\nid: 4\ndata: {}\n\n", { status: 200 });
+    },
+  });
+  const response = await client.streamLive("task", "task-1", 3);
+  assert.equal(response.ok, true);
+  assert.equal(seenUrl, "http://cptr.test/api/control/v1/tasks/task-1/stream?after=3");
+  assert.equal(seenHeaders.Authorization, "Bearer secret-token");
+  assert.equal(seenHeaders.Accept, "text/event-stream");
+  assert.equal(seenUrl.includes("secret-token"), false);
+});
