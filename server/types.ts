@@ -39,4 +39,38 @@ export type TaskOutput = {
   raw_output?: unknown[];
 };
 
+/**
+ * The bounded result exposed by the direct-execution MCP tool. It omits raw
+ * agent events and limits text output so a single tool invocation cannot
+ * consume an unbounded amount of the ChatGPT context window.
+ */
+export type DirectTaskExecution = {
+  task_id: string;
+  workspace_id: string;
+  status: string;
+  output: string;
+  output_truncated: boolean;
+  error?: string | null;
+  completed: boolean;
+  wait_seconds: number;
+};
+
 export type GitDiff = Record<string, unknown>;
+
+export type DirectFileRead = {
+  workspace_id: string;
+  path: string;
+  content: string;
+  start_line: number;
+  end_line: number;
+  total_lines: number;
+  size: number;
+};
+
+export type DirectCommand = {
+  command_id: string;
+  status: string;
+  exit_code: number | null;
+  output: string;
+  next_offset: number;
+};

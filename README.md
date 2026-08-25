@@ -24,7 +24,7 @@ The MCP endpoint is `http://${HOST}:${PORT}/mcp` and health is `/health`.
 
 ## Tools
 
-The adapter provides `cptr_list_workspaces`, `cptr_get_workspace`, `cptr_start_task`, `cptr_monitor_autonomous`, `cptr_get_autonomous`, `cptr_get_autonomous_events`, `cptr_get_autonomous_evidence`, `cptr_steer_autonomous`, `cptr_cancel_autonomous`, `cptr_approve_autonomous`, `cptr_get_task`, `cptr_get_task_output`, `cptr_send_message`, `cptr_cancel_task`, and `cptr_get_diff`. `cptr_monitor_autonomous` only creates a durable CPTR supervisor; the dedicated autonomous tools inspect, steer, cancel, and approve it without keeping an endless polling loop in MCP.
+The adapter provides workspace-discovery tools plus eight **direct-coding tools**: `cptr_code_list_files`, `cptr_code_read_file`, `cptr_code_search_files`, `cptr_code_write_file`, `cptr_code_edit_file`, `cptr_code_run_command`, `cptr_code_get_command`, and `cptr_code_cancel_command`. These let the official ChatGPT app independently inspect, edit, test, and iterate inside an authorized CPTR workspace without creating a CPTR task, selecting a CPTR model, or invoking CPTR’s agent loop. The adapter also provides `cptr_start_task`, `cptr_execute_task`, autonomous-monitor tools, task-status tools, and `cptr_get_diff` for the separate CPTR-agent workflow. `cptr_execute_task` starts a scoped CPTR task and waits for at most 60 seconds before returning either its bounded result or the durable task ID for follow-up. `cptr_monitor_autonomous` only creates a durable CPTR supervisor; the dedicated autonomous tools inspect, steer, cancel, and approve it without keeping an endless polling loop in MCP.
 
 Tool schemas are bounded with Zod and each tool declares read/write/destructive annotations. Annotations guide client behavior but do not replace CPTR authentication or authorization.
 
@@ -37,7 +37,9 @@ For local inspection, run `npx @modelcontextprotocol/inspector@latest`, select S
 ## Security and limitations
 
 - The CPTR token is read from the environment and is never returned in tool results or normalized errors.
-- CPTR enforces workspace ownership and scopes such as `workspace:read`, `task:read`, `task:write`, `autonomous:run`, and `git:read`.
+- The direct-coding tools are not CPTR agent delegation. They are scoped CPTR workspace primitives that the official ChatGPT app may chain autonomously: list, read, search, write, exact edit, run command, inspect command output, and cancel command. They require no CPTR `model_id` and no external OpenAI API key.
+- Direct coding is confined to the selected owned workspace. It rejects absolute/traversal paths, environment files, binary/oversized reads, ambiguous edits, and destructive commands. A potentially external command requires both explicit user approval through `allow_network=true` and CPTR’s separate `command:external` scope.
+- CPTR enforces workspace ownership and scopes such as `workspace:read`, `task:read`, `task:write`, `autonomous:run`, `git:read`, `coding:read`, `coding:write`, and `command:execute`. Existing tokens must be reissued with the three direct-coding scopes before these tools will work; `command:external` is intentionally not included in default newly issued keys.
 - This adapter does not grant `git:write` or `deploy:write`.
 - External/destructive autonomous assignments pause in CPTR with a durable approval record; the MCP `cptr_approve_autonomous` tool only forwards the scoped decision and cannot bypass CPTR policy.
 - No widget is included yet.
