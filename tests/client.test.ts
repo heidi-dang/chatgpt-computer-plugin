@@ -104,7 +104,6 @@ test("forwards task steering idempotency keys", async () => {
   });
 });
 
-
 test("executes an already-complete CPTR task without exposing raw agent events", async () => {
   const seen: Array<{ url: string; init?: RequestInit }> = [];
   const client = new ComputerClient({
@@ -279,4 +278,24 @@ test("routes direct ChatGPT coding operations only through scoped workspace endp
   const commandBody = JSON.parse(String(seen[5].init?.body));
   assert.equal(commandBody.model_id, undefined);
   assert.equal((seen[5].init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+});
+
+test("streams CPTR activity with server-side auth and a replay cursor", async () => {
+  let seenUrl = "";
+  let seenHeaders: Record<string, string> = {};
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seenUrl = String(input);
+      seenHeaders = init?.headers as Record<string, string>;
+      return new Response("event: task.started\nid: 4\ndata: {}\n\n", { status: 200 });
+    },
+  });
+  const response = await client.streamLive("task", "task-1", 3);
+  assert.equal(response.ok, true);
+  assert.equal(seenUrl, "http://cptr.test/api/control/v1/tasks/task-1/stream?after=3");
+  assert.equal(seenHeaders.Authorization, "Bearer secret-token");
+  assert.equal(seenHeaders.Accept, "text/event-stream");
+  assert.equal(seenUrl.includes("secret-token"), false);
 });
