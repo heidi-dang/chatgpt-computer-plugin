@@ -72,10 +72,12 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_approve_autonomous")?.annotations?.openWorldHint, true);
   const startMeta = tools.get("cptr_start_task")?._meta as { ui?: { resourceUri?: string } } | undefined;
   const monitorMeta = tools.get("cptr_monitor_autonomous")?._meta as { ui?: { resourceUri?: string } } | undefined;
-  assert.equal(startMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
-  assert.equal(monitorMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
+  const terminalMeta = tools.get("cptr_render_live_terminal")?._meta as { ui?: { resourceUri?: string } } | undefined;
+  assert.equal(startMeta?.ui?.resourceUri, undefined);
+  assert.equal(monitorMeta?.ui?.resourceUri, undefined);
+  assert.equal(terminalMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
   assert.equal(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.action, undefined);
-  assert.equal(tools.size, 24);
+  assert.equal(tools.size, 25);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
   }
@@ -166,7 +168,7 @@ test("invokes every direct-coding tool through MCP without a CPTR model input", 
   await server.close();
 });
 
-test("hydrates task creation with hidden workbench metadata without changing tool output", async () => {
+test("renders a task terminal with hidden target-bound stream metadata", async () => {
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "server-only-token",
@@ -177,20 +179,28 @@ test("hydrates task creation with hidden workbench metadata without changing too
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
-  const response = await client.callTool({
+  const taskResponse = await client.callTool({
     name: "cptr_start_task",
     arguments: { workspace_id: "ws-1", prompt: "Run the bounded fixture test", model_id: "model-1" },
+  });
+  assert.equal(taskResponse._meta, undefined);
+
+  const response = await client.callTool({
+    name: "cptr_render_live_terminal",
+    arguments: { target_type: "task", target_id: "task-1" },
   });
   const text = JSON.stringify(response.content);
   assert.match(text, /task-1/);
   assert.equal(text.includes("server-only-token"), false);
   const meta = response._meta as {
     ui?: { resourceUri?: string };
-    "cptr/live"?: { ticket?: string; streamUrl?: string };
+    "cptr/live"?: { ticket?: string; streamUrl?: string; snapshotUrl?: string };
   } | undefined;
   assert.ok(meta?.ui?.resourceUri);
   assert.ok(meta?.["cptr/live"]?.ticket);
+  assert.ok(meta?.["cptr/live"]?.snapshotUrl);
   assert.equal(String(meta?.["cptr/live"]?.streamUrl).includes(meta?.["cptr/live"]?.ticket ?? ""), false);
+  assert.equal(String(meta?.["cptr/live"]?.snapshotUrl).includes(meta?.["cptr/live"]?.ticket ?? ""), false);
 
   await client.close();
   await server.close();

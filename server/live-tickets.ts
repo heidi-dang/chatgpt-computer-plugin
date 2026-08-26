@@ -5,6 +5,7 @@ export type LiveTarget = { targetType: "task" | "monitor"; targetId: string };
 export type WidgetStreamMetadata = LiveTarget & {
   ticket: string;
   streamUrl: string;
+  snapshotUrl: string;
   expiresAt: number;
 };
 
@@ -15,12 +16,14 @@ export class LiveTicketStore {
   private readonly now: () => number;
   private readonly ttlMs: number;
   private readonly streamUrl: string;
+  private readonly snapshotUrl: string;
   private readonly maxTickets: number;
 
-  constructor(options: { now?: () => number; ttlMs?: number; streamUrl?: string; maxTickets?: number } = {}) {
+  constructor(options: { now?: () => number; ttlMs?: number; streamUrl?: string; snapshotUrl?: string; maxTickets?: number } = {}) {
     this.now = options.now ?? (() => Date.now());
     this.ttlMs = Math.max(1_000, options.ttlMs ?? 5 * 60_000);
     this.streamUrl = options.streamUrl ?? "/live/stream";
+    this.snapshotUrl = options.snapshotUrl ?? this.streamUrl.replace(/\/stream(?:\?.*)?$/, "/snapshot");
     this.maxTickets = Math.max(1, options.maxTickets ?? 4_096);
   }
 
@@ -50,7 +53,7 @@ export class LiveTicketStore {
     const ticket = randomBytes(32).toString("base64url");
     const expiresAt = now + this.ttlMs;
     this.tickets.set(ticket, { ...target, expiresAt });
-    return { ...target, ticket, expiresAt, streamUrl: this.streamUrl };
+    return { ...target, ticket, expiresAt, streamUrl: this.streamUrl, snapshotUrl: this.snapshotUrl };
   }
 
   validate(ticket: string, target?: LiveTarget): TicketClaims | null {
