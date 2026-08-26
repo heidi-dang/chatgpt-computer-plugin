@@ -11,6 +11,7 @@ import {
   type WorkbenchEvent,
   type WorkbenchState,
 } from "./state.js";
+import { requestHostDisplayMode, type DisplayModeBridge } from "./display-mode.js";
 import "./workbench.css";
 
 type PluginActivity = {
@@ -38,11 +39,10 @@ type BridgeMessage = {
   result?: unknown;
 };
 
-type HostBridge = {
+type HostBridge = DisplayModeBridge & {
   toolResponseMetadata?: unknown;
   callTool?: (tool: string, input: Record<string, unknown>) => Promise<unknown>;
   notifyIntrinsicHeight?: (height: number) => void;
-  requestDisplayMode?: (mode: "inline" | "fullscreen" | "pip") => Promise<unknown>;
 };
 
 function hostBridge(): HostBridge | undefined {
@@ -584,7 +584,7 @@ function Workbench() {
       return;
     }
     try {
-      await hostBridge()!.requestDisplayMode!("fullscreen");
+      await requestHostDisplayMode(hostBridge(), "fullscreen");
     } catch {
       setActionStatus("could not expand live terminal");
     }
