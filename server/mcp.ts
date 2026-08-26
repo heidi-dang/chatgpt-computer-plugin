@@ -3,8 +3,8 @@ import { ComputerClient } from "./client/computer-client.js";
 import { LiveTicketStore, type LiveTarget } from "./live-tickets.js";
 import { WORKBENCH_RESOURCE_URI, createWorkbenchResource } from "./ui/workbench-resource.js";
 import { z } from "zod";
-export const MCP_CONTRACT_VERSION = "0.3.0";
-export const MCP_CONTRACT_TOOL_COUNT = 32;
+export const MCP_CONTRACT_VERSION = "0.4.0";
+export const MCP_CONTRACT_TOOL_COUNT = 36;
 
 import {
   approveAutonomousSchema,
@@ -26,6 +26,10 @@ import {
   reviewDecisionSchema,
   startTaskSchema,
   steerAutonomousSchema,
+  sshCommandCancelSchema,
+  sshCommandSchema,
+  sshCommandStatusSchema,
+  sshHostsSchema,
   taskIdSchema,
   workspaceIdSchema,
 } from "./schemas/tools.js";
@@ -404,6 +408,113 @@ export function createMcpServer(
         { targetType: "command", targetId: input.command_id, workspaceId: input.workspace_id },
         tickets,
         "cptr_code_cancel_command",
+      );
+    },
+  );
+
+  server.registerTool(
+    "cptr_ssh_list_hosts",
+    {
+      title: "List configured SSH host aliases",
+      description:
+        "List literal SSH Host aliases available to the authorized CPTR execution identity. This returns alias names only and never exposes private keys, IdentityFile contents, or other SSH config secrets.",
+      inputSchema: sshHostsSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        aliases: z.array(z.string()),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.listSshHosts(input), "cptr_ssh_list_hosts"),
+  );
+
+  server.registerTool(
+    "cptr_ssh_run_command",
+    {
+      title: "Run a command through a configured SSH host alias",
+      description:
+        "Run an explicitly requested remote command through a configured SSH alias using CPTR's dedicated SSH control path. The generic coding-command tool does not permit raw SSH. CPTR preserves normal OpenSSH host-key verification and exposes resumable live command output.",
+      inputSchema: sshCommandSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        alias: z.string(),
+        command_id: z.string(),
+        status: z.string(),
+        exit_code: z.number().int().nullable(),
+        output: z.string(),
+        next_offset: z.number().int(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) => {
+      const command = await client.runSshCommand(input);
+      return workbenchResult(
+        command,
+        { targetType: "command", targetId: command.command_id, workspaceId: input.workspace_id },
+        tickets,
+        "cptr_ssh_run_command",
+      );
+    },
+  );
+
+  server.registerTool(
+    "cptr_ssh_get_command",
+    {
+      title: "Get SSH command status and incremental output",
+      description:
+        "Retrieve the current status and incremental output for a command previously started through CPTR's dedicated SSH control path.",
+      inputSchema: sshCommandStatusSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        alias: z.string(),
+        command_id: z.string(),
+        status: z.string(),
+        exit_code: z.number().int().nullable(),
+        output: z.string(),
+        next_offset: z.number().int(),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) => {
+      const command = await client.getSshCommand(input);
+      return workbenchResult(
+        command,
+        { targetType: "command", targetId: input.command_id, workspaceId: input.workspace_id },
+        tickets,
+        "cptr_ssh_get_command",
+      );
+    },
+  );
+
+  server.registerTool(
+    "cptr_ssh_cancel_command",
+    {
+      title: "Cancel a running SSH command",
+      description:
+        "Stop a running command that was started through CPTR's dedicated SSH control path.",
+      inputSchema: sshCommandCancelSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        alias: z.string(),
+        command_id: z.string(),
+        status: z.string(),
+        exit_code: z.number().int().nullable(),
+        output: z.string(),
+        next_offset: z.number().int(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) => {
+      const command = await client.cancelSshCommand(input);
+      return workbenchResult(
+        command,
+        { targetType: "command", targetId: input.command_id, workspaceId: input.workspace_id },
+        tickets,
+        "cptr_ssh_cancel_command",
       );
     },
   );

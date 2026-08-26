@@ -2,6 +2,7 @@ import type {
   CompletionIntegrity,
   DirectCommand,
   DirectFileRead,
+  DirectSshCommand,
   DirectTaskExecution,
   GitDiff,
   Task,
@@ -363,6 +364,51 @@ export class ComputerClient {
   }): Promise<DirectCommand> {
     return this.request(
       `/workspaces/${encodeURIComponent(input.workspace_id)}/coding/commands/${encodeURIComponent(input.command_id)}/cancel`,
+      { method: "POST" },
+    );
+  }
+
+  async listSshHosts(input: { workspace_id: string }): Promise<{ workspace_id: string; aliases: string[] }> {
+    return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/ssh/hosts`);
+  }
+
+  async runSshCommand(input: {
+    workspace_id: string;
+    alias: string;
+    command: string;
+    wait_seconds?: number;
+  }): Promise<DirectSshCommand> {
+    return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/ssh/commands`, {
+      method: "POST",
+      body: {
+        alias: input.alias,
+        command: input.command,
+        wait_seconds: input.wait_seconds ?? 0,
+      },
+    });
+  }
+
+  async getSshCommand(input: {
+    workspace_id: string;
+    command_id: string;
+    offset?: number;
+    wait_seconds?: number;
+  }): Promise<DirectSshCommand> {
+    const query = new URLSearchParams({
+      offset: String(input.offset ?? 0),
+      wait_seconds: String(input.wait_seconds ?? 0),
+    });
+    return this.request(
+      `/workspaces/${encodeURIComponent(input.workspace_id)}/ssh/commands/${encodeURIComponent(input.command_id)}?${query}`,
+    );
+  }
+
+  async cancelSshCommand(input: {
+    workspace_id: string;
+    command_id: string;
+  }): Promise<DirectSshCommand> {
+    return this.request(
+      `/workspaces/${encodeURIComponent(input.workspace_id)}/ssh/commands/${encodeURIComponent(input.command_id)}/cancel`,
       { method: "POST" },
     );
   }

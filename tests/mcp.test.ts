@@ -34,6 +34,10 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_code_run_command",
       "cptr_code_get_command",
       "cptr_code_cancel_command",
+      "cptr_ssh_list_hosts",
+      "cptr_ssh_run_command",
+      "cptr_ssh_get_command",
+      "cptr_ssh_cancel_command",
       "cptr_list_workspaces",
       "cptr_get_workspace",
       "cptr_start_task",
@@ -67,6 +71,10 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_code_get_git_status")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_code_run_command")?.annotations?.openWorldHint, true);
   assert.equal(tools.get("cptr_code_run_command")?.inputSchema.properties?.model_id, undefined);
+  assert.equal(tools.get("cptr_ssh_list_hosts")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_ssh_run_command")?.annotations?.openWorldHint, true);
+  assert.equal(tools.get("cptr_ssh_get_command")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_ssh_cancel_command")?.annotations?.destructiveHint, true);
   assert.equal(tools.get("cptr_execute_task")?.annotations?.readOnlyHint, false);
   assert.equal(tools.get("cptr_execute_task")?.annotations?.destructiveHint, false);
   assert.equal(tools.get("cptr_execute_task")?.annotations?.openWorldHint, true);
@@ -94,8 +102,8 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(monitorMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
   assert.equal(terminalMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
   assert.equal(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.action, undefined);
-  assert.equal(MCP_CONTRACT_VERSION, "0.3.0");
-  assert.equal(MCP_CONTRACT_TOOL_COUNT, 32);
+  assert.equal(MCP_CONTRACT_VERSION, "0.4.0");
+  assert.equal(MCP_CONTRACT_TOOL_COUNT, 36);
   assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
@@ -208,6 +216,74 @@ test("invokes every direct-coding tool through MCP without a CPTR model input", 
   }
   assert.equal(seen[10].url.includes("offset=0&wait_seconds=0"), true);
   assert.equal(seen[11].url.endsWith("/coding/commands/command-1/cancel"), true);
+
+  await client.close();
+  await server.close();
+});
+
+test("routes dedicated SSH tools through the SSH control API and live command target", async () => {
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async (input, init) => {
+      const url = String(input);
+      seen.push({ url, init });
+      const payload = url.endsWith("/ssh/hosts")
+        ? { workspace_id: "ws-1", aliases: ["aws"] }
+        : {
+            workspace_id: "ws-1",
+            alias: "aws",
+            command_id: "ssh-command-1",
+            status: "COMPLETE",
+            exit_code: 0,
+            output: "ok",
+            next_offset: 2,
+          };
+      return new Response(JSON.stringify(payload), { status: 200 });
+    },
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const hosts = await client.callTool({
+    name: "cptr_ssh_list_hosts",
+    arguments: { workspace_id: "ws-1" },
+  });
+  assert.deepEqual(hosts.structuredContent, { workspace_id: "ws-1", aliases: ["aws"] });
+
+  const run = await client.callTool({
+    name: "cptr_ssh_run_command",
+    arguments: { workspace_id: "ws-1", alias: "aws", command: "uname -a" },
+  });
+  await client.callTool({
+    name: "cptr_ssh_get_command",
+    arguments: { workspace_id: "ws-1", command_id: "ssh-command-1" },
+  });
+  await client.callTool({
+    name: "cptr_ssh_cancel_command",
+    arguments: { workspace_id: "ws-1", command_id: "ssh-command-1" },
+  });
+
+  const live = run._meta as {
+    "cptr/live"?: { targetType?: string; targetId?: string; workspaceId?: string };
+  } | undefined;
+  assert.equal(live?.["cptr/live"]?.targetType, "command");
+  assert.equal(live?.["cptr/live"]?.targetId, "ssh-command-1");
+  assert.equal(live?.["cptr/live"]?.workspaceId, "ws-1");
+
+  assert.equal(seen.length, 4);
+  assert.equal(seen[0].url.endsWith("/workspaces/ws-1/ssh/hosts"), true);
+  assert.equal(seen[1].url.endsWith("/workspaces/ws-1/ssh/commands"), true);
+  assert.deepEqual(JSON.parse(String(seen[1].init?.body)), {
+    alias: "aws",
+    command: "uname -a",
+    wait_seconds: 0,
+  });
+  assert.equal(seen[2].url.includes("/ssh/commands/ssh-command-1?offset=0&wait_seconds=0"), true);
+  assert.equal(seen[3].url.endsWith("/ssh/commands/ssh-command-1/cancel"), true);
 
   await client.close();
   await server.close();

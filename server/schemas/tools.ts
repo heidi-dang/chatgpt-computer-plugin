@@ -124,3 +124,26 @@ export const codingCommandCancelSchema = {
   workspace_id: z.string().min(1).max(200),
   command_id: z.string().min(1).max(200),
 };
+
+export const sshHostsSchema = {
+  workspace_id: z.string().min(1).max(200),
+};
+
+export const sshCommandSchema = {
+  workspace_id: z.string().min(1).max(200),
+  alias: z.string().min(1).max(128),
+  command: z.string().min(1).max(20_000),
+  wait_seconds: z.number().int().min(0).max(60).default(0),
+};
+
+export const sshCommandStatusSchema = {
+  workspace_id: z.string().min(1).max(200),
+  command_id: z.string().min(1).max(200),
+  offset: z.number().int().min(0).max(100_000_000).default(0),
+  wait_seconds: z.number().int().min(0).max(60).default(0),
+};
+
+export const sshCommandCancelSchema = {
+  workspace_id: z.string().min(1).max(200),
+  command_id: z.string().min(1).max(200),
+};

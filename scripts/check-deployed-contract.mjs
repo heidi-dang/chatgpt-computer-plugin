@@ -32,11 +32,15 @@ const expectedTools = [
   "cptr_open_live_workbench",
   "cptr_render_live_terminal",
   "cptr_send_message",
+  "cptr_ssh_cancel_command",
+  "cptr_ssh_get_command",
+  "cptr_ssh_list_hosts",
+  "cptr_ssh_run_command",
   "cptr_start_task",
   "cptr_steer_autonomous",
 ];
 const expectedResource = "ui://cptr/live-workbench.html";
-const expectedContractVersion = "0.3.0";
+const expectedContractVersion = "0.4.0";
 
 if (!endpoint || !token) {
   throw new Error("Set CPTR_DEPLOYED_MCP_URL and CPTR_DEPLOYED_MCP_TOKEN before running the deployed contract check.");
@@ -84,7 +88,7 @@ if (health?.mcp_contract?.tool_count !== expectedTools.length) {
 await rpc("initialize", {
   protocolVersion: "2026-01-26",
   capabilities: {},
-  clientInfo: { name: "cptr-deployed-contract-check", version: "0.3.0" },
+  clientInfo: { name: "cptr-deployed-contract-check", version: "0.4.0" },
 });
 const tools = await rpc("tools/list", {});
 exactSet((tools.tools ?? []).map((tool) => tool.name), expectedTools, "tool contract");

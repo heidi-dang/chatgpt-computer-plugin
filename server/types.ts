@@ -92,3 +92,8 @@ export type DirectCommand = {
   output: string;
   next_offset: number;
 };
+
+export type DirectSshCommand = DirectCommand & {
+  workspace_id: string;
+  alias: string;
+};
