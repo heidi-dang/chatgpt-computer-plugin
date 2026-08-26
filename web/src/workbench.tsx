@@ -104,7 +104,7 @@ function usePluginActivity(setState: React.Dispatch<React.SetStateAction<Workben
   }, [setState]);
 }
 
-function useLiveMetadata(): LiveMetadata | null {
+function useLiveMetadata(): [LiveMetadata | null, React.Dispatch<React.SetStateAction<LiveMetadata | null>>] {
   const [metadata, setMetadata] = useState<LiveMetadata | null>(() => findLiveMetadata(hostBridge()?.toolResponseMetadata));
   useEffect(() => {
     const onMessage = (event: MessageEvent<BridgeMessage>) => {
@@ -116,7 +116,7 @@ function useLiveMetadata(): LiveMetadata | null {
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, []);
-  return metadata;
+  return [metadata, setMetadata];
 }
 
 function useMcpBridge() {
@@ -137,7 +137,7 @@ function useMcpBridge() {
       jsonrpc: "2.0",
       id: `init-${crypto.randomUUID()}`,
       method: "ui/initialize",
-      params: { protocolVersion: "2026-01-26", capabilities: {}, clientInfo: { name: "cptr-live-terminal", version: "0.2.0" } },
+      params: { protocolVersion: "2026-01-26", capabilities: {}, clientInfo: { name: "cptr-live-terminal", version: "0.3.0" } },
     }, "*");
     return () => window.removeEventListener("message", onMessage);
   }, []);
@@ -152,9 +152,19 @@ function useMcpBridge() {
   };
 }
 
-function useLiveSession(meta: LiveMetadata | null, setState: React.Dispatch<React.SetStateAction<WorkbenchState>>) {
+function useLiveSession(
+  meta: LiveMetadata | null,
+  setMeta: React.Dispatch<React.SetStateAction<LiveMetadata | null>>,
+  setState: React.Dispatch<React.SetStateAction<WorkbenchState>>,
+  callTool: (name: string, args: Record<string, unknown>) => Promise<unknown>,
+) {
   const [connection, setConnection] = useState("waiting for live terminal");
   const cursor = useRef(0);
+  const renewalAttempts = useRef(0);
+  // The bridge callback is recreated by the host integration on render. A ref
+  // avoids unnecessary live-stream reconnects while preserving current access.
+  const callToolRef = useRef(callTool);
+  callToolRef.current = callTool;
   useEffect(() => {
     if (!meta?.ticket || !meta.streamUrl || !meta.snapshotUrl) {
       setConnection("waiting for a CPTR task or monitor");
@@ -166,6 +176,30 @@ function useLiveSession(meta: LiveMetadata | null, setState: React.Dispatch<Reac
     let terminalSeen = false;
     let retryAttempts = 0;
 
+    const renewTicket = async (): Promise<boolean> => {
+      if (!meta.targetType || !meta.targetId || renewalAttempts.current >= 2) return false;
+      renewalAttempts.current += 1;
+      setConnection("renewing live-session ticket");
+      try {
+        const response = await callToolRef.current("cptr_render_live_terminal", {
+          target_type: meta.targetType,
+          target_id: meta.targetId,
+        });
+        const renewed = findLiveMetadata(response);
+        if (!renewed?.ticket || !renewed.streamUrl || !renewed.snapshotUrl) return false;
+        setMeta(renewed);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const unavailable = (status: number) => {
+      const error = new Error(`live session unavailable (${status})`) as Error & { status?: number };
+      error.status = status;
+      return error;
+    };
+
     const applySnapshot = async () => {
       const snapshotUrl = new URL(meta.snapshotUrl!, window.location.href);
       snapshotUrl.searchParams.set("after", String(cursor.current));
@@ -173,7 +207,7 @@ function useLiveSession(meta: LiveMetadata | null, setState: React.Dispatch<Reac
         headers: { Authorization: `Bearer ${meta.ticket}`, Accept: "application/json" },
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error(`snapshot unavailable (${response.status})`);
+      if (!response.ok) throw unavailable(response.status);
       const value = await response.json() as { snapshot?: { status?: string }; replay?: { events?: WorkbenchEvent[]; last_sequence?: number } };
       for (const event of value.replay?.events ?? []) {
         if (event.sequence > cursor.current) {
@@ -213,12 +247,17 @@ function useLiveSession(meta: LiveMetadata | null, setState: React.Dispatch<Reac
           headers: { Authorization: `Bearer ${meta.ticket}`, Accept: "text/event-stream", "Last-Event-ID": String(cursor.current) },
           signal: controller.signal,
         });
-        if ([401, 403, 404, 410].includes(response.status)) {
+        if (response.status === 401) {
+          if (!(await renewTicket())) setConnection("live-session ticket renewal failed");
+          return;
+        }
+        if ([403, 404, 410].includes(response.status)) {
           setConnection(`stream unavailable (${response.status})`);
           return;
         }
         if (!response.ok || !response.body) throw new Error(`stream unavailable (${response.status})`);
         retryAttempts = 0;
+        renewalAttempts.current = 0;
         setConnection("live");
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -265,6 +304,11 @@ function useLiveSession(meta: LiveMetadata | null, setState: React.Dispatch<Reac
         if (!stopped && !terminalSeen) scheduleRetry(consume);
       } catch (error) {
         if (stopped || (error instanceof DOMException && error.name === "AbortError")) return;
+        const status = error && typeof error === "object" && "status" in error ? (error as { status?: unknown }).status : undefined;
+        if (status === 401) {
+          if (!(await renewTicket())) setConnection("live-session ticket renewal failed");
+          return;
+        }
         setConnection(error instanceof Error ? error.message : "stream error");
         scheduleRetry(consume);
       }
@@ -276,7 +320,7 @@ function useLiveSession(meta: LiveMetadata | null, setState: React.Dispatch<Reac
       controller.abort();
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [meta?.ticket, meta?.streamUrl, meta?.snapshotUrl, meta?.targetType, meta?.targetId, setState]);
+  }, [meta?.ticket, meta?.streamUrl, meta?.snapshotUrl, meta?.targetType, meta?.targetId, setMeta, setState]);
   return connection;
 }
 
@@ -407,8 +451,8 @@ function Workbench() {
   const [decisionBusy, setDecisionBusy] = useState(false);
   const callTool = useMcpBridge();
   usePluginActivity(setState);
-  const meta = useLiveMetadata();
-  const connection = useLiveSession(meta, setState);
+  const [meta, setMeta] = useLiveMetadata();
+  const connection = useLiveSession(meta, setMeta, setState, callTool);
   const isTask = meta?.targetType === "task" && !!meta.targetId;
   const canControl = !!meta?.targetType && ["RUNNING", "WORKING", "CONNECTING", "APPROVAL_REQUIRED"].includes(state.status);
 

@@ -32,6 +32,20 @@ function boundedOutput(output: string): { output: string; output_truncated: bool
   };
 }
 
+function publicErrorMessage(value: string): string {
+  const redacted = value
+    // Unix-style absolute paths, including the stale-workspace paths found by
+    // the audit. Keep diagnostics meaningful without disclosing host layout.
+    .replace(/(?:^|[\s:(])\/(?:[^\s/:]+\/)*[^\s/:]+/g, (match) => {
+      const prefix = /^[\s:(]/.test(match) ? match[0] : "";
+      return `${prefix}<redacted-path>`;
+    })
+    // Windows paths are equally unsuitable for a ChatGPT-visible diagnostic.
+    .replace(/[A-Za-z]:\\(?:[^\\\s]+\\)*[^\\\s]+/g, "<redacted-path>")
+    .trim();
+  return (redacted || "CPTR request failed").slice(0, 500);
+}
+
 
 export class ComputerApiError extends Error {
   readonly status: number;
@@ -430,7 +444,7 @@ export class ComputerClient {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         const detail = typeof payload?.detail === "string" ? payload.detail : "request failed";
-        throw new ComputerApiError(response.status, detail);
+        throw new ComputerApiError(response.status, publicErrorMessage(detail));
       }
       return payload as T;
     } catch (error) {

@@ -28,6 +28,26 @@ test("normalizes CPTR errors without exposing credentials", async () => {
   });
 });
 
+test("redacts Unix and Windows host paths from public API errors", async () => {
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async () => new Response(
+      JSON.stringify({ detail: "workspace /home/cptr/private/project missing; C:\\Users\\cptr\\secret is unavailable" }),
+      { status: 409 },
+    ),
+  });
+
+  await assert.rejects(client.getWorkspace("workspace-1"), (error: unknown) => {
+    assert.ok(error instanceof ComputerApiError);
+    assert.equal(error.status, 409);
+    assert.equal(error.message.includes("/home/cptr/private/project"), false);
+    assert.equal(error.message.includes("C:\\Users\\cptr\\secret"), false);
+    assert.match(error.message, /<redacted-path>/);
+    return true;
+  });
+});
+
 test("converts request timeouts to a bounded public error", async () => {
   const client = new ComputerClient({
     baseUrl: "http://cptr.test",

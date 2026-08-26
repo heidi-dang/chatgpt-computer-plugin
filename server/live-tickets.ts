@@ -21,7 +21,10 @@ export class LiveTicketStore {
 
   constructor(options: { now?: () => number; ttlMs?: number; streamUrl?: string; snapshotUrl?: string; maxTickets?: number } = {}) {
     this.now = options.now ?? (() => Date.now());
-    this.ttlMs = Math.max(1_000, options.ttlMs ?? 5 * 60_000);
+    // A single backend stream is bounded to ten minutes; retain the opaque
+    // target-bound ticket beyond that interval so ordinary reconnects do not
+    // fail merely because the browser briefly lost connectivity.
+    this.ttlMs = Math.max(1_000, options.ttlMs ?? 15 * 60_000);
     this.streamUrl = options.streamUrl ?? "/live/stream";
     this.snapshotUrl = options.snapshotUrl ?? this.streamUrl.replace(/\/stream(?:\?.*)?$/, "/snapshot");
     this.maxTickets = Math.max(1, options.maxTickets ?? 4_096);

@@ -1,6 +1,8 @@
 export type Workspace = {
   workspace_id: string;
   name: string;
+  /** False when CPTR's persisted workspace path is no longer usable. */
+  available?: boolean;
   path?: string;
 };
 

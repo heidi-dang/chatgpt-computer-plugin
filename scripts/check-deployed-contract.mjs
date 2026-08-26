@@ -1,0 +1,82 @@
+const endpoint = process.env.CPTR_DEPLOYED_MCP_URL?.trim();
+const token = process.env.CPTR_DEPLOYED_MCP_TOKEN?.trim();
+
+const expectedTools = [
+  "cptr_approve_autonomous",
+  "cptr_cancel_autonomous",
+  "cptr_cancel_task",
+  "cptr_code_cancel_command",
+  "cptr_code_create_directory",
+  "cptr_code_delete_file",
+  "cptr_code_edit_file",
+  "cptr_code_get_command",
+  "cptr_code_get_git_status",
+  "cptr_code_list_files",
+  "cptr_code_move_file",
+  "cptr_code_read_file",
+  "cptr_code_run_command",
+  "cptr_code_search_files",
+  "cptr_code_write_file",
+  "cptr_decide_task_review",
+  "cptr_execute_task",
+  "cptr_get_autonomous",
+  "cptr_get_autonomous_events",
+  "cptr_get_autonomous_evidence",
+  "cptr_get_diff",
+  "cptr_get_task",
+  "cptr_get_task_output",
+  "cptr_get_task_review",
+  "cptr_get_workspace",
+  "cptr_list_workspaces",
+  "cptr_monitor_autonomous",
+  "cptr_open_live_workbench",
+  "cptr_render_live_terminal",
+  "cptr_send_message",
+  "cptr_start_task",
+  "cptr_steer_autonomous",
+];
+const expectedResource = "ui://cptr/live-workbench.html";
+
+if (!endpoint || !token) {
+  throw new Error("Set CPTR_DEPLOYED_MCP_URL and CPTR_DEPLOYED_MCP_TOKEN before running the deployed contract check.");
+}
+
+let nextId = 1;
+async function rpc(method, params) {
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({ jsonrpc: "2.0", id: nextId++, method, params }),
+  });
+  if (!response.ok) throw new Error(`${method} failed with HTTP ${response.status}`);
+  const payload = await response.json();
+  if (payload.error) throw new Error(`${method} returned ${payload.error.message ?? "an RPC error"}`);
+  return payload.result ?? payload;
+}
+
+function exactSet(actual, expected, label) {
+  const actualSorted = [...actual].sort();
+  const expectedSorted = [...expected].sort();
+  if (JSON.stringify(actualSorted) !== JSON.stringify(expectedSorted)) {
+    const missing = expectedSorted.filter((name) => !actualSorted.includes(name));
+    const unexpected = actualSorted.filter((name) => !expectedSorted.includes(name));
+    throw new Error(`${label} drift: missing [${missing.join(", ") || "none"}], unexpected [${unexpected.join(", ") || "none"}]`);
+  }
+}
+
+await rpc("initialize", {
+  protocolVersion: "2026-01-26",
+  capabilities: {},
+  clientInfo: { name: "cptr-deployed-contract-check", version: "0.3.0" },
+});
+const tools = await rpc("tools/list", {});
+exactSet((tools.tools ?? []).map((tool) => tool.name), expectedTools, "tool contract");
+const resources = await rpc("resources/list", {});
+if (!(resources.resources ?? []).some((resource) => resource.uri === expectedResource)) {
+  throw new Error(`resource contract drift: ${expectedResource} is unavailable`);
+}
+console.log(`CPTR deployed MCP contract verified: ${expectedTools.length} tools and ${expectedResource}`);

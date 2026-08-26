@@ -4,6 +4,17 @@ import { EventEmitter } from "node:events";
 import { LiveGateway } from "../server/live-gateway.js";
 import { LiveTicketStore } from "../server/live-tickets.js";
 
+test("keeps a default ticket valid beyond one bounded live-stream interval", () => {
+  let now = 1_000;
+  const store = new LiveTicketStore({ now: () => now });
+  const issued = store.issue({ targetType: "task", targetId: "task-1" });
+  now += 10 * 60_000 + 1;
+
+  assert.ok(store.validate(issued.ticket, { targetType: "task", targetId: "task-1" }));
+  assert.equal(issued.expiresAt - 1_000, 15 * 60_000);
+});
+
+
 test("issues a short-lived ticket bound to one target", () => {
   const store = new LiveTicketStore({ now: () => 1_000, ttlMs: 5_000 });
   const issued = store.issue({ targetType: "task", targetId: "task-1" });

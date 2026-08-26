@@ -119,7 +119,7 @@ export function createMcpServer(
   client: ComputerClient,
   options: { tickets?: LiveTicketStore; widgetBundle?: string; widgetStyles?: string; connectDomain?: string } = {},
 ): McpServer {
-  const server = new McpServer({ name: "chatgpt-computer-plugin", version: "0.1.0" });
+  const server = new McpServer({ name: "chatgpt-computer-plugin", version: "0.3.0" });
   const tickets = options.tickets ?? new LiveTicketStore();
   server.registerResource(
     "cptr-live-workbench",
@@ -423,7 +423,10 @@ export function createMcpServer(
       _meta: workbenchToolMetadata,
     },
     async (input) => {
-      const task = await client.executeTask(input);
+      const task = await client.executeTask({
+        ...input,
+        prompt: assignmentScopedPrompt(input.prompt),
+      });
       return workbenchResult(
         task,
         { targetType: "task", targetId: task.task_id },
@@ -703,7 +706,11 @@ export function createMcpServer(
       title: "Get a CPTR workspace diff",
       description: "Use this when the user wants to inspect the current Git diff for a CPTR workspace.",
       inputSchema: workspaceIdSchema,
-      outputSchema: { diff: z.unknown().optional() },
+      outputSchema: {
+        is_repo: z.boolean(),
+        files: z.array(z.record(z.string(), z.unknown())),
+        error: z.string().optional(),
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },

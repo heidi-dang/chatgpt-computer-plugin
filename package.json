@@ -1,13 +1,14 @@
 {
   "name": "chatgpt-computer-plugin",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "npm run build:web && tsx server/index.ts",
     "start": "npm run build:web && tsx server/index.ts",
-    "build:web": "esbuild web/src/workbench.tsx --bundle --format=esm --platform=browser --target=es2022 --outfile=web/dist/workbench.js",
+    "build:web": "esbuild web/src/workbench.tsx --bundle --format=esm --platform=browser --target=es2022 --minify --define:process.env.NODE_ENV='\"production\"' --outfile=web/dist/workbench.js && node scripts/check-workbench-bundle.mjs",
     "copy:web": "node scripts/copy-workbench-assets.mjs",
+    "check:deployed-contract": "node scripts/check-deployed-contract.mjs",
     "build": "npm run build:web && tsc -p tsconfig.json && npm run copy:web",
     "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p web/tsconfig.json"

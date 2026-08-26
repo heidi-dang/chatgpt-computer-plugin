@@ -10,12 +10,19 @@ import { createMcpServer } from "./mcp.js";
 import { LiveGateway } from "./live-gateway.js";
 import { LiveTicketStore } from "./live-tickets.js";
 import { loadWorkbenchAssets } from "./workbench-assets.js";
+import {
+  corsHeaders,
+  isAllowedBrowserOrigin,
+  resolveAllowedOrigins,
+  resolvePublicOrigin,
+} from "./http-security.js";
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? "8787");
 const mcpPath = "/mcp";
 const mcpAccessToken = process.env.MCP_ACCESS_TOKEN;
-const publicOrigin = process.env.PUBLIC_ORIGIN ?? "https://mcp.tnaprovider.com.au";
+const publicOrigin = resolvePublicOrigin(process.env, host, port);
+const allowedBrowserOrigins = resolveAllowedOrigins(process.env);
 const oauthResource = process.env.MCP_OAUTH_RESOURCE ?? `${publicOrigin}${mcpPath}`;
 const oauthIssuer = process.env.CLOUDFLARE_ACCESS_ISSUER;
 const oauthAudience = process.env.CLOUDFLARE_ACCESS_AUDIENCE;
@@ -71,9 +78,16 @@ function writeMcpUnauthorized(res: import("node:http").ServerResponse, status: n
 
 const httpServer = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? `${host}:${port}`}`);
+  const requestOrigin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+  if (!isAllowedBrowserOrigin(requestOrigin, allowedBrowserOrigins)) {
+    res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({ error: "browser origin is not allowed" }));
+    return;
+  }
+  const originHeaders = corsHeaders(requestOrigin, allowedBrowserOrigins);
+  for (const [header, value] of Object.entries(originHeaders)) res.setHeader(header, value);
   if (url.pathname === mcpPath && req.method === "OPTIONS") {
     res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
+      ...originHeaders,
       "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept, Mcp-Session-Id",
       "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
     }).end();
@@ -106,7 +120,7 @@ const httpServer = createServer(async (req, res) => {
   if (url.pathname === "/live/stream" || url.pathname === "/live/snapshot") {
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
-        "access-control-allow-origin": "*",
+        ...originHeaders,
         "access-control-allow-headers": "Authorization, Accept, Last-Event-ID",
         "access-control-allow-methods": "GET, OPTIONS",
         "cache-control": "no-store",
@@ -139,7 +153,6 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
-  res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Mcp-Session-Id");
   res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
   const server = createMcpServer(client, {

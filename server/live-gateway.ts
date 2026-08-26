@@ -43,19 +43,19 @@ export class LiveGateway {
     const ticket = bearerValue(request);
     const url = new URL(request.url ?? "/", "http://localhost");
     if (url.pathname !== "/live/snapshot" || !ticket) {
-      response.writeHead(404, { "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": "*" });
+      response.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
       response.end(JSON.stringify({ error: "live snapshot not found" }));
       return;
     }
     const claims = this.tickets.validate(ticket);
     if (!claims) {
-      response.writeHead(401, { "content-type": "application/json", "cache-control": "no-store", "www-authenticate": "Bearer", "access-control-allow-origin": "*" });
+      response.writeHead(401, { "content-type": "application/json", "cache-control": "no-store", "www-authenticate": "Bearer" });
       response.end(JSON.stringify({ error: "live snapshot ticket is invalid or expired" }));
       return;
     }
     const rawAfter = url.searchParams.get("after") ?? "0";
     if (!/^\d{1,12}$/.test(rawAfter)) {
-      response.writeHead(400, { "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": "*" });
+      response.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
       response.end(JSON.stringify({ error: "invalid live-event cursor" }));
       return;
     }
@@ -65,11 +65,10 @@ export class LiveGateway {
         "content-type": "application/json",
         "cache-control": "no-store",
         "referrer-policy": "no-referrer",
-        "access-control-allow-origin": "*",
       });
       response.end(JSON.stringify(snapshot));
     } catch {
-      response.writeHead(502, { "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": "*" });
+      response.writeHead(502, { "content-type": "application/json", "cache-control": "no-store" });
       response.end(JSON.stringify({ error: "live snapshot unavailable" }));
     }
   }
@@ -81,7 +80,6 @@ export class LiveGateway {
       response.writeHead(404, {
         "content-type": "application/json",
         "cache-control": "no-store",
-        "access-control-allow-origin": "*",
       });
       response.end(JSON.stringify({ error: "live stream not found" }));
       return;
@@ -91,7 +89,6 @@ export class LiveGateway {
       response.writeHead(429, {
         "content-type": "application/json",
         "cache-control": "no-store",
-        "access-control-allow-origin": "*",
       });
       response.end(JSON.stringify({ error: "live stream capacity reached" }));
       return;
@@ -103,7 +100,6 @@ export class LiveGateway {
         "content-type": "application/json",
         "cache-control": "no-store",
         "www-authenticate": "Bearer",
-        "access-control-allow-origin": "*",
       });
       response.end(JSON.stringify({ error: "live stream ticket is invalid or expired" }));
       return;
@@ -116,7 +112,6 @@ export class LiveGateway {
       response.writeHead(400, {
         "content-type": "application/json",
         "cache-control": "no-store",
-        "access-control-allow-origin": "*",
       });
       response.end(JSON.stringify({ error: "invalid live-event cursor" }));
       return;
@@ -130,7 +125,6 @@ export class LiveGateway {
       response.writeHead(502, {
         "content-type": "application/json",
         "cache-control": "no-store",
-        "access-control-allow-origin": "*",
       });
       response.end(JSON.stringify({ error: "live stream unavailable" }));
       return;
@@ -140,7 +134,6 @@ export class LiveGateway {
       response.writeHead(upstream.status >= 400 ? upstream.status : 502, {
         "content-type": "application/json",
         "cache-control": "no-store",
-        "access-control-allow-origin": "*",
       });
       response.end(JSON.stringify({ error: "live stream unavailable" }));
       return;
@@ -150,7 +143,6 @@ export class LiveGateway {
       "content-type": "text/event-stream",
       "cache-control": "no-cache, no-store",
       "referrer-policy": "no-referrer",
-      "access-control-allow-origin": "*",
       connection: "keep-alive",
       "x-accel-buffering": "no",
     });

@@ -21,6 +21,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
 
   assert.deepEqual(
     [
+      "cptr_open_live_workbench",
       "cptr_code_list_files",
       "cptr_code_read_file",
       "cptr_code_search_files",
@@ -38,6 +39,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_start_task",
       "cptr_execute_task",
       "cptr_monitor_autonomous",
+      "cptr_render_live_terminal",
       "cptr_get_autonomous",
       "cptr_get_autonomous_events",
       "cptr_get_autonomous_evidence",
@@ -51,8 +53,8 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_send_message",
       "cptr_cancel_task",
       "cptr_get_diff",
-    ].every((name) => tools.has(name)),
-    true,
+    ].sort(),
+    [...tools.keys()].sort(),
   );
   assert.equal(tools.get("cptr_code_list_files")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_code_read_file")?.annotations?.readOnlyHint, true);
@@ -252,14 +254,19 @@ test("opens the workbench immediately and binds it to a task with hidden target-
   await server.close();
 });
 
-test("adds assignment scope to direct MCP tasks before they reach CPTR", async () => {
-  let requestBody: Record<string, unknown> | undefined;
+test("applies byte-equivalent assignment scope to every MCP task-creation entry point", async () => {
+  const requestBodies: Array<Record<string, unknown>> = [];
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "server-only-token",
     fetchImpl: async (_url, init) => {
-      requestBody = JSON.parse(String(init?.body));
-      return new Response(JSON.stringify({ id: "task-scoped", status: "RUNNING", workspace_id: "ws-1" }), { status: 200 });
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({
+        id: `task-scoped-${requestBodies.length}`,
+        status: "COMPLETE",
+        workspace_id: "ws-1",
+        output: "Scoped fixture complete.",
+      }), { status: 200 });
     },
   });
   const server = createMcpServer(computer);
@@ -267,18 +274,19 @@ test("adds assignment scope to direct MCP tasks before they reach CPTR", async (
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
-  await client.callTool({
-    name: "cptr_start_task",
-    arguments: {
-      workspace_id: "ws-1",
-      prompt: "Create CHATGPT_LIVE_WORKBENCH_OK.txt with the requested marker, then wait for steering.",
-      model_id: "heidi-antigravity",
-    },
-  });
+  const input = {
+    workspace_id: "ws-1",
+    prompt: "Create CHATGPT_LIVE_WORKBENCH_OK.txt with the requested marker, then wait for steering.",
+    model_id: "heidi-antigravity",
+  };
+  await client.callTool({ name: "cptr_start_task", arguments: input });
+  await client.callTool({ name: "cptr_execute_task", arguments: { ...input, wait_seconds: 1 } });
 
-  assert.match(String(requestBody?.prompt), /inspection_scope=assignment/);
-  assert.match(String(requestBody?.prompt), /Only inspect or mutate files explicitly named/);
-  assert.match(String(requestBody?.prompt), /CHATGPT_LIVE_WORKBENCH_OK\.txt/);
+  assert.equal(requestBodies.length, 2);
+  assert.equal(requestBodies[0]?.prompt, requestBodies[1]?.prompt);
+  assert.match(String(requestBodies[0]?.prompt), /inspection_scope=assignment/);
+  assert.match(String(requestBodies[0]?.prompt), /Only inspect or mutate files explicitly named/);
+  assert.match(String(requestBodies[0]?.prompt), /CHATGPT_LIVE_WORKBENCH_OK\.txt/);
 
   await client.close();
   await server.close();
