@@ -23,6 +23,9 @@ const mcpPath = "/mcp";
 const mcpAccessToken = process.env.MCP_ACCESS_TOKEN;
 const publicOrigin = resolvePublicOrigin(process.env, host, port);
 const allowedBrowserOrigins = resolveAllowedOrigins(process.env);
+const hotReloadEnabled = process.env.NODE_ENV !== "production" && process.env.CPTR_HOT_RELOAD === "1";
+const devBuildId = process.env.CPTR_DEV_BUILD_ID ?? "dev";
+if (hotReloadEnabled) allowedBrowserOrigins.add(publicOrigin);
 const oauthResource = process.env.MCP_OAUTH_RESOURCE ?? `${publicOrigin}${mcpPath}`;
 const oauthIssuer = process.env.CLOUDFLARE_ACCESS_ISSUER;
 const oauthAudience = process.env.CLOUDFLARE_ACCESS_AUDIENCE;
@@ -85,6 +88,35 @@ const httpServer = createServer(async (req, res) => {
   }
   const originHeaders = corsHeaders(requestOrigin, allowedBrowserOrigins);
   for (const [header, value] of Object.entries(originHeaders)) res.setHeader(header, value);
+  if (hotReloadEnabled && req.method === "GET" && url.pathname === "/__cptr/dev/workbench.js") {
+    res.writeHead(workbenchAssets.ready ? 200 : 503, {
+      ...originHeaders,
+      "content-type": "text/javascript; charset=utf-8",
+      "cache-control": "no-store",
+    }).end(workbenchAssets.bundle);
+    return;
+  }
+  if (hotReloadEnabled && req.method === "GET" && url.pathname === "/__cptr/dev/workbench.css") {
+    res.writeHead(workbenchAssets.ready ? 200 : 503, {
+      ...originHeaders,
+      "content-type": "text/css; charset=utf-8",
+      "cache-control": "no-store",
+    }).end(workbenchAssets.styles);
+    return;
+  }
+  if (hotReloadEnabled && req.method === "GET" && url.pathname === "/__cptr/dev/reload") {
+    res.writeHead(200, {
+      ...originHeaders,
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache, no-store",
+      connection: "keep-alive",
+      "x-accel-buffering": "no",
+    });
+    res.write(`data: ${devBuildId}\n\n`);
+    const heartbeat = setInterval(() => res.write(": hot-reload\n\n"), 15_000);
+    req.once("close", () => clearInterval(heartbeat));
+    return;
+  }
   if (url.pathname === mcpPath && req.method === "OPTIONS") {
     res.writeHead(204, {
       ...originHeaders,

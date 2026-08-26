@@ -24,6 +24,16 @@ test("issues a short-lived ticket bound to one target", () => {
   assert.equal(issued.streamUrl.includes(issued.ticket), false);
 });
 
+test("command tickets are bound to both command and workspace identity", () => {
+  const store = new LiveTicketStore({ now: () => 1_000, ttlMs: 5_000 });
+  const issued = store.issue({ targetType: "command", targetId: "cmd-1", workspaceId: "ws-1" });
+
+  assert.equal(issued.workspaceId, "ws-1");
+  assert.ok(store.validate(issued.ticket, { targetType: "command", targetId: "cmd-1", workspaceId: "ws-1" }));
+  assert.equal(store.validate(issued.ticket, { targetType: "command", targetId: "cmd-1", workspaceId: "ws-2" }), null);
+  assert.equal(store.validate(issued.ticket, { targetType: "command", targetId: "cmd-2", workspaceId: "ws-1" }), null);
+});
+
 test("expired tickets are rejected", () => {
   let now = 1_000;
   const store = new LiveTicketStore({ now: () => now, ttlMs: 5_000 });
@@ -206,5 +216,33 @@ test("returns a target-bound live snapshot without exposing the ticket", async (
   assert.equal(response.status, 200);
   assert.deepEqual(requestArgs, ["task", "task-1", 3]);
   assert.match(response.body, /RUNNING/);
+  assert.equal(response.body.includes(issued.ticket), false);
+});
+
+test("routes command live snapshots with the ticket-bound workspace identity", async () => {
+  const store = new LiveTicketStore({ ttlMs: 5_000, snapshotUrl: "https://plugin.test/live/snapshot" });
+  const issued = store.issue({ targetType: "command", targetId: "cmd-1", workspaceId: "ws-1" });
+  let requestArgs: unknown[] = [];
+  const gateway = new LiveGateway({
+    getLiveSnapshot: async (...args: unknown[]) => {
+      requestArgs = args;
+      return { target: "command", snapshot: { status: "RUNNING" }, replay: { last_sequence: 2, events: [] } };
+    },
+  } as never, store);
+  const request = Object.assign(new EventEmitter(), {
+    url: "/live/snapshot?after=1",
+    headers: { authorization: `Bearer ${issued.ticket}` },
+  });
+  const response = {
+    status: 0,
+    body: "",
+    writeHead(status: number) { this.status = status; },
+    end(body?: string) { this.body = body ?? ""; },
+  };
+
+  await gateway.handleSnapshot(request as never, response as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(requestArgs, ["command", "cmd-1", 1, "ws-1"]);
   assert.equal(response.body.includes(issued.ticket), false);
 });

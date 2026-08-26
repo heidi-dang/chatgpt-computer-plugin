@@ -1,8 +1,10 @@
 import { randomBytes } from "node:crypto";
 
-export type LiveTarget = { targetType: "task" | "monitor"; targetId: string };
+export type LiveTarget =
+  | { targetType: "task" | "monitor"; targetId: string }
+  | { targetType: "command"; targetId: string; workspaceId: string };
 
-export type WidgetStreamMetadata = LiveTarget & {
+export type WidgetStreamMetadata<T extends LiveTarget = LiveTarget> = T & {
   ticket: string;
   streamUrl: string;
   snapshotUrl: string;
@@ -49,7 +51,7 @@ export class LiveTicketStore {
     }
   }
 
-  issue(target: LiveTarget): WidgetStreamMetadata {
+  issue<T extends LiveTarget>(target: T): WidgetStreamMetadata<T> {
     const now = this.now();
     this.pruneExpired(now);
     this.evictOldestIfFull();
@@ -66,6 +68,12 @@ export class LiveTicketStore {
       return null;
     }
     if (target && (claims.targetType !== target.targetType || claims.targetId !== target.targetId)) {
+      return null;
+    }
+    if (
+      target?.targetType === "command" &&
+      (claims.targetType !== "command" || claims.workspaceId !== target.workspaceId)
+    ) {
       return null;
     }
     return { ...claims };

@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ComputerClient } from "./client/computer-client.js";
-import { LiveTicketStore } from "./live-tickets.js";
+import { LiveTicketStore, type LiveTarget } from "./live-tickets.js";
 import { WORKBENCH_RESOURCE_URI, createWorkbenchResource } from "./ui/workbench-resource.js";
 import { z } from "zod";
 export const MCP_CONTRACT_VERSION = "0.3.0";
@@ -60,7 +60,7 @@ function mcpActivity(toolName: string, summary: string, status = "COMPLETE") {
 
 function workbenchResult<T extends Record<string, unknown>>(
   value: T,
-  target: { targetType: "task" | "monitor"; targetId: string },
+  target: LiveTarget,
   tickets: LiveTicketStore,
   toolName = "cptr_render_live_terminal",
 ) {
@@ -329,6 +329,7 @@ export function createMcpServer(
         "Use this only when the user explicitly asks ChatGPT to run a development or validation command in the selected CPTR workspace. CPTR rejects destructive commands. Commands that might contact external services require explicit user approval through allow_network=true.",
       inputSchema: codingCommandSchema,
       outputSchema: {
+        workspace_id: z.string(),
         command_id: z.string(),
         status: z.string(),
         exit_code: z.number().int().nullable(),
@@ -336,9 +337,17 @@ export function createMcpServer(
         next_offset: z.number().int(),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
-      _meta: oauthToolMetadata,
+      _meta: workbenchToolMetadata,
     },
-    async (input) => activityResult(await client.runCodingCommand(input), "cptr_code_run_command"),
+    async (input) => {
+      const command = await client.runCodingCommand(input);
+      return workbenchResult(
+        { ...command, workspace_id: input.workspace_id },
+        { targetType: "command", targetId: command.command_id, workspaceId: input.workspace_id },
+        tickets,
+        "cptr_code_run_command",
+      );
+    },
   );
 
   server.registerTool(
@@ -349,6 +358,7 @@ export function createMcpServer(
         "Use this to retrieve completion status and incremental output from a command previously started through direct coding.",
       inputSchema: codingCommandStatusSchema,
       outputSchema: {
+        workspace_id: z.string(),
         command_id: z.string(),
         status: z.string(),
         exit_code: z.number().int().nullable(),
@@ -356,9 +366,17 @@ export function createMcpServer(
         next_offset: z.number().int(),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-      _meta: oauthToolMetadata,
+      _meta: workbenchToolMetadata,
     },
-    async (input) => activityResult(await client.getCodingCommand(input), "cptr_code_get_command"),
+    async (input) => {
+      const command = await client.getCodingCommand(input);
+      return workbenchResult(
+        { ...command, workspace_id: input.workspace_id },
+        { targetType: "command", targetId: input.command_id, workspaceId: input.workspace_id },
+        tickets,
+        "cptr_code_get_command",
+      );
+    },
   );
 
   server.registerTool(
@@ -369,6 +387,7 @@ export function createMcpServer(
         "Use this only when the user explicitly asks ChatGPT to stop a running direct-coding command.",
       inputSchema: codingCommandCancelSchema,
       outputSchema: {
+        workspace_id: z.string(),
         command_id: z.string(),
         status: z.string(),
         exit_code: z.number().int().nullable(),
@@ -376,9 +395,17 @@ export function createMcpServer(
         next_offset: z.number().int(),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
-      _meta: oauthToolMetadata,
+      _meta: workbenchToolMetadata,
     },
-    async (input) => activityResult(await client.cancelCodingCommand(input), "cptr_code_cancel_command"),
+    async (input) => {
+      const command = await client.cancelCodingCommand(input);
+      return workbenchResult(
+        { ...command, workspace_id: input.workspace_id },
+        { targetType: "command", targetId: input.command_id, workspaceId: input.workspace_id },
+        tickets,
+        "cptr_code_cancel_command",
+      );
+    },
   );
 
   server.registerTool(
@@ -467,14 +494,15 @@ export function createMcpServer(
     {
       title: "Render a live CPTR terminal",
       description:
-        "Render the live terminal only after a CPTR task or monitor exists. This tool provides a redacted, resumable observation surface; it does not grant shell access or additional permissions.",
+        "Render the live terminal after a CPTR task, monitor, or workspace-owned direct command exists. This tool provides a redacted, resumable observation surface; it does not grant shell access or additional permissions.",
       inputSchema: z.object({
-        target_type: z.enum(["task", "monitor"]),
+        target_type: z.enum(["task", "monitor", "command"]),
         target_id: z.string().min(1),
+        workspace_id: z.string().min(1).max(200).optional(),
         presentation: z.enum(["inline", "expanded"]).optional(),
       }),
       outputSchema: {
-        target_type: z.enum(["task", "monitor"]),
+        target_type: z.enum(["task", "monitor", "command"]),
         target_id: z.string(),
         status: z.string(),
         workspace_id: z.string().optional(),
@@ -485,7 +513,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
-    async ({ target_type, target_id }) => {
+    async ({ target_type, target_id, workspace_id }) => {
       if (target_type === "task") {
         const task = await client.getTask(target_id);
         return workbenchResult(
@@ -499,6 +527,28 @@ export function createMcpServer(
             initial_summary: `Task ${target_id} is ${task.status}.`,
           },
           { targetType: target_type, targetId: target_id },
+          tickets,
+          "cptr_render_live_terminal",
+        );
+      }
+      if (target_type === "command") {
+        if (!workspace_id) throw new Error("workspace_id is required for a command live terminal");
+        const command = await client.getCodingCommand({
+          workspace_id,
+          command_id: target_id,
+          offset: 0,
+          wait_seconds: 0,
+        });
+        return workbenchResult(
+          {
+            target_type,
+            target_id,
+            status: command.status,
+            workspace_id,
+            title: "CPTR command activity",
+            initial_summary: `Command ${target_id} is ${command.status}.`,
+          },
+          { targetType: "command", targetId: target_id, workspaceId: workspace_id },
           tickets,
           "cptr_render_live_terminal",
         );

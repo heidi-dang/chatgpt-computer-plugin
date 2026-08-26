@@ -25,7 +25,7 @@ type LiveMetadata = {
   streamUrl?: string;
   snapshotUrl?: string;
   expiresAt?: number;
-  targetType?: "task" | "monitor";
+  targetType?: "task" | "monitor" | "command";
   targetId?: string;
   workspaceId?: string;
 };
@@ -160,7 +160,7 @@ function useLiveSession(
   const callToolRef = useRef(callTool);
   callToolRef.current = callTool;
   useEffect(() => {
-    if (liveTarget.current.bind(meta?.targetType, meta?.targetId)) {
+    if (liveTarget.current.bind(meta?.targetType, meta?.targetId, meta?.workspaceId)) {
       setState(initialWorkbenchState());
     }
     if (!meta?.ticket || !meta.streamUrl || !meta.snapshotUrl) {
@@ -181,6 +181,7 @@ function useLiveSession(
         const response = await callToolRef.current("cptr_render_live_terminal", {
           target_type: meta.targetType,
           target_id: meta.targetId,
+          ...(meta.targetType === "command" && meta.workspaceId ? { workspace_id: meta.workspaceId } : {}),
         });
         const renewed = findLiveMetadata(response);
         if (!renewed?.ticket || !renewed.streamUrl || !renewed.snapshotUrl) return false;
@@ -206,16 +207,20 @@ function useLiveSession(
       });
       if (!response.ok) throw unavailable(response.status);
       const value = await response.json() as { snapshot?: { status?: string }; replay?: { events?: WorkbenchEvent[]; last_sequence?: number } };
-      for (const event of value.replay?.events ?? []) {
-        if (event.sequence > liveTarget.current.cursor) {
-          liveTarget.current.cursor = event.sequence;
-          setState((current) => reduceWorkbenchEvent(current, event));
-        }
-      }
+      // Apply the point-in-time snapshot before replay. A command/task may finish
+      // between those two backend reads; replay is newer and must win rather than
+      // being overwritten by a stale RUNNING snapshot.
       const status = value.snapshot?.status;
       if (typeof status === "string") {
         setState((current) => ({ ...current, status: status.toUpperCase() }));
         terminalSeen = isTerminalWorkbenchStatus(status);
+      }
+      for (const event of value.replay?.events ?? []) {
+        if (event.sequence > liveTarget.current.cursor) {
+          liveTarget.current.cursor = event.sequence;
+          setState((current) => reduceWorkbenchEvent(current, event));
+          if (eventTerminatesWorkbench(event)) terminalSeen = true;
+        }
       }
       const lastSequence = value.replay?.last_sequence;
       if (typeof lastSequence === "number") {
@@ -318,7 +323,7 @@ function useLiveSession(
       controller.abort();
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [meta?.ticket, meta?.streamUrl, meta?.snapshotUrl, meta?.targetType, meta?.targetId, setMeta, setState]);
+  }, [meta?.ticket, meta?.streamUrl, meta?.snapshotUrl, meta?.targetType, meta?.targetId, meta?.workspaceId, setMeta, setState]);
   return connection;
 }
 
@@ -452,11 +457,13 @@ function Workbench() {
   const [meta, setMeta] = useLiveMetadata();
   const connection = useLiveSession(meta, setMeta, setState, callTool);
   const isTask = meta?.targetType === "task" && !!meta.targetId;
+  const isCommand = meta?.targetType === "command" && !!meta.targetId && !!meta.workspaceId;
   const canControl = !!meta?.targetType && ["RUNNING", "WORKING", "CONNECTING", "APPROVAL_REQUIRED"].includes(state.status);
+  const canSteer = canControl && (meta?.targetType === "task" || meta?.targetType === "monitor");
   const visibleTarget = useRef<string | null>(null);
 
   useEffect(() => {
-    const targetIdentity = workbenchTargetIdentity(meta?.targetType, meta?.targetId);
+    const targetIdentity = workbenchTargetIdentity(meta?.targetType, meta?.targetId, meta?.workspaceId);
     if (visibleTarget.current === targetIdentity) return;
     visibleTarget.current = targetIdentity;
     setTab("Terminal");
@@ -466,7 +473,7 @@ function Workbench() {
     setReviewDiff(null);
     setReviewLoading(false);
     setDecisionBusy(false);
-  }, [meta?.targetType, meta?.targetId]);
+  }, [meta?.targetType, meta?.targetId, meta?.workspaceId]);
 
   const loadReview = async () => {
     if (!isTask || !meta?.targetId) return;
@@ -505,7 +512,17 @@ function Workbench() {
     if (!meta?.targetType || !meta.targetId) return;
     setActionStatus("requesting stop…");
     try {
-      await callTool(meta.targetType === "task" ? "cptr_cancel_task" : "cptr_cancel_autonomous", meta.targetType === "task" ? { task_id: meta.targetId } : { monitor_id: meta.targetId });
+      if (meta.targetType === "command") {
+        if (!meta.workspaceId) throw new Error("command workspace identity is unavailable");
+        await callTool("cptr_code_cancel_command", {
+          workspace_id: meta.workspaceId,
+          command_id: meta.targetId,
+        });
+      } else if (meta.targetType === "task") {
+        await callTool("cptr_cancel_task", { task_id: meta.targetId });
+      } else {
+        await callTool("cptr_cancel_autonomous", { monitor_id: meta.targetId });
+      }
       setActionStatus("stop requested; waiting for server confirmation");
     } catch {
       setActionStatus("stop request failed");
@@ -514,7 +531,7 @@ function Workbench() {
 
   const steer = async () => {
     const content = steerText.trim();
-    if (!content || !meta?.targetType || !meta.targetId) return;
+    if (!content || !meta?.targetType || !meta.targetId || meta.targetType === "command") return;
     setActionStatus("sending steering…");
     try {
       const idempotency_key = crypto.randomUUID();
@@ -601,12 +618,12 @@ function Workbench() {
 
   return <main className="workbench terminal-workbench" aria-label="CPTR live agent terminal">
     <header className="header">
-      <div><p className="eyebrow">CPTR LIVE TERMINAL</p><h1>{meta?.targetType === "monitor" ? "Autonomous monitor" : meta?.targetType === "task" ? "Task activity" : "CPTR computer activity"}</h1><p className="subtle">{meta?.targetId ?? "Ready for ChatGPT tool activity"}</p></div>
+      <div><p className="eyebrow">CPTR LIVE TERMINAL</p><h1>{meta?.targetType === "monitor" ? "Autonomous monitor" : meta?.targetType === "task" ? "Task activity" : meta?.targetType === "command" ? "Live command" : "CPTR computer activity"}</h1><p className="subtle">{meta?.targetId ?? "Ready for real CPTR activity"}</p></div>
       <div className={`status status-${state.status.toLowerCase()}`}><span className="status-dot" />{state.status}<small>{connection}</small></div>
     </header>
-    <section className="controls" aria-label="Task controls">
+    <section className="controls" aria-label="Live target controls">
       <button className="danger" disabled={!canControl} onClick={() => void stop()}>Stop</button>
-      <div className="steer"><input value={steerText} onChange={(event) => setSteerText(event.target.value)} placeholder="Send a scoped follow-up…" aria-label="Steering message" disabled={!canControl} /><button onClick={() => void steer()} disabled={!canControl || !steerText.trim()}>Steer</button></div>
+      {!isCommand && <div className="steer"><input value={steerText} onChange={(event) => setSteerText(event.target.value)} placeholder="Send a scoped follow-up…" aria-label="Steering message" disabled={!canSteer} /><button onClick={() => void steer()} disabled={!canSteer || !steerText.trim()}>Steer</button></div>}
       <button onClick={() => void copyTranscript()} disabled={!state.transcript.length}>Copy</button>
       <button onClick={() => void expand()}>Expand</button>
       {actionStatus && <span className="action-status" role="status">{actionStatus}</span>}

@@ -55,7 +55,7 @@ test("renders immediate ChatGPT MCP activity without changing the backend event 
   assert.equal(opened.lastSequence, 0);
   assert.equal(opened.status, "CONNECTING");
   assert.equal(opened.tools.length, 1);
-  assert.match(opened.transcript[0]?.text ?? "", /ChatGPT → cptr_open_live_workbench/);
+  assert.equal(opened.transcript.length, 0);
   assert.equal(live.lastSequence, 1);
   assert.equal(live.status, "CONNECTING");
 });
@@ -134,6 +134,38 @@ test("keeps command and tool status scoped below the task lifecycle", () => {
   }), false);
 });
 
+test("uses authoritative command target lifecycle and real exit code", () => {
+  const started = reduceWorkbenchEvent(initialWorkbenchState(), {
+    event_id: "command-target-start",
+    sequence: 1,
+    timestamp: "2026-08-26T00:00:00Z",
+    target: { type: "command", id: "ws-1:cmd-1" },
+    type: "command.started",
+    payload: { command_id: "cmd-1", summary: "npm test", status: "RUNNING" },
+  });
+  const failed = reduceWorkbenchEvent(started, {
+    event_id: "command-target-complete",
+    sequence: 2,
+    timestamp: "2026-08-26T00:00:01Z",
+    target: { type: "command", id: "ws-1:cmd-1" },
+    type: "command.completed",
+    payload: { command_id: "cmd-1", status: "FAILED", exit_code: 2 },
+  });
+
+  assert.equal(started.status, "RUNNING");
+  assert.equal(failed.status, "FAILED");
+  assert.equal(failed.transcript.at(-1)?.tone, "error");
+  assert.match(failed.transcript.at(-1)?.text ?? "", /code 2/);
+  assert.equal(eventTerminatesWorkbench({
+    event_id: "command-target-terminal-check",
+    sequence: 3,
+    timestamp: "2026-08-26T00:00:02Z",
+    target: { type: "command", id: "ws-1:cmd-1" },
+    type: "command.completed",
+    payload: { status: "COMPLETE", exit_code: 0 },
+  }), true);
+});
+
 test("treats COMPLETE_WITH_TOOL_ERRORS as a terminal non-success task status", () => {
   assert.equal(isTerminalWorkbenchStatus("COMPLETE_WITH_TOOL_ERRORS"), true);
   const completed = reduceWorkbenchEvent(initialWorkbenchState(), {
@@ -168,6 +200,14 @@ test("resets replay cursor and renewal attempts only when the live target change
   assert.equal(session.bind("task", "task-b"), true);
   assert.equal(session.cursor, 0);
   assert.equal(session.renewalAttempts, 0);
+
+  session.cursor = 9;
+  assert.equal(session.bind("command", "cmd-1", "ws-1"), true);
+  session.cursor = 11;
+  assert.equal(session.bind("command", "cmd-1", "ws-1"), false);
+  assert.equal(session.cursor, 11);
+  assert.equal(session.bind("command", "cmd-1", "ws-2"), true);
+  assert.equal(session.cursor, 0);
 });
 
 

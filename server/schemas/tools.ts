@@ -109,7 +109,7 @@ export const codingCommandSchema = {
   workspace_id: z.string().min(1).max(200),
   command: z.string().min(1).max(20_000),
   cwd: z.string().min(1).max(1_000).default("."),
-  wait_seconds: z.number().int().min(0).max(60).default(30),
+  wait_seconds: z.number().int().min(0).max(60).default(0),
   allow_network: z.boolean().default(false),
 };
 

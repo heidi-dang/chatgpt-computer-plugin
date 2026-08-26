@@ -27,9 +27,17 @@ export function validateWorkbenchDomain(value: string | undefined, production = 
 
 export async function createWorkbenchResource(bundle: string, connectDomain?: string, styles = "") {
   const widgetDomain = validateWorkbenchDomain(connectDomain);
+  const hotReload = process.env.NODE_ENV !== "production" && process.env.CPTR_HOT_RELOAD === "1";
+  const buildId = process.env.CPTR_DEV_BUILD_ID ?? "dev";
+  const devReloadScript = hotReload
+    ? `<script>(()=>{const current=${JSON.stringify(buildId)};const source=new EventSource(${JSON.stringify(`${widgetDomain}/__cptr/dev/reload`)});source.onmessage=(event)=>{if(event.data&&event.data!==current)location.reload();};})()</script>`
+    : "";
+  const assetMarkup = hotReload
+    ? `<link rel="stylesheet" href="${widgetDomain}/__cptr/dev/workbench.css"><script type="module" src="${widgetDomain}/__cptr/dev/workbench.js"></script>`
+    : `<style>${styles}</style><script type="module">${bundle}</script>`;
   const text = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CPTR Live Workbench</title><style>${styles}</style></head><body><div id="root"></div><script type="module">${bundle}</script></body></html>`;
+<title>CPTR Live Workbench</title>${assetMarkup}</head><body><div id="root"></div>${devReloadScript}</body></html>`;
   return {
     contents: [{
       uri: WORKBENCH_RESOURCE_URI,
@@ -39,7 +47,10 @@ export async function createWorkbenchResource(bundle: string, connectDomain?: st
         ui: {
           domain: widgetDomain,
           prefersBorder: true,
-          csp: { connectDomains: [widgetDomain], resourceDomains: [] },
+          csp: {
+            connectDomains: [widgetDomain],
+            resourceDomains: hotReload ? [widgetDomain] : [],
+          },
         },
       },
     }],

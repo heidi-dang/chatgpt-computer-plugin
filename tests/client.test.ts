@@ -412,3 +412,23 @@ test("streams CPTR activity with server-side auth and a replay cursor", async ()
   assert.equal(seenHeaders.Accept, "text/event-stream");
   assert.equal(seenUrl.includes("secret-token"), false);
 });
+
+test("routes command live snapshot and stream through the workspace-owned control endpoints", async () => {
+  const seen: string[] = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input) => {
+      seen.push(String(input));
+      return new Response(JSON.stringify({ target: "command", snapshot: { status: "RUNNING" }, replay: { events: [] } }), { status: 200 });
+    },
+  });
+
+  await client.getLiveSnapshot("command", "cmd-1", 7, "ws-1");
+  await client.streamLive("command", "cmd-1", 8, "ws-1");
+
+  assert.deepEqual(seen, [
+    "http://cptr.test/api/control/v1/workspaces/ws-1/coding/commands/cmd-1/stream/snapshot?after=7",
+    "http://cptr.test/api/control/v1/workspaces/ws-1/coding/commands/cmd-1/stream?after=8",
+  ]);
+});

@@ -8,7 +8,7 @@ export type WorkbenchEvent = {
   task_id?: string | null;
   monitor_id?: string | null;
   worker_task_id?: string | null;
-  target?: { type: "task" | "monitor"; id: string };
+  target?: { type: "task" | "monitor" | "command"; id: string };
   redaction_applied?: boolean;
 };
 
@@ -57,6 +57,8 @@ const AUTHORITATIVE_STATUS_EVENTS = new Set([
   "monitor.started",
   "monitor.terminal",
   "monitor.approval",
+  "command.started",
+  "command.completed",
 ]);
 
 export function isTerminalWorkbenchStatus(status: string): boolean {
@@ -64,10 +66,13 @@ export function isTerminalWorkbenchStatus(status: string): boolean {
 }
 
 export function workbenchTargetIdentity(
-  targetType?: "task" | "monitor",
+  targetType?: "task" | "monitor" | "command",
   targetId?: string,
+  workspaceId?: string,
 ): string | null {
-  return targetType && targetId ? `${targetType}:${targetId}` : null;
+  if (!targetType || !targetId) return null;
+  if (targetType === "command") return workspaceId ? `command:${workspaceId}:${targetId}` : null;
+  return `${targetType}:${targetId}`;
 }
 
 export class LiveTargetSession {
@@ -75,8 +80,12 @@ export class LiveTargetSession {
   cursor = 0;
   renewalAttempts = 0;
 
-  bind(targetType?: "task" | "monitor", targetId?: string): boolean {
-    const nextIdentity = workbenchTargetIdentity(targetType, targetId);
+  bind(
+    targetType?: "task" | "monitor" | "command",
+    targetId?: string,
+    workspaceId?: string,
+  ): boolean {
+    const nextIdentity = workbenchTargetIdentity(targetType, targetId, workspaceId);
     if (this.targetIdentity === nextIdentity) return false;
     this.targetIdentity = nextIdentity;
     this.cursor = 0;
@@ -87,12 +96,17 @@ export class LiveTargetSession {
 
 export function authoritativeWorkbenchStatus(event: WorkbenchEvent): string | null {
   if (!AUTHORITATIVE_STATUS_EVENTS.has(event.type)) return null;
+  // Command lifecycle is authoritative only when the Workbench is bound to a
+  // first-class command target. The same command events inside a task stream
+  // must not complete the parent task lifecycle.
+  if (event.type.startsWith("command.") && event.target?.type !== "command") return null;
   const payloadStatus = stringValue(event.payload?.status).toUpperCase();
   if (payloadStatus) return payloadStatus;
   switch (event.type) {
     case "task.started":
     case "task.review_changes_requested":
     case "monitor.started":
+    case "command.started":
       return "RUNNING";
     case "task.failed":
       return "FAILED";
@@ -150,14 +164,18 @@ function terminalRows(event: WorkbenchEvent): TerminalRow[] {
     }));
   }
   if (event.type === "command.completed") {
-    const status = stringValue(payload.status, "COMPLETE");
+    const status = stringValue(payload.status, "COMPLETE").toUpperCase();
+    const exitCode = typeof payload.exit_code === "number" ? payload.exit_code : null;
+    const succeeded = status === "COMPLETE" && (exitCode === null || exitCode === 0);
     return [{
       id: `${event.event_id}:complete`,
       sequence: event.sequence,
       timestamp: event.timestamp,
-      tone: status === "COMPLETE" ? "success" : "error",
+      tone: succeeded ? "success" : "error",
       commandId,
-      text: `Command ${status.toLowerCase()}.`,
+      text: exitCode === null
+        ? `Command ${status.toLowerCase()}.`
+        : `Command exited with code ${exitCode}${succeeded ? "." : " (failed)."}`,
     }];
   }
   if (event.type.endsWith(".terminal") || event.type === "session.terminal") {
@@ -177,15 +195,6 @@ function terminalRows(event: WorkbenchEvent): TerminalRow[] {
       timestamp: event.timestamp,
       tone: "success",
       text: "Agent execution finished; review the scoped diff before accepting changes.",
-    }];
-  }
-  if (event.type === "mcp.tool") {
-    return [{
-      id: `${event.event_id}:mcp`,
-      sequence: event.sequence,
-      timestamp: event.timestamp,
-      tone: "system",
-      text: `ChatGPT → ${stringValue(payload.tool_name, "CPTR tool")}: ${stringValue(payload.summary, "completed")}`,
     }];
   }
   if (event.type === "agent.phase") {

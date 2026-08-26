@@ -336,7 +336,7 @@ export class ComputerClient {
       body: {
         command: input.command,
         cwd: input.cwd ?? ".",
-        wait_seconds: input.wait_seconds ?? 30,
+        wait_seconds: input.wait_seconds ?? 0,
         allow_network: input.allow_network ?? false,
       },
     });
@@ -459,10 +459,17 @@ export class ComputerClient {
   }
 
   async getLiveSnapshot(
-    targetType: "task" | "monitor",
+    targetType: "task" | "monitor" | "command",
     targetId: string,
     afterSequence = 0,
+    workspaceId?: string,
   ): Promise<Record<string, unknown>> {
+    if (targetType === "command") {
+      if (!workspaceId) throw new ComputerApiError(400, "workspace identity is required for command live stream");
+      return this.request(
+        `/workspaces/${encodeURIComponent(workspaceId)}/coding/commands/${encodeURIComponent(targetId)}/stream/snapshot?after=${Math.max(0, afterSequence)}`,
+      );
+    }
     const path = targetType === "task" ? "tasks" : "autonomous";
     return this.request(
       `/${path}/${encodeURIComponent(targetId)}/stream/snapshot?after=${Math.max(0, afterSequence)}`,
@@ -470,16 +477,23 @@ export class ComputerClient {
   }
 
   async streamLive(
-    targetType: "task" | "monitor",
+    targetType: "task" | "monitor" | "command",
     targetId: string,
     afterSequence = 0,
+    workspaceId?: string,
   ): Promise<Response> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Math.max(this.timeoutMs, 60_000));
     try {
-      const path = targetType === "task" ? "tasks" : "autonomous";
+      let path: string;
+      if (targetType === "command") {
+        if (!workspaceId) throw new ComputerApiError(400, "workspace identity is required for command live stream");
+        path = `workspaces/${encodeURIComponent(workspaceId)}/coding/commands/${encodeURIComponent(targetId)}`;
+      } else {
+        path = `${targetType === "task" ? "tasks" : "autonomous"}/${encodeURIComponent(targetId)}`;
+      }
       return await this.fetchImpl(
-        `${this.baseUrl}/api/control/v1/${path}/${encodeURIComponent(targetId)}/stream?after=${afterSequence}`,
+        `${this.baseUrl}/api/control/v1/${path}/stream?after=${afterSequence}`,
         {
           headers: {
             Authorization: `Bearer ${this.token}`,

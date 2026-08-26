@@ -180,10 +180,24 @@ test("invokes every direct-coding tool through MCP without a CPTR model input", 
     { name: "cptr_code_cancel_command", arguments: { workspace_id: "ws-1", command_id: "command-1" } },
   ];
 
+  const results = new Map<string, Awaited<ReturnType<typeof client.callTool>>>();
   for (const tool of calls) {
     const result = await client.callTool(tool);
+    results.set(tool.name, result);
     assert.equal(result.isError, undefined, `${tool.name} should complete without an MCP error`);
     assert.ok(result.structuredContent, `${tool.name} should return structured content`);
+  }
+
+  for (const name of ["cptr_code_run_command", "cptr_code_get_command", "cptr_code_cancel_command"]) {
+    const meta = results.get(name)?._meta as {
+      ui?: { resourceUri?: string };
+      "cptr/live"?: { targetType?: string; targetId?: string; workspaceId?: string; ticket?: string };
+    } | undefined;
+    assert.equal(meta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
+    assert.equal(meta?.["cptr/live"]?.targetType, "command");
+    assert.equal(meta?.["cptr/live"]?.targetId, "command-1");
+    assert.equal(meta?.["cptr/live"]?.workspaceId, "ws-1");
+    assert.ok(meta?.["cptr/live"]?.ticket);
   }
 
   assert.equal(seen.length, 12);
