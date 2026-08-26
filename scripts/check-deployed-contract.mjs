@@ -92,4 +92,23 @@ const resources = await rpc("resources/list", {});
 if (!(resources.resources ?? []).some((resource) => resource.uri === expectedResource)) {
   throw new Error(`resource contract drift: ${expectedResource} is unavailable`);
 }
-console.log(`CPTR deployed MCP contract verified: ${expectedTools.length} tools and ${expectedResource}`);
+const resourceResult = await rpc("resources/read", { uri: expectedResource });
+const resource = (resourceResult.contents ?? []).find((content) => content.uri === expectedResource);
+if (!resource) throw new Error(`resource contract drift: ${expectedResource} has no readable content`);
+if (resource.mimeType !== "text/html;profile=mcp-app") {
+  throw new Error(`resource MIME drift: expected text/html;profile=mcp-app, got ${resource.mimeType ?? "missing"}`);
+}
+const ui = resource._meta?.ui;
+const expectedWidgetDomain = process.env.CPTR_DEPLOYED_PUBLIC_ORIGIN?.trim() || new URL(endpoint).origin;
+if (ui?.domain !== expectedWidgetDomain) {
+  throw new Error(`resource widget domain drift: expected ${expectedWidgetDomain}, got ${ui?.domain ?? "missing"}`);
+}
+const connectDomains = ui?.csp?.connectDomains;
+if (!Array.isArray(connectDomains) || JSON.stringify(connectDomains) !== JSON.stringify([expectedWidgetDomain])) {
+  throw new Error(`resource connect-domain drift: expected [${expectedWidgetDomain}]`);
+}
+const resourceDomains = ui?.csp?.resourceDomains;
+if (!Array.isArray(resourceDomains) || resourceDomains.length !== 0) {
+  throw new Error("resource domain policy drift: resourceDomains must remain empty");
+}
+console.log(`CPTR deployed MCP contract verified: ${expectedTools.length} tools, ${expectedResource}, and widget domain ${expectedWidgetDomain}`);

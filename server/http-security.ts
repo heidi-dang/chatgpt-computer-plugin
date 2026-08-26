@@ -15,7 +15,18 @@ function normalizedOrigin(value: string, name: string): string {
 
 export function resolvePublicOrigin(env: Environment, host: string, port: number): string {
   const configured = env.PUBLIC_ORIGIN?.trim();
-  if (configured) return normalizedOrigin(configured, "PUBLIC_ORIGIN");
+  if (configured) {
+    const origin = normalizedOrigin(configured, "PUBLIC_ORIGIN");
+    if (env.NODE_ENV === "production") {
+      const url = new URL(origin);
+      const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+      if (url.protocol !== "https:") throw new Error("PUBLIC_ORIGIN must use HTTPS in production");
+      if (hostname === "localhost" || hostname === "::1" || hostname === "127.0.0.1" || hostname.startsWith("127.")) {
+        throw new Error("PUBLIC_ORIGIN cannot be localhost in production");
+      }
+    }
+    return origin;
+  }
   if (env.NODE_ENV === "production") {
     throw new Error("PUBLIC_ORIGIN is required when NODE_ENV=production");
   }

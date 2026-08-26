@@ -36,7 +36,7 @@ Tool schemas are bounded with Zod and each tool declares read/write/destructive 
 
 ## Official MCP shape
 
-This server follows the MCP Apps contract: the official TypeScript MCP SDK, Streamable HTTP at `/mcp`, explicit input/output schemas, tool annotations, a `text/html;profile=mcp-app` resource, and hidden result metadata containing the versioned `ui://cptr/live-workbench.html` resource reference. The resource uses the portable `ui/*` postMessage bridge first and feature-detects ChatGPT's optional `window.openai` helpers for display mode and intrinsic sizing.
+This server follows the MCP Apps contract: the official TypeScript MCP SDK, Streamable HTTP at `/mcp`, explicit input/output schemas, tool annotations, a `text/html;profile=mcp-app` resource, and hidden result metadata containing the versioned `ui://cptr/live-workbench.html` resource reference. The Workbench resource publishes `ui.domain` from the configured `PUBLIC_ORIGIN` and uses that same normalized origin as its bounded CSP `connectDomains` value; production configuration must provide a non-loopback HTTPS origin. The resource uses the portable `ui/*` postMessage bridge first and feature-detects ChatGPT's optional `window.openai` helpers for display mode and intrinsic sizing.
 
 ## CPTR Live Workbench
 
