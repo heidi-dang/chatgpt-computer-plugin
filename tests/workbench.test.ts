@@ -6,6 +6,7 @@ import {
   isTerminalWorkbenchStatus,
   LiveTargetSession,
   reduceWorkbenchEvent,
+  reduceWorkbenchEvents,
   type WorkbenchState,
 } from "../web/src/state.js";
 
@@ -19,6 +20,38 @@ const initial: WorkbenchState = {
   changes: [],
   evidence: [],
 };
+
+test("batch replay is byte-equivalent to ordered single-event reduction", () => {
+  const events = [
+    {
+      event_id: "batch-start",
+      sequence: 1,
+      timestamp: "2026-08-27T00:00:00.000Z",
+      target: { type: "command" as const, id: "ws-1:cmd-1" },
+      type: "command.started",
+      payload: { command_id: "cmd-1", summary: "npm test", status: "RUNNING" },
+    },
+    {
+      event_id: "batch-chunk",
+      sequence: 2,
+      timestamp: "2026-08-27T00:00:01.000Z",
+      target: { type: "command" as const, id: "ws-1:cmd-1" },
+      type: "terminal.chunk",
+      payload: { command_id: "cmd-1", text: "ok" },
+    },
+    {
+      event_id: "batch-complete",
+      sequence: 3,
+      timestamp: "2026-08-27T00:00:02.000Z",
+      target: { type: "command" as const, id: "ws-1:cmd-1" },
+      type: "command.completed",
+      payload: { command_id: "cmd-1", status: "COMPLETE", exit_code: 0 },
+    },
+  ];
+  const sequential = events.reduce(reduceWorkbenchEvent, initialWorkbenchState());
+  const batched = reduceWorkbenchEvents(initialWorkbenchState(), events);
+  assert.deepEqual(batched, sequential);
+});
 
 test("deduplicates replayed events by monotonic sequence", () => {
   const event = {

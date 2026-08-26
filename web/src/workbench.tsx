@@ -6,6 +6,7 @@ import {
   isTerminalWorkbenchStatus,
   LiveTargetSession,
   reduceWorkbenchEvent,
+  reduceWorkbenchEvents,
   workbenchTargetIdentity,
   type TerminalRow,
   type WorkbenchEvent,
@@ -215,12 +216,13 @@ function useLiveSession(
         setState((current) => ({ ...current, status: status.toUpperCase() }));
         terminalSeen = isTerminalWorkbenchStatus(status);
       }
-      for (const event of value.replay?.events ?? []) {
-        if (event.sequence > liveTarget.current.cursor) {
-          liveTarget.current.cursor = event.sequence;
-          setState((current) => reduceWorkbenchEvent(current, event));
-          if (eventTerminatesWorkbench(event)) terminalSeen = true;
-        }
+      const replayEvents = (value.replay?.events ?? []).filter((event) => event.sequence > liveTarget.current.cursor);
+      for (const event of replayEvents) {
+        liveTarget.current.cursor = event.sequence;
+        if (eventTerminatesWorkbench(event)) terminalSeen = true;
+      }
+      if (replayEvents.length) {
+        setState((current) => reduceWorkbenchEvents(current, replayEvents));
       }
       const lastSequence = value.replay?.last_sequence;
       if (typeof lastSequence === "number") {

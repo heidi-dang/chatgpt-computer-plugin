@@ -244,3 +244,9 @@ export function reduceWorkbenchEvent(state: WorkbenchState, event: WorkbenchEven
   }
   return next;
 }
+
+export function reduceWorkbenchEvents(state: WorkbenchState, events: readonly WorkbenchEvent[]): WorkbenchState {
+  let next = state;
+  for (const event of events) next = reduceWorkbenchEvent(next, event);
+  return next;
+}
