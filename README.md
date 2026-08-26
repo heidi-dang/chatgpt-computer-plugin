@@ -30,7 +30,7 @@ The `/mcp` endpoint requires a valid Cloudflare Access assertion in production, 
 
 ## Tools
 
-The adapter provides workspace-discovery tools plus eight **direct-coding tools**: `cptr_code_list_files`, `cptr_code_read_file`, `cptr_code_search_files`, `cptr_code_write_file`, `cptr_code_edit_file`, `cptr_code_run_command`, `cptr_code_get_command`, and `cptr_code_cancel_command`. These let the official ChatGPT app independently inspect, edit, test, and iterate inside an authorized CPTR workspace without creating a CPTR task, selecting a CPTR model, or invoking CPTR’s agent loop. The adapter also provides `cptr_start_task`, `cptr_execute_task`, autonomous-monitor tools, task-status tools, and `cptr_get_diff` for the separate CPTR-agent workflow. `cptr_execute_task` starts a scoped CPTR task and waits for at most 60 seconds before returning either its bounded result or the durable task ID for follow-up. `cptr_monitor_autonomous` only creates a durable CPTR supervisor; the dedicated autonomous tools inspect, steer, cancel, and approve it without keeping an endless polling loop in MCP.
+The adapter exposes 24 tools in four groups: eight **direct-coding tools** (`cptr_code_list_files`, `cptr_code_read_file`, `cptr_code_search_files`, `cptr_code_write_file`, `cptr_code_edit_file`, `cptr_code_run_command`, `cptr_code_get_command`, and `cptr_code_cancel_command`), workspace/task tools, autonomous-monitor tools, and diff inspection. The direct-coding tools let the official ChatGPT app independently inspect, edit, test, and iterate inside an authorized CPTR workspace without creating a CPTR task, selecting a CPTR model, or invoking CPTR's agent loop. `cptr_execute_task` starts a scoped CPTR task and waits for at most 60 seconds before returning either its bounded result or the durable task ID for follow-up; it also attaches the Live Workbench. `cptr_monitor_autonomous` only creates a durable CPTR supervisor; the dedicated autonomous tools inspect, steer, cancel, and approve it without keeping an endless polling loop in MCP. Steering controls accept optional caller-supplied `idempotency_key` values so retries reuse one logical control.
 
 Tool schemas are bounded with Zod and each tool declares read/write/destructive annotations. Annotations guide client behavior but do not replace CPTR authentication or authorization.
 
@@ -49,7 +49,7 @@ GET /api/control/v1/autonomous/{monitor_id}/stream
 
 CPTR persists bounded, redacted per-target events with monotonic sequences and sends an initial safe snapshot followed by replayable SSE. The widget reconnects with its last sequence, deduplicates events, and stops on terminal status. Slow streams are disconnected so they can reconnect and replay instead of growing memory without bound. The task and monitor streams intentionally omit prompts, raw output projections, and chain-of-thought from their snapshots; activity events are bounded and redacted before persistence.
 
-The widget provides Activity, Terminal, Tools, Changes, and Evidence views, plus scoped Stop and Steer actions. Stop and Steer call the existing MCP tools and include caller-generated idempotency keys for steering. CPTR remains authoritative for ownership, cancellation quiescence, approval, steering provenance, and terminal state.
+The widget provides Activity, Terminal, Tools, Changes, and Evidence views, plus a progress rail, target/worker/operation summary, and scoped Stop and Steer actions. Stop and Steer call the existing MCP tools and include caller-generated idempotency keys for steering. The browser replay cursor advances only after a validated event sequence is accepted, so reconnects cannot skip a durable event. CPTR remains authoritative for ownership, cancellation quiescence, approval, steering provenance, and terminal state.
 
 Build the browser module and server bundle with:
 
@@ -69,5 +69,5 @@ For local inspection, run `npx @modelcontextprotocol/inspector@latest`, select S
 - CPTR enforces workspace ownership and scopes such as `workspace:read`, `task:read`, `task:write`, `autonomous:run`, `git:read`, `coding:read`, `coding:write`, and `command:execute`. Existing tokens must be reissued with the three direct-coding scopes before these tools will work; `command:external` is intentionally not included in default newly issued keys.
 - This adapter does not grant `git:write` or `deploy:write`.
 - External/destructive autonomous assignments pause in CPTR with a durable approval record; the MCP `cptr_approve_autonomous` tool only forwards the scoped decision and cannot bypass CPTR policy.
-- The widget is a bounded activity projection and is not a substitute for the durable CPTR APIs or the existing 15-tool surface.
+- The widget is a bounded activity projection and is not a substitute for the durable CPTR APIs or the existing 24-tool surface.
 - CPTR inherits its host-level security model; do not expose it to untrusted users without an appropriate authentication and network boundary.

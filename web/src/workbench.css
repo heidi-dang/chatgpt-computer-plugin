@@ -17,6 +17,20 @@ h1 { font-size: 21px; margin: 0 0 5px; }
 .status-dot { width: 8px; height: 8px; background: #7dd3a8; border-radius: 50%; box-shadow: 0 0 0 3px #7dd3a833; }
 .status-cancelled .status-dot, .status-failed .status-dot, .status-blocked .status-dot { background: #fb8d8d; box-shadow: 0 0 0 3px #fb8d8d33; }
 .status-complete .status-dot { background: #79b7ff; box-shadow: 0 0 0 3px #79b7ff33; }
+.progress-rail { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; list-style: none; margin: 20px 0 16px; padding: 0; }
+.progress-rail li { position: relative; display: flex; align-items: center; gap: 8px; color: #748396; font-size: 10px; letter-spacing: .04em; font-weight: 700; }
+.progress-rail li:not(:last-child)::after { content: ""; position: absolute; top: 11px; left: 28px; right: 8px; height: 1px; background: #293442; }
+.progress-rail li.complete::after { background: #79b7ff88; }
+.progress-marker { z-index: 1; display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid #344151; border-radius: 50%; background: #101216; color: #748396; font-size: 10px; }
+.progress-rail li.active { color: #a8c8e8; }
+.progress-rail li.active .progress-marker { border-color: #79b7ff; color: #79b7ff; box-shadow: 0 0 0 3px #79b7ff22; }
+.progress-rail li.complete { color: #a8c8e8; }
+.progress-rail li.complete .progress-marker { border-color: #79b7ff; background: #1c3048; color: #d7ebff; }
+.summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; border: 1px solid #293442; border-radius: 10px; overflow: hidden; background: #293442; }
+.summary-item { min-width: 0; display: flex; flex-direction: column; gap: 5px; padding: 11px 12px; background: #161c24; }
+.summary-label { color: #748396; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; font-weight: 700; }
+.summary-item strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #f5f7fb; font-size: 12px; }
+.summary-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9aa8b8; font-size: 10px; }
 .controls { padding: 16px 0; flex-wrap: wrap; }
 .danger { color: #ffd0d0; border-color: #75414c; }
 .steer { display: flex; flex: 1 1 360px; gap: 8px; }
@@ -36,5 +50,6 @@ input:focus-visible, button:focus-visible { outline: 2px solid #79b7ff; outline-
 .event small { font-size: 10px; }
 .empty { border: 1px dashed #344151; border-radius: 9px; color: #9aa8b8; padding: 30px; text-align: center; }
 .footer { border-top: 1px solid #293442; padding-top: 12px; font-size: 10px; }
-@media (prefers-color-scheme: light) { :root { color-scheme: light; background: #f4f7fb; color: #152033; } body { background: linear-gradient(145deg, #f8fbff, #edf3fa); } button { background: #fff; color: #152033; border-color: #cbd7e6; } button:hover:not(:disabled) { background: #eaf3ff; } input { background: #fff; color: #152033; border-color: #cbd7e6; } .event { background: #fff; border-color: #d7e1ee; } .header, .tabs, .footer { border-color: #d7e1ee; } .status { border-color: #cbd7e6; } }
-@media (max-width: 560px) { .workbench { padding: 14px; } .header { align-items: flex-start; flex-direction: column; } .status { align-self: stretch; width: fit-content; } .controls { align-items: stretch; flex-direction: column; } .steer { flex-basis: auto; } }
+@media (prefers-color-scheme: light) { :root { color-scheme: light; background: #f4f7fb; color: #152033; } body { background: linear-gradient(145deg, #f8fbff, #edf3fa); } button { background: #fff; color: #152033; border-color: #cbd7e6; } button:hover:not(:disabled) { background: #eaf3ff; } input { background: #fff; color: #152033; border-color: #cbd7e6; } .event { background: #fff; border-color: #d7e1ee; } .header, .tabs, .footer { border-color: #d7e1ee; } .status { border-color: #cbd7e6; } .summary { border-color: #d7e1ee; } .summary-item { background: #fff; } .summary-item strong { color: #152033; } .progress-marker { background: #fff; border-color: #cbd7e6; } .progress-rail li:not(:last-child)::after { background: #d7e1ee; } }
+@media (max-width: 700px) { .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .workbench { padding: 14px; } .header { align-items: flex-start; flex-direction: column; } .status { align-self: stretch; width: fit-content; } .controls { align-items: stretch; flex-direction: column; } .steer { flex-basis: auto; } .progress-rail { grid-template-columns: repeat(2, 1fr); gap: 12px 0; } .progress-rail li:not(:last-child)::after { display: none; } }

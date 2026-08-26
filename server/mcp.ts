@@ -306,7 +306,14 @@ export function createMcpServer(
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       _meta: oauthToolMetadata,
     },
-    async (input) => result(await client.executeTask(input)),
+    async (input) => {
+      const task = await client.executeTask(input);
+      return workbenchResult(
+        task,
+        { targetType: "task", targetId: task.task_id },
+        tickets,
+      );
+    },
   );
 
   server.registerTool(

@@ -62,6 +62,14 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
     | { properties?: Record<string, { maximum?: number }> }
     | undefined;
   assert.equal(directInputSchema?.properties?.wait_seconds?.maximum, 60);
+  const messageInputSchema = tools.get("cptr_send_message")?.inputSchema as
+    | { properties?: Record<string, unknown> }
+    | undefined;
+  const autonomousSteerInputSchema = tools.get("cptr_steer_autonomous")?.inputSchema as
+    | { properties?: Record<string, unknown> }
+    | undefined;
+  assert.ok(messageInputSchema?.properties?.idempotency_key);
+  assert.ok(autonomousSteerInputSchema?.properties?.idempotency_key);
   assert.equal(tools.get("cptr_monitor_autonomous")?.annotations?.readOnlyHint, false);
   assert.equal(tools.get("cptr_monitor_autonomous")?.annotations?.destructiveHint, false);
   assert.equal(tools.get("cptr_get_autonomous")?.annotations?.readOnlyHint, true);
@@ -191,6 +199,45 @@ test("hydrates task creation with hidden workbench metadata without changing too
   assert.ok(meta?.ui?.resourceUri);
   assert.ok(meta?.["cptr/live"]?.ticket);
   assert.equal(String(meta?.["cptr/live"]?.streamUrl).includes(meta?.["cptr/live"]?.ticket ?? ""), false);
+
+  await client.close();
+  await server.close();
+});
+
+test("attaches the Live Workbench to bounded direct execution", async () => {
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "server-only-token",
+    fetchImpl: async () => new Response(JSON.stringify({
+      id: "task-execute-1",
+      workspace_id: "ws-1",
+      chat_id: "chat-1",
+      message_id: "message-1",
+      status: "COMPLETE",
+      prompt: "Run the bounded fixture test",
+      model_id: "model-1",
+      output: "Fixture passed.",
+      error: null,
+    }), { status: 200 }),
+  });
+  const server = createMcpServer(computer, { widgetBundle: "console.log('bundle')" });
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const response = await client.callTool({
+    name: "cptr_execute_task",
+    arguments: { workspace_id: "ws-1", prompt: "Run the bounded fixture test", model_id: "model-1", wait_seconds: 5 },
+  });
+  assert.match(JSON.stringify(response.content), /task-execute-1/);
+  const meta = response._meta as {
+    ui?: { resourceUri?: string };
+    "cptr/live"?: { targetType?: string; targetId?: string; ticket?: string };
+  } | undefined;
+  assert.equal(meta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
+  assert.equal(meta?.["cptr/live"]?.targetType, "task");
+  assert.equal(meta?.["cptr/live"]?.targetId, "task-execute-1");
+  assert.ok(meta?.["cptr/live"]?.ticket);
 
   await client.close();
   await server.close();

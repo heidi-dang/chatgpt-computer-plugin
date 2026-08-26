@@ -124,13 +124,12 @@ function useLiveStream(meta: LiveMetadata | null, setState: React.Dispatch<React
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        let eventId = "";
         let data: string[] = [];
         const dispatch = () => {
           if (!data.length) return;
           try {
             const event = JSON.parse(data.join("\n")) as WorkbenchEvent;
-            if (event.sequence > cursor.current) {
+            if (Number.isSafeInteger(event.sequence) && event.sequence > cursor.current) {
               cursor.current = event.sequence;
               setState((state) => reduceWorkbenchEvent(state, event));
             }
@@ -139,7 +138,6 @@ function useLiveStream(meta: LiveMetadata | null, setState: React.Dispatch<React
           } catch {
             setConnection("received invalid event");
           }
-          eventId = "";
           data = [];
         };
         while (!stopped) {
@@ -150,10 +148,8 @@ function useLiveStream(meta: LiveMetadata | null, setState: React.Dispatch<React
           buffer = lines.pop() ?? "";
           for (const line of lines) {
             if (line === "") dispatch();
-            else if (line.startsWith("id:")) eventId = line.slice(3).trim();
             else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
           }
-          if (eventId && Number(eventId) > cursor.current) cursor.current = Number(eventId);
         }
         if (!stopped && !terminalSeen) {
           scheduleRetry(consume);
@@ -180,6 +176,42 @@ function prettyEvent(event: WorkbenchEvent): string {
   return String(text).slice(0, 500);
 }
 
+const progressSteps = ["STARTING", "WORKING", "VERIFYING", "COMPLETE"];
+
+function progressIndex(phase: string): number {
+  if (phase === "CANCELLED" || phase === "FAILED" || phase === "BLOCKED") return progressSteps.length - 1;
+  const index = progressSteps.indexOf(phase);
+  return index === -1 ? 0 : index;
+}
+
+function shortId(value: string | null | undefined): string {
+  if (!value) return "—";
+  return value.length > 18 ? `${value.slice(0, 10)}…${value.slice(-6)}` : value;
+}
+
+function ProgressRail({ phase, status }: { phase: string; status: string }) {
+  const current = progressIndex(phase);
+  const terminalFailure = ["CANCELLED", "FAILED", "BLOCKED"].includes(status);
+  return <ol className="progress-rail" aria-label="Execution progress">
+    {progressSteps.map((step, index) => {
+      const complete = index < current || (index === current && (status === "COMPLETE" || terminalFailure));
+      const active = index === current && !complete;
+      return <li key={step} className={`${complete ? "complete" : ""} ${active ? "active" : ""}`}>
+        <span className="progress-marker" aria-hidden="true">{complete ? "✓" : index + 1}</span>
+        <span>{step}</span>
+      </li>;
+    })}
+  </ol>;
+}
+
+function SummaryValue({ label, value, detail }: { label: string; value: string; detail?: string }) {
+  return <div className="summary-item">
+    <span className="summary-label">{label}</span>
+    <strong title={value}>{value}</strong>
+    {detail && <small>{detail}</small>}
+  </div>;
+}
+
 function EventList({ events, empty }: { events: WorkbenchEvent[]; empty: string }) {
   if (!events.length) return <p className="empty">{empty}</p>;
   return <div className="event-list">{events.slice().reverse().map((event) => (
@@ -199,7 +231,7 @@ function Workbench() {
   const callTool = useMcpBridge();
   const meta = useLiveMetadata();
   const connection = useLiveStream(meta, setState);
-  const canStop = !!meta?.targetType && ["RUNNING", "WORKING", "CONNECTING"].includes(state.status);
+  const canStop = !!meta?.targetType && !terminalStatuses.has(state.status);
 
   useEffect(() => {
     const openai = (window as Window & { openai?: { notifyIntrinsicHeight?: (height: number) => void; requestDisplayMode?: (mode: string) => Promise<unknown> } }).openai;
@@ -211,7 +243,7 @@ function Workbench() {
     setActionStatus("stopping…");
     try {
       await callTool(meta.targetType === "task" ? "cptr_cancel_task" : "cptr_cancel_autonomous", meta.targetType === "task" ? { task_id: meta.targetId } : { monitor_id: meta.targetId });
-      setActionStatus("stop requested");
+      setActionStatus("stop requested · waiting for terminal state");
     } catch {
       setActionStatus("stop request failed");
     }
@@ -225,22 +257,32 @@ function Workbench() {
       const idempotency_key = crypto.randomUUID();
       await callTool(meta.targetType === "task" ? "cptr_send_message" : "cptr_steer_autonomous", meta.targetType === "task" ? { task_id: meta.targetId, content, idempotency_key } : { monitor_id: meta.targetId, content, idempotency_key });
       setSteerText("");
-      setActionStatus("steering queued");
+      setActionStatus("steering sent · waiting for delivery");
     } catch {
       setActionStatus("steering request failed");
     }
   };
 
   const tabEvents: Record<string, WorkbenchEvent[]> = { Activity: state.activity, Terminal: state.terminal, Tools: state.tools, Changes: state.changes, Evidence: state.evidence };
+  const currentStatus = state.status || "CONNECTING";
+  const terminal = terminalStatuses.has(currentStatus);
+  const latest = state.lastEvent ? prettyEvent(state.lastEvent) : "Waiting for the first server event";
   return <main className="workbench" aria-label="CPTR Live Workbench">
     <header className="header">
       <div><p className="eyebrow">CPTR LIVE WORKBENCH</p><h1>{meta?.targetType === "monitor" ? "Autonomous monitor" : "Task activity"}</h1><p className="subtle">{meta?.targetId ?? "Waiting for a task or monitor"}</p></div>
-      <div className={`status status-${state.status.toLowerCase()}`}><span className="status-dot" />{state.status}<small>{connection}</small></div>
+      <div className={`status status-${currentStatus.toLowerCase()}`}><span className="status-dot" />{currentStatus}<small>{connection}</small></div>
     </header>
+    <ProgressRail phase={state.phase} status={currentStatus} />
+    <section className="summary" aria-label="Execution summary">
+      <SummaryValue label="Target" value={shortId(meta?.targetId)} detail={meta?.targetType ?? "No target"} />
+      <SummaryValue label="Worker" value={shortId(state.workerTaskId)} detail={state.workerTaskId ? "owned execution" : "not assigned yet"} />
+      <SummaryValue label="Operation" value={state.activeOperation ?? (terminal ? "Quiescent" : "Waiting")} detail={latest} />
+      <SummaryValue label="Control" value={state.controlDelivery?.status ?? "None"} detail={shortId(state.controlDelivery?.controlMessageId)} />
+    </section>
     <section className="controls" aria-label="Task controls">
-      <button className="danger" disabled={!canStop} onClick={() => void stop()}>Stop</button>
+      <button className="danger" disabled={!canStop} onClick={() => void stop()} aria-label={`Stop ${meta?.targetType ?? "execution"}`}>Stop</button>
       <div className="steer"><input value={steerText} onChange={(event) => setSteerText(event.target.value)} placeholder="Send a scoped follow-up…" aria-label="Steering message" disabled={!canStop} /><button onClick={() => void steer()} disabled={!canStop || !steerText.trim()}>Steer</button></div>
-      {actionStatus && <span className="action-status" role="status">{actionStatus}</span>}
+      {actionStatus && <span className="action-status" role="status" aria-live="polite">{actionStatus}</span>}
     </section>
     <nav className="tabs" aria-label="Workbench views">{Object.keys(tabEvents).map((name) => <button key={name} className={tab === name ? "active" : ""} onClick={() => setTab(name)}>{name}<span>{tabEvents[name].length}</span></button>)}</nav>
     <section className="panel"><EventList events={tabEvents[tab]} empty={`No ${tab.toLowerCase()} activity yet.`} /></section>
