@@ -36,6 +36,7 @@ const expectedTools = [
   "cptr_steer_autonomous",
 ];
 const expectedResource = "ui://cptr/live-workbench.html";
+const expectedContractVersion = "0.3.0";
 
 if (!endpoint || !token) {
   throw new Error("Set CPTR_DEPLOYED_MCP_URL and CPTR_DEPLOYED_MCP_TOKEN before running the deployed contract check.");
@@ -66,6 +67,18 @@ function exactSet(actual, expected, label) {
     const unexpected = actualSorted.filter((name) => !expectedSorted.includes(name));
     throw new Error(`${label} drift: missing [${missing.join(", ") || "none"}], unexpected [${unexpected.join(", ") || "none"}]`);
   }
+}
+
+const healthUrl = new URL("/health", endpoint);
+const healthResponse = await fetch(healthUrl);
+if (!healthResponse.ok) throw new Error(`health check failed with HTTP ${healthResponse.status}`);
+const health = await healthResponse.json();
+if (health?.workbench?.ready !== true) throw new Error("deployed workbench is not ready");
+if (health?.mcp_contract?.version !== expectedContractVersion) {
+  throw new Error(`MCP contract version drift: expected ${expectedContractVersion}, got ${health?.mcp_contract?.version ?? "missing"}`);
+}
+if (health?.mcp_contract?.tool_count !== expectedTools.length) {
+  throw new Error(`MCP health tool-count drift: expected ${expectedTools.length}, got ${health?.mcp_contract?.tool_count ?? "missing"}`);
 }
 
 await rpc("initialize", {

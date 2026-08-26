@@ -35,6 +35,87 @@ export type WorkbenchState = {
 const MAX_EVENTS = 400;
 const MAX_TERMINAL_ROWS = 2_000;
 
+export const TERMINAL_WORKBENCH_STATUSES = new Set([
+  "COMPLETE",
+  "COMPLETE_WITH_TOOL_ERRORS",
+  "CANCELLED",
+  "FAILED",
+  "BLOCKED",
+  "REVIEW_REQUIRED",
+  "REJECTED",
+]);
+
+const AUTHORITATIVE_STATUS_EVENTS = new Set([
+  "task.started",
+  "task.failed",
+  "task.cancelled",
+  "task.terminal",
+  "task.review_ready",
+  "task.review_changes_requested",
+  "task.review_accepted",
+  "task.review_rejected",
+  "monitor.started",
+  "monitor.terminal",
+  "monitor.approval",
+]);
+
+export function isTerminalWorkbenchStatus(status: string): boolean {
+  return TERMINAL_WORKBENCH_STATUSES.has(status.toUpperCase());
+}
+
+export function workbenchTargetIdentity(
+  targetType?: "task" | "monitor",
+  targetId?: string,
+): string | null {
+  return targetType && targetId ? `${targetType}:${targetId}` : null;
+}
+
+export class LiveTargetSession {
+  targetIdentity: string | null = null;
+  cursor = 0;
+  renewalAttempts = 0;
+
+  bind(targetType?: "task" | "monitor", targetId?: string): boolean {
+    const nextIdentity = workbenchTargetIdentity(targetType, targetId);
+    if (this.targetIdentity === nextIdentity) return false;
+    this.targetIdentity = nextIdentity;
+    this.cursor = 0;
+    this.renewalAttempts = 0;
+    return true;
+  }
+}
+
+export function authoritativeWorkbenchStatus(event: WorkbenchEvent): string | null {
+  if (!AUTHORITATIVE_STATUS_EVENTS.has(event.type)) return null;
+  const payloadStatus = stringValue(event.payload?.status).toUpperCase();
+  if (payloadStatus) return payloadStatus;
+  switch (event.type) {
+    case "task.started":
+    case "task.review_changes_requested":
+    case "monitor.started":
+      return "RUNNING";
+    case "task.failed":
+      return "FAILED";
+    case "task.cancelled":
+      return "CANCELLED";
+    case "task.review_ready":
+      return "REVIEW_REQUIRED";
+    case "task.review_accepted":
+      return "COMPLETE";
+    case "task.review_rejected":
+      return "REJECTED";
+    case "monitor.approval":
+      return "APPROVAL_REQUIRED";
+    default:
+      return null;
+  }
+}
+
+export function eventTerminatesWorkbench(event: WorkbenchEvent): boolean {
+  const status = authoritativeWorkbenchStatus(event);
+  return status !== null && isTerminalWorkbenchStatus(status);
+}
+
 function bounded<T>(items: T[], limit = MAX_EVENTS): T[] {
   return items.length > limit ? items.slice(items.length - limit) : items;
 }
@@ -135,14 +216,13 @@ export function initialWorkbenchState(): WorkbenchState {
 export function reduceWorkbenchEvent(state: WorkbenchState, event: WorkbenchEvent): WorkbenchState {
   const pluginActivity = event.type === "mcp.tool";
   if (!pluginActivity && (!Number.isFinite(event.sequence) || event.sequence <= state.lastSequence)) return state;
-  const payload = event.payload ?? {};
-  const status = stringValue(payload.status).toUpperCase();
   const next: WorkbenchState = {
     ...state,
     lastSequence: pluginActivity ? state.lastSequence : event.sequence,
     activity: bounded([...state.activity, event]),
   };
-  if (!pluginActivity && status) next.status = status;
+  const authoritativeStatus = pluginActivity ? null : authoritativeWorkbenchStatus(event);
+  if (authoritativeStatus) next.status = authoritativeStatus;
   if (event.type.startsWith("tool.") || pluginActivity) next.tools = bounded([...state.tools, event]);
   if (event.type.startsWith("file.") || event.type.startsWith("diff.")) next.changes = bounded([...state.changes, event]);
   if (event.type.startsWith("evidence.") || event.type.startsWith("verification.")) {

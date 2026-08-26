@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { initialWorkbenchState, reduceWorkbenchEvent, type WorkbenchState } from "../web/src/state.js";
+import {
+  eventTerminatesWorkbench,
+  initialWorkbenchState,
+  isTerminalWorkbenchStatus,
+  LiveTargetSession,
+  reduceWorkbenchEvent,
+  type WorkbenchState,
+} from "../web/src/state.js";
 
 const initial: WorkbenchState = {
   status: "CONNECTING",
@@ -50,7 +57,7 @@ test("renders immediate ChatGPT MCP activity without changing the backend event 
   assert.equal(opened.tools.length, 1);
   assert.match(opened.transcript[0]?.text ?? "", /ChatGPT → cptr_open_live_workbench/);
   assert.equal(live.lastSequence, 1);
-  assert.equal(live.status, "RUNNING");
+  assert.equal(live.status, "CONNECTING");
 });
 
 
@@ -89,6 +96,78 @@ test("renders sanitized terminal lifecycle rows and rejects duplicate sequences"
   assert.equal(completed.transcript[2]?.text, "second");
   assert.equal(completed.transcript[3]?.tone, "success");
   assert.equal(duplicate, completed);
+});
+
+
+test("keeps command and tool status scoped below the task lifecycle", () => {
+  const running = reduceWorkbenchEvent(initialWorkbenchState(), {
+    event_id: "task-started",
+    sequence: 1,
+    timestamp: "2026-08-26T00:00:00Z",
+    type: "task.started",
+    payload: { status: "RUNNING" },
+  });
+  const commandComplete = reduceWorkbenchEvent(running, {
+    event_id: "command-complete",
+    sequence: 2,
+    timestamp: "2026-08-26T00:00:01Z",
+    type: "command.completed",
+    payload: { command_id: "cmd-1", status: "COMPLETE" },
+  });
+  const toolComplete = reduceWorkbenchEvent(commandComplete, {
+    event_id: "tool-complete",
+    sequence: 3,
+    timestamp: "2026-08-26T00:00:02Z",
+    type: "tool.output",
+    payload: { status: "completed", output: "ok" },
+  });
+
+  assert.equal(running.status, "RUNNING");
+  assert.equal(commandComplete.status, "RUNNING");
+  assert.equal(toolComplete.status, "RUNNING");
+  assert.equal(eventTerminatesWorkbench({
+    event_id: "command-terminal-check",
+    sequence: 4,
+    timestamp: "2026-08-26T00:00:03Z",
+    type: "command.completed",
+    payload: { status: "COMPLETE" },
+  }), false);
+});
+
+test("treats COMPLETE_WITH_TOOL_ERRORS as a terminal non-success task status", () => {
+  assert.equal(isTerminalWorkbenchStatus("COMPLETE_WITH_TOOL_ERRORS"), true);
+  const completed = reduceWorkbenchEvent(initialWorkbenchState(), {
+    event_id: "task-terminal-tool-errors",
+    sequence: 1,
+    timestamp: "2026-08-26T00:00:03Z",
+    type: "task.terminal",
+    payload: { status: "COMPLETE_WITH_TOOL_ERRORS" },
+  });
+
+  assert.equal(completed.status, "COMPLETE_WITH_TOOL_ERRORS");
+  assert.equal(completed.transcript.at(-1)?.tone, "error");
+  assert.equal(eventTerminatesWorkbench({
+    event_id: "task-terminal-check",
+    sequence: 2,
+    timestamp: "2026-08-26T00:00:04Z",
+    type: "task.terminal",
+    payload: { status: "COMPLETE_WITH_TOOL_ERRORS" },
+  }), true);
+});
+
+test("resets replay cursor and renewal attempts only when the live target changes", () => {
+  const session = new LiveTargetSession();
+  assert.equal(session.bind("task", "task-a"), true);
+  session.cursor = 87;
+  session.renewalAttempts = 2;
+
+  assert.equal(session.bind("task", "task-a"), false);
+  assert.equal(session.cursor, 87);
+  assert.equal(session.renewalAttempts, 2);
+
+  assert.equal(session.bind("task", "task-b"), true);
+  assert.equal(session.cursor, 0);
+  assert.equal(session.renewalAttempts, 0);
 });
 
 

@@ -1,8 +1,12 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  eventTerminatesWorkbench,
   initialWorkbenchState,
+  isTerminalWorkbenchStatus,
+  LiveTargetSession,
   reduceWorkbenchEvent,
+  workbenchTargetIdentity,
   type TerminalRow,
   type WorkbenchEvent,
   type WorkbenchState,
@@ -40,15 +44,6 @@ type HostBridge = {
   notifyIntrinsicHeight?: (height: number) => void;
   requestDisplayMode?: (mode: "inline" | "fullscreen" | "pip") => Promise<unknown>;
 };
-
-const terminalStatuses = new Set([
-  "COMPLETE",
-  "CANCELLED",
-  "FAILED",
-  "BLOCKED",
-  "REVIEW_REQUIRED",
-  "REJECTED",
-]);
 
 function hostBridge(): HostBridge | undefined {
   return (window as Window & { openai?: HostBridge }).openai;
@@ -159,13 +154,15 @@ function useLiveSession(
   callTool: (name: string, args: Record<string, unknown>) => Promise<unknown>,
 ) {
   const [connection, setConnection] = useState("waiting for live terminal");
-  const cursor = useRef(0);
-  const renewalAttempts = useRef(0);
+  const liveTarget = useRef(new LiveTargetSession());
   // The bridge callback is recreated by the host integration on render. A ref
   // avoids unnecessary live-stream reconnects while preserving current access.
   const callToolRef = useRef(callTool);
   callToolRef.current = callTool;
   useEffect(() => {
+    if (liveTarget.current.bind(meta?.targetType, meta?.targetId)) {
+      setState(initialWorkbenchState());
+    }
     if (!meta?.ticket || !meta.streamUrl || !meta.snapshotUrl) {
       setConnection("waiting for a CPTR task or monitor");
       return;
@@ -177,8 +174,8 @@ function useLiveSession(
     let retryAttempts = 0;
 
     const renewTicket = async (): Promise<boolean> => {
-      if (!meta.targetType || !meta.targetId || renewalAttempts.current >= 2) return false;
-      renewalAttempts.current += 1;
+      if (!meta.targetType || !meta.targetId || liveTarget.current.renewalAttempts >= 2) return false;
+      liveTarget.current.renewalAttempts += 1;
       setConnection("renewing live-session ticket");
       try {
         const response = await callToolRef.current("cptr_render_live_terminal", {
@@ -202,7 +199,7 @@ function useLiveSession(
 
     const applySnapshot = async () => {
       const snapshotUrl = new URL(meta.snapshotUrl!, window.location.href);
-      snapshotUrl.searchParams.set("after", String(cursor.current));
+      snapshotUrl.searchParams.set("after", String(liveTarget.current.cursor));
       const response = await fetch(snapshotUrl, {
         headers: { Authorization: `Bearer ${meta.ticket}`, Accept: "application/json" },
         signal: controller.signal,
@@ -210,18 +207,20 @@ function useLiveSession(
       if (!response.ok) throw unavailable(response.status);
       const value = await response.json() as { snapshot?: { status?: string }; replay?: { events?: WorkbenchEvent[]; last_sequence?: number } };
       for (const event of value.replay?.events ?? []) {
-        if (event.sequence > cursor.current) {
-          cursor.current = event.sequence;
+        if (event.sequence > liveTarget.current.cursor) {
+          liveTarget.current.cursor = event.sequence;
           setState((current) => reduceWorkbenchEvent(current, event));
         }
       }
       const status = value.snapshot?.status;
       if (typeof status === "string") {
         setState((current) => ({ ...current, status: status.toUpperCase() }));
-        terminalSeen = terminalStatuses.has(status.toUpperCase());
+        terminalSeen = isTerminalWorkbenchStatus(status);
       }
       const lastSequence = value.replay?.last_sequence;
-      if (typeof lastSequence === "number") cursor.current = Math.max(cursor.current, lastSequence);
+      if (typeof lastSequence === "number") {
+        liveTarget.current.cursor = Math.max(liveTarget.current.cursor, lastSequence);
+      }
     };
 
     const scheduleRetry = (run: () => void) => {
@@ -241,10 +240,10 @@ function useLiveSession(
         await applySnapshot();
         if (terminalSeen || stopped) return;
         const streamUrl = new URL(meta.streamUrl!, window.location.href);
-        streamUrl.searchParams.set("after", String(cursor.current));
+        streamUrl.searchParams.set("after", String(liveTarget.current.cursor));
         setConnection("connecting");
         const response = await fetch(streamUrl, {
-          headers: { Authorization: `Bearer ${meta.ticket}`, Accept: "text/event-stream", "Last-Event-ID": String(cursor.current) },
+          headers: { Authorization: `Bearer ${meta.ticket}`, Accept: "text/event-stream", "Last-Event-ID": String(liveTarget.current.cursor) },
           signal: controller.signal,
         });
         if (response.status === 401) {
@@ -257,7 +256,7 @@ function useLiveSession(
         }
         if (!response.ok || !response.body) throw new Error(`stream unavailable (${response.status})`);
         retryAttempts = 0;
-        renewalAttempts.current = 0;
+        liveTarget.current.renewalAttempts = 0;
         setConnection("live");
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -272,16 +271,15 @@ function useLiveSession(
               const status = (value as { snapshot?: { status?: string } }).snapshot?.status;
               if (typeof status === "string") {
                 setState((current) => ({ ...current, status: status.toUpperCase() }));
-                terminalSeen = terminalStatuses.has(status.toUpperCase());
+                terminalSeen = isTerminalWorkbenchStatus(status);
               }
             } else {
               const event = value as WorkbenchEvent;
-              if (event.sequence > cursor.current) {
-                cursor.current = event.sequence;
+              if (event.sequence > liveTarget.current.cursor) {
+                liveTarget.current.cursor = event.sequence;
                 setState((current) => reduceWorkbenchEvent(current, event));
               }
-              const status = typeof event.payload?.status === "string" ? event.payload.status.toUpperCase() : "";
-              if (event.type.endsWith(".terminal") || terminalStatuses.has(status)) terminalSeen = true;
+              if (eventTerminatesWorkbench(event)) terminalSeen = true;
             }
           } catch {
             setConnection("received invalid event");
@@ -455,6 +453,20 @@ function Workbench() {
   const connection = useLiveSession(meta, setMeta, setState, callTool);
   const isTask = meta?.targetType === "task" && !!meta.targetId;
   const canControl = !!meta?.targetType && ["RUNNING", "WORKING", "CONNECTING", "APPROVAL_REQUIRED"].includes(state.status);
+  const visibleTarget = useRef<string | null>(null);
+
+  useEffect(() => {
+    const targetIdentity = workbenchTargetIdentity(meta?.targetType, meta?.targetId);
+    if (visibleTarget.current === targetIdentity) return;
+    visibleTarget.current = targetIdentity;
+    setTab("Terminal");
+    setSteerText("");
+    setActionStatus("");
+    setReview(null);
+    setReviewDiff(null);
+    setReviewLoading(false);
+    setDecisionBusy(false);
+  }, [meta?.targetType, meta?.targetId]);
 
   const loadReview = async () => {
     if (!isTask || !meta?.targetId) return;

@@ -3,7 +3,7 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ComputerClient } from "../server/client/computer-client.js";
-import { createMcpServer } from "../server/mcp.js";
+import { MCP_CONTRACT_TOOL_COUNT, MCP_CONTRACT_VERSION, createMcpServer } from "../server/mcp.js";
 
 test("advertises dedicated autonomous tools with accurate annotations", async () => {
   const computer = new ComputerClient({
@@ -94,7 +94,9 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(monitorMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
   assert.equal(terminalMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
   assert.equal(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.action, undefined);
-  assert.equal(tools.size, 32);
+  assert.equal(MCP_CONTRACT_VERSION, "0.3.0");
+  assert.equal(MCP_CONTRACT_TOOL_COUNT, 32);
+  assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
   }

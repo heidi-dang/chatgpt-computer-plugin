@@ -3,6 +3,9 @@ import { ComputerClient } from "./client/computer-client.js";
 import { LiveTicketStore } from "./live-tickets.js";
 import { WORKBENCH_RESOURCE_URI, createWorkbenchResource } from "./ui/workbench-resource.js";
 import { z } from "zod";
+export const MCP_CONTRACT_VERSION = "0.3.0";
+export const MCP_CONTRACT_TOOL_COUNT = 32;
+
 import {
   approveAutonomousSchema,
   codingCommandCancelSchema,

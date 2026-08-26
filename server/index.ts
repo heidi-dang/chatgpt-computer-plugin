@@ -6,7 +6,7 @@ import {
   type McpAuthConfig,
 } from "./auth.js";
 import { clientFromEnvironment } from "./client/computer-client.js";
-import { createMcpServer } from "./mcp.js";
+import { MCP_CONTRACT_TOOL_COUNT, MCP_CONTRACT_VERSION, createMcpServer } from "./mcp.js";
 import { LiveGateway } from "./live-gateway.js";
 import { LiveTicketStore } from "./live-tickets.js";
 import { loadWorkbenchAssets } from "./workbench-assets.js";
@@ -100,6 +100,10 @@ const httpServer = createServer(async (req, res) => {
       workbench: {
         ready: workbenchAssets.ready,
         asset_directory: workbenchAssets.directory,
+      },
+      mcp_contract: {
+        version: MCP_CONTRACT_VERSION,
+        tool_count: MCP_CONTRACT_TOOL_COUNT,
       },
       release: process.env.GIT_COMMIT_SHA ?? process.env.RAILWAY_GIT_COMMIT_SHA ?? null,
     }));
