@@ -205,6 +205,36 @@ test("treats COMPLETE_WITH_TOOL_ERRORS as a terminal non-success task status", (
   }), true);
 });
 
+test("bounds long live-terminal history while retaining the newest output", () => {
+  let state = initialWorkbenchState();
+  for (let sequence = 1; sequence <= 2500; sequence += 1) {
+    state = reduceWorkbenchEvent(state, {
+      event_id: `long-${sequence}`,
+      sequence,
+      timestamp: "2026-08-27T00:00:00Z",
+      type: "terminal.chunk",
+      payload: { text: `line-${sequence}` },
+    });
+  }
+
+  assert.equal(state.transcript.length, 2000);
+  assert.equal(state.transcript[0]?.text, "line-501");
+  assert.equal(state.transcript.at(-1)?.text, "line-2500");
+  assert.equal(state.lastSequence, 2500);
+});
+
+test("normalizes terminal completion status before choosing success tone", () => {
+  const state = reduceWorkbenchEvent(initialWorkbenchState(), {
+    event_id: "lower-complete",
+    sequence: 1,
+    timestamp: "2026-08-27T00:00:00Z",
+    type: "task.terminal",
+    payload: { status: "complete" },
+  });
+
+  assert.equal(state.transcript.at(-1)?.tone, "success");
+});
+
 test("resets replay cursor and renewal attempts only when the live target changes", () => {
   const session = new LiveTargetSession();
   assert.equal(session.bind("task", "task-a"), true);

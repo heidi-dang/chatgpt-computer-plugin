@@ -40,7 +40,7 @@ This server follows the MCP Apps contract: the official TypeScript MCP SDK, Stre
 
 ## CPTR Live Workbench
 
-`cptr_open_live_workbench` is the activation tool for a direct ChatGPT invocation such as `@cptr computer`. It opens the Live Workbench immediately, before a CPTR task exists. Workspace discovery also carries the same UI resource so the terminal stays visible while ChatGPT selects a workspace. The widget renders bounded `ChatGPT → CPTR tool` activity from subsequent MCP result metadata; it then automatically rebinds to the target-bound CPTR stream when `cptr_start_task`, `cptr_execute_task`, or `cptr_monitor_autonomous` returns.
+`cptr_open_live_workbench` is the activation tool for a direct ChatGPT invocation such as `@cptr computer`. It opens the Live Terminal immediately, before a CPTR task exists. Workspace discovery carries the same UI resource so the terminal remains visible while ChatGPT selects a workspace, and task/monitor/command tool results automatically rebind that surface to the corresponding target-bound CPTR stream.
 
 `cptr_start_task`, `cptr_execute_task`, and `cptr_monitor_autonomous` attach target-bound, short-lived widget metadata in result `_meta`; the opaque stream ticket is not placed in visible tool content or a URL. The widget calls the plugin's `/live/stream` gateway with the ticket in an `Authorization` header. The gateway forwards the private CPTR bearer server-side to:
 
@@ -51,7 +51,9 @@ GET /api/control/v1/autonomous/{monitor_id}/stream
 
 CPTR persists bounded, redacted per-target events with monotonic sequences and sends an initial safe snapshot followed by replayable SSE. The widget reconnects with its last sequence, deduplicates events, and stops on terminal status. Tickets last 15 minutes, longer than the gateway’s bounded 10-minute stream interval; on an expired ticket the widget requests at most two fresh target-bound tickets and rebinds automatically. Slow streams are disconnected so they can reconnect and replay instead of growing memory without bound. The task and monitor streams intentionally omit prompts, raw output projections, and chain-of-thought from their snapshots; activity events are bounded and redacted before persistence.
 
-The widget provides Activity, Terminal, Tools, Changes, and Evidence views, plus scoped Stop and Steer actions. Stop and Steer call the existing MCP tools and include caller-generated idempotency keys for steering. Plugin-side MCP activity is presentation-only and never replaces CPTR's server-authoritative event stream, durable task state, or backend sequence cursor. CPTR remains authoritative for ownership, cancellation quiescence, approval, steering provenance, and terminal state.
+The default widget surface is intentionally Live-Terminal-only. It renders genuine redacted terminal lifecycle/output rows, target identity, connection state, and compact Stop/Copy/Pin/Expand controls; Activity/Tools/Changes/Evidence/Review dashboard chrome is not rendered. Evidence, review, steering, Git diff, and other control capabilities remain available through their MCP tools and durable CPTR APIs. The terminal keeps a bounded 2,000-line client transcript, follows new output only while the user is at the bottom, and preserves target/workspace isolation across rebinds.
+
+A ChatGPT MCP Apps widget cannot attach arbitrary DOM directly to ChatGPT's composer or escape its host-managed widget surface. The terminal therefore uses CSS sticky positioning inside its allocated surface, and its user-triggered **Pin** action requests Apps SDK `pip` display mode when the host supports it. The host remains authoritative and may grant a different mode; on mobile, PiP may be coerced to fullscreen. No synthetic overlay is used.
 
 Build the browser module and server bundle with:
 
@@ -72,7 +74,7 @@ For local inspection, run `npx @modelcontextprotocol/inspector@latest`, select S
 - CPTR enforces workspace ownership and scopes such as `workspace:read`, `task:read`, `task:write`, `autonomous:run`, `git:read`, `coding:read`, `coding:write`, and `command:execute`. Existing tokens must be reissued with the three direct-coding scopes before these tools will work; `command:external` is intentionally not included in default newly issued keys.
 - This adapter does not grant `git:write` or `deploy:write`.
 - External/destructive autonomous assignments pause in CPTR with a durable approval record; the MCP `cptr_approve_autonomous` tool only forwards the scoped decision and cannot bypass CPTR policy.
-- The widget is a bounded activity projection and is not a substitute for the durable CPTR APIs or the complete 32-tool surface.
+- The widget is a bounded live-terminal projection and is not a substitute for the durable CPTR APIs or the complete 36-tool surface.
 - Persisted workspaces whose host directories no longer exist are returned with `available: false` and rejected with a generic `workspace is unavailable` response; absolute host paths are redacted before any adapter error reaches ChatGPT.
 - Browser CORS is origin-allowlisted through `MCP_ALLOWED_ORIGINS`; wildcard CORS is not used by the MCP or Live Workbench endpoints.
 - CPTR inherits its host-level security model; do not expose it to untrusted users without an appropriate authentication and network boundary.
