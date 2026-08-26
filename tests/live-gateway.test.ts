@@ -167,3 +167,33 @@ test("releases capacity when a backpressured client disconnects", async () => {
   secondRequest.emit("close");
   await second;
 });
+
+
+test("returns a target-bound live snapshot without exposing the ticket", async () => {
+  const store = new LiveTicketStore({ ttlMs: 5_000, snapshotUrl: "https://plugin.test/live/snapshot" });
+  const issued = store.issue({ targetType: "task", targetId: "task-1" });
+  let requestArgs: unknown[] = [];
+  const gateway = new LiveGateway({
+    getLiveSnapshot: async (...args: unknown[]) => {
+      requestArgs = args;
+      return { target: "task", snapshot: { status: "RUNNING" }, replay: { last_sequence: 4, events: [] } };
+    },
+  } as never, store);
+  const request = Object.assign(new EventEmitter(), {
+    url: "/live/snapshot?after=3",
+    headers: { authorization: `Bearer ${issued.ticket}` },
+  });
+  const response = {
+    status: 0,
+    body: "",
+    writeHead(status: number) { this.status = status; },
+    end(body?: string) { this.body = body ?? ""; },
+  };
+
+  await gateway.handleSnapshot(request as never, response as never);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(requestArgs, ["task", "task-1", 3]);
+  assert.match(response.body, /RUNNING/);
+  assert.equal(response.body.includes(issued.ticket), false);
+});

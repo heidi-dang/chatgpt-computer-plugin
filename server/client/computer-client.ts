@@ -320,6 +320,17 @@ export class ComputerClient {
     return this.request(`/workspaces/${encodeURIComponent(workspaceId)}/git/diff`);
   }
 
+  async getLiveSnapshot(
+    targetType: "task" | "monitor",
+    targetId: string,
+    afterSequence = 0,
+  ): Promise<Record<string, unknown>> {
+    const path = targetType === "task" ? "tasks" : "autonomous";
+    return this.request(
+      `/${path}/${encodeURIComponent(targetId)}/stream/snapshot?after=${Math.max(0, afterSequence)}`,
+    );
+  }
+
   async streamLive(
     targetType: "task" | "monitor",
     targetId: string,

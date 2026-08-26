@@ -39,6 +39,41 @@ export class LiveGateway {
     private readonly limits: { maxConcurrent?: number; maxBytes?: number; maxDurationMs?: number } = {},
   ) {}
 
+  async handleSnapshot(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const ticket = bearerValue(request);
+    const url = new URL(request.url ?? "/", "http://localhost");
+    if (url.pathname !== "/live/snapshot" || !ticket) {
+      response.writeHead(404, { "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": "*" });
+      response.end(JSON.stringify({ error: "live snapshot not found" }));
+      return;
+    }
+    const claims = this.tickets.validate(ticket);
+    if (!claims) {
+      response.writeHead(401, { "content-type": "application/json", "cache-control": "no-store", "www-authenticate": "Bearer", "access-control-allow-origin": "*" });
+      response.end(JSON.stringify({ error: "live snapshot ticket is invalid or expired" }));
+      return;
+    }
+    const rawAfter = url.searchParams.get("after") ?? "0";
+    if (!/^\d{1,12}$/.test(rawAfter)) {
+      response.writeHead(400, { "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": "*" });
+      response.end(JSON.stringify({ error: "invalid live-event cursor" }));
+      return;
+    }
+    try {
+      const snapshot = await this.client.getLiveSnapshot(claims.targetType, claims.targetId, Number(rawAfter));
+      response.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+        "referrer-policy": "no-referrer",
+        "access-control-allow-origin": "*",
+      });
+      response.end(JSON.stringify(snapshot));
+    } catch {
+      response.writeHead(502, { "content-type": "application/json", "cache-control": "no-store", "access-control-allow-origin": "*" });
+      response.end(JSON.stringify({ error: "live snapshot unavailable" }));
+    }
+  }
+
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const ticket = bearerValue(request);
     const path = new URL(request.url ?? "/", "http://localhost").pathname;

@@ -42,7 +42,10 @@ const oauthConfig: McpAuthConfig = {
       : undefined,
 };
 const client = clientFromEnvironment();
-const liveTickets = new LiveTicketStore({ streamUrl: `${publicOrigin}/live/stream` });
+const liveTickets = new LiveTicketStore({
+  streamUrl: `${publicOrigin}/live/stream`,
+  snapshotUrl: `${publicOrigin}/live/snapshot`,
+});
 const liveGateway = new LiveGateway(client, liveTickets);
 const workbenchBundle = (() => {
   try {
@@ -101,7 +104,7 @@ const httpServer = createServer(async (req, res) => {
     }));
     return;
   }
-  if (url.pathname === "/live/stream") {
+  if (url.pathname === "/live/stream" || url.pathname === "/live/snapshot") {
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
         "access-control-allow-origin": "*",
@@ -111,7 +114,12 @@ const httpServer = createServer(async (req, res) => {
       }).end();
       return;
     }
-    await liveGateway.handle(req, res);
+    if (req.method !== "GET") {
+      res.writeHead(405, { "cache-control": "no-store" }).end();
+      return;
+    }
+    if (url.pathname === "/live/snapshot") await liveGateway.handleSnapshot(req, res);
+    else await liveGateway.handle(req, res);
     return;
   }
   if (url.pathname !== mcpPath || !req.method || !["GET", "POST", "DELETE"].includes(req.method)) {

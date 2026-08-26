@@ -275,14 +275,14 @@ export function createMcpServer(
       inputSchema: startTaskSchema,
       outputSchema: { id: z.string(), status: z.string(), workspace_id: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-      _meta: workbenchToolMetadata,
+      _meta: oauthToolMetadata,
     },
     async (input) => {
       const task = await client.startTask({
         ...input,
         prompt: assignmentScopedPrompt(input.prompt),
       });
-      return workbenchResult(task, { targetType: "task", targetId: task.id }, tickets);
+      return result(task);
     },
   );
 
@@ -317,14 +317,60 @@ export function createMcpServer(
       inputSchema: monitorAutonomousSchema,
       outputSchema: autonomousSummaryOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => result(await client.createAutonomous(input)),
+  );
+
+  server.registerTool(
+    "cptr_render_live_terminal",
+    {
+      title: "Render a live CPTR terminal",
+      description:
+        "Render the live terminal only after a CPTR task or monitor exists. This tool provides a redacted, resumable observation surface; it does not grant shell access or additional permissions.",
+      inputSchema: z.object({
+        target_type: z.enum(["task", "monitor"]),
+        target_id: z.string().min(1),
+        presentation: z.enum(["inline", "expanded"]).optional(),
+      }),
+      outputSchema: {
+        target_type: z.enum(["task", "monitor"]),
+        target_id: z.string(),
+        status: z.string(),
+        title: z.string(),
+        initial_summary: z.string(),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
-    async (input) => {
-      const monitor = await client.createAutonomous(input);
-      return workbenchResult(monitor, {
-        targetType: "monitor",
-        targetId: String(monitor.monitor_id),
-      }, tickets);
+    async ({ target_type, target_id }) => {
+      if (target_type === "task") {
+        const task = await client.getTask(target_id);
+        return workbenchResult(
+          {
+            target_type,
+            target_id,
+            status: task.status,
+            title: "CPTR task activity",
+            initial_summary: `Task ${target_id} is ${task.status}.`,
+          },
+          { targetType: target_type, targetId: target_id },
+          tickets,
+        );
+      }
+      const monitor = await client.getAutonomous(target_id);
+      const status = String(monitor.status ?? "UNKNOWN");
+      return workbenchResult(
+        {
+          target_type,
+          target_id,
+          status,
+          title: "CPTR autonomous monitor",
+          initial_summary: `Monitor ${target_id} is ${status}.`,
+        },
+        { targetType: target_type, targetId: target_id },
+        tickets,
+      );
     },
   );
 

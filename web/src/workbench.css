@@ -38,3 +38,29 @@ input:focus-visible, button:focus-visible { outline: 2px solid #79b7ff; outline-
 .footer { border-top: 1px solid #293442; padding-top: 12px; font-size: 10px; }
 @media (prefers-color-scheme: light) { :root { color-scheme: light; background: #f4f7fb; color: #152033; } body { background: linear-gradient(145deg, #f8fbff, #edf3fa); } button { background: #fff; color: #152033; border-color: #cbd7e6; } button:hover:not(:disabled) { background: #eaf3ff; } input { background: #fff; color: #152033; border-color: #cbd7e6; } .event { background: #fff; border-color: #d7e1ee; } .header, .tabs, .footer { border-color: #d7e1ee; } .status { border-color: #cbd7e6; } }
 @media (max-width: 560px) { .workbench { padding: 14px; } .header { align-items: flex-start; flex-direction: column; } .status { align-self: stretch; width: fit-content; } .controls { align-items: stretch; flex-direction: column; } .steer { flex-basis: auto; } }
+
+.terminal-workbench .panel { min-height: 360px; }
+.terminal-shell { overflow: hidden; border: 1px solid #293442; border-radius: 10px; background: #0a0f14; box-shadow: inset 0 1px 0 #ffffff0a; }
+.terminal-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; border-bottom: 1px solid #293442; color: #9aa8b8; font: 700 11px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.terminal-toolbar button { padding: 5px 8px; font-size: 11px; letter-spacing: normal; text-transform: none; }
+.terminal-viewport { max-height: 480px; overflow: auto; padding: 10px 0; outline: none; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.terminal-viewport:focus-visible { box-shadow: inset 0 0 0 2px #79b7ff; }
+.terminal-row { display: grid; grid-template-columns: 50px minmax(0, 1fr); gap: 10px; min-width: 0; padding: 0 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.terminal-row code { color: inherit; font: inherit; }
+.terminal-seq { color: #617184; text-align: right; user-select: none; }
+.terminal-prompt { color: #a8c8e8; }
+.terminal-prompt code::before { content: "$ "; color: #79b7ff; }
+.terminal-stdout { color: #dbe8f5; }
+.terminal-stderr { color: #ffd0d0; background: #7a24331a; }
+.terminal-system { color: #b9c7d8; }
+.terminal-success { color: #7dd3a8; }
+.terminal-error { color: #fb8d8d; }
+@media (prefers-color-scheme: light) {
+  .terminal-shell { border-color: #cbd7e6; background: #17202a; }
+  .terminal-toolbar { border-color: #334456; color: #c4d0dc; }
+  .terminal-stdout { color: #eef6ff; }
+}
+@media (max-width: 560px) {
+  .terminal-viewport { max-height: 420px; font-size: 11px; }
+  .terminal-row { grid-template-columns: 36px minmax(0, 1fr); gap: 7px; padding: 0 9px; }
+}
