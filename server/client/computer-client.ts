@@ -1,4 +1,5 @@
 import type {
+  CompletionIntegrity,
   DirectCommand,
   DirectFileRead,
   DirectTaskExecution,
@@ -8,8 +9,10 @@ import type {
   Workspace,
 } from "../types.js";
 
+const COMPLETE_WITH_TOOL_ERRORS = "COMPLETE_WITH_TOOL_ERRORS";
 const TERMINAL_TASK_STATUSES = new Set([
   "COMPLETE",
+  COMPLETE_WITH_TOOL_ERRORS,
   "FAILED",
   "CANCELLED",
   "REVIEW_REQUIRED",
@@ -30,6 +33,69 @@ function boundedOutput(output: string): { output: string; output_truncated: bool
     output: `${output.slice(0, MAX_DIRECT_EXECUTION_OUTPUT_CHARACTERS)}\n\n[Output truncated by the MCP adapter.]`,
     output_truncated: true,
   };
+}
+
+function isToolFailureValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (trimmed.toLowerCase() === "error" || /^error\s*:/i.test(trimmed)) return true;
+    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
+      try {
+        return isToolFailureValue(JSON.parse(trimmed));
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(isToolFailureValue);
+  const record = value as Record<string, unknown>;
+  const status = String(record.status ?? "").toLowerCase();
+  const errorValue = record.error;
+  const hasErrorValue =
+    errorValue !== undefined &&
+    errorValue !== null &&
+    errorValue !== false &&
+    (typeof errorValue !== "string" || errorValue.trim().length > 0);
+  return (
+    ["error", "failed", "failure"].includes(status) ||
+    record.ok === false ||
+    record.success === false ||
+    hasErrorValue
+  );
+}
+
+function completionIntegrity(rawOutput: unknown[] | undefined): CompletionIntegrity {
+  const failedCalls = new Set<string>();
+  for (const [index, item] of (rawOutput ?? []).entries()) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const record = item as Record<string, unknown>;
+    const type = String(record.type ?? "");
+    const callId = String(record.call_id ?? record.id ?? `${type}-${index}`);
+    if (type === "function_call") {
+      const status = String(record.status ?? "").toLowerCase();
+      if (["error", "failed", "failure"].includes(status)) failedCalls.add(callId);
+    } else if (type === "function_call_output" && isToolFailureValue(record.output)) {
+      failedCalls.add(callId);
+    }
+  }
+  return {
+    status: failedCalls.size > 0 ? "TOOL_ERRORS" : "CLEAN",
+    tool_error_count: failedCalls.size,
+  };
+}
+
+function normalizeTaskCompletion(task: Task): Task {
+  const integrity = completionIntegrity(task.raw_output);
+  if (task.status !== "COMPLETE" || integrity.tool_error_count === 0) return task;
+  return { ...task, status: COMPLETE_WITH_TOOL_ERRORS, completion_integrity: integrity };
+}
+
+function normalizeTaskOutputCompletion(task: TaskOutput): TaskOutput {
+  const integrity = completionIntegrity(task.raw_output);
+  if (task.status !== "COMPLETE" || integrity.tool_error_count === 0) return task;
+  return { ...task, status: COMPLETE_WITH_TOOL_ERRORS, completion_integrity: integrity };
 }
 
 function publicErrorMessage(value: string): string {
@@ -95,7 +161,7 @@ export class ComputerClient {
     model_id: string;
     idempotency_key?: string;
   }): Promise<Task> {
-    return this.request("/tasks", { method: "POST", body: input });
+    return normalizeTaskCompletion(await this.request<Task>("/tasks", { method: "POST", body: input }));
   }
 
   /**
@@ -132,6 +198,7 @@ export class ComputerClient {
       status: current.status,
       ...output,
       error: current.error,
+      ...(current.completion_integrity ? { completion_integrity: current.completion_integrity } : {}),
       completed: TERMINAL_TASK_STATUSES.has(current.status),
       wait_seconds: waitSeconds,
     };
@@ -349,11 +416,13 @@ export class ComputerClient {
   }
 
   async getTask(taskId: string): Promise<Task> {
-    return this.request(`/tasks/${encodeURIComponent(taskId)}`);
+    return normalizeTaskCompletion(await this.request<Task>(`/tasks/${encodeURIComponent(taskId)}`));
   }
 
   async getTaskOutput(taskId: string): Promise<TaskOutput> {
-    return this.request(`/tasks/${encodeURIComponent(taskId)}/output`);
+    return normalizeTaskOutputCompletion(
+      await this.request<TaskOutput>(`/tasks/${encodeURIComponent(taskId)}/output`),
+    );
   }
 
   async getTaskReview(taskId: string): Promise<Record<string, unknown>> {

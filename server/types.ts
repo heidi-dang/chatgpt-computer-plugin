@@ -6,6 +6,11 @@ export type Workspace = {
   path?: string;
 };
 
+export type CompletionIntegrity = {
+  status: "CLEAN" | "TOOL_ERRORS";
+  tool_error_count: number;
+};
+
 export type Task = {
   id: string;
   workspace_id: string;
@@ -17,6 +22,7 @@ export type Task = {
   output: string;
   raw_output?: unknown[];
   error?: string | null;
+  completion_integrity?: CompletionIntegrity;
   review?: {
     status?: string;
     summary?: Record<string, unknown> | null;
@@ -47,6 +53,7 @@ export type TaskOutput = {
   content: string;
   raw_output?: unknown[];
   review?: Task["review"];
+  completion_integrity?: CompletionIntegrity;
 };
 
 /**
@@ -61,6 +68,7 @@ export type DirectTaskExecution = {
   output: string;
   output_truncated: boolean;
   error?: string | null;
+  completion_integrity?: CompletionIntegrity;
   completed: boolean;
   wait_seconds: number;
 };

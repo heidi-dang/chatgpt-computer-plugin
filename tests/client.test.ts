@@ -170,6 +170,99 @@ test("executes an already-complete CPTR task without exposing raw agent events",
   assert.equal((seen[0].init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
 });
 
+test("fails closed when a completed task contains failed tool evidence", async () => {
+  const taskPayload = {
+    id: "task-1",
+    workspace_id: "ws-1",
+    chat_id: "chat-1",
+    message_id: "message-1",
+    status: "COMPLETE",
+    prompt: "Inspect the fixture",
+    model_id: "model-1",
+    output: "CPTR_TASK_SELF_AUDIT_OK",
+    raw_output: [
+      { type: "function_call", call_id: "call-1", name: "list_directory", status: "completed" },
+      {
+        type: "function_call_output",
+        call_id: "call-1",
+        output: "Error: inspection scope violation: assignment scope has no allowed paths",
+      },
+      { type: "message", content: [{ type: "output_text", text: "CPTR_TASK_SELF_AUDIT_OK" }] },
+    ],
+    error: null,
+  };
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input) => {
+      const url = String(input);
+      if (url.endsWith("/output")) {
+        return new Response(
+          JSON.stringify({
+            task_id: taskPayload.id,
+            status: taskPayload.status,
+            content: taskPayload.output,
+            raw_output: taskPayload.raw_output,
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(JSON.stringify(taskPayload), { status: 200 });
+    },
+  });
+
+  const direct = await client.executeTask({
+    workspace_id: "ws-1",
+    prompt: "Inspect the fixture",
+    model_id: "model-1",
+    wait_seconds: 1,
+  });
+  assert.equal(direct.status, "COMPLETE_WITH_TOOL_ERRORS");
+  assert.equal(direct.completed, true);
+  assert.deepEqual(direct.completion_integrity, { status: "TOOL_ERRORS", tool_error_count: 1 });
+
+  const task = await client.getTask("task-1");
+  assert.equal(task.status, "COMPLETE_WITH_TOOL_ERRORS");
+  assert.deepEqual(task.completion_integrity, { status: "TOOL_ERRORS", tool_error_count: 1 });
+
+  const output = await client.getTaskOutput("task-1");
+  assert.equal(output.status, "COMPLETE_WITH_TOOL_ERRORS");
+  assert.deepEqual(output.completion_integrity, { status: "TOOL_ERRORS", tool_error_count: 1 });
+});
+
+test("does not treat descriptive tool output as a failed call", async () => {
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async () =>
+      new Response(
+        JSON.stringify({
+          id: "task-1",
+          workspace_id: "ws-1",
+          chat_id: "chat-1",
+          message_id: "message-1",
+          status: "COMPLETE",
+          prompt: "Inspect error handling",
+          model_id: "model-1",
+          output: "Inspection complete.",
+          raw_output: [
+            {
+              type: "function_call_output",
+              call_id: "call-1",
+              output: "Error handling is implemented.",
+            },
+          ],
+          error: null,
+        }),
+        { status: 200 },
+      ),
+  });
+
+  const task = await client.getTask("task-1");
+  assert.equal(task.status, "COMPLETE");
+  assert.equal(task.completion_integrity, undefined);
+});
+
 test("bounds direct-execution output before returning it to ChatGPT", async () => {
   const client = new ComputerClient({
     baseUrl: "http://cptr.test",
