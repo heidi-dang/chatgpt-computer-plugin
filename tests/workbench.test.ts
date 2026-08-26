@@ -13,12 +13,7 @@ import {
 const initial: WorkbenchState = {
   status: "CONNECTING",
   lastSequence: 0,
-  activity: [],
-  terminal: [],
   transcript: [],
-  tools: [],
-  changes: [],
-  evidence: [],
 };
 
 test("batch replay is byte-equivalent to ordered single-event reduction", () => {
@@ -69,28 +64,18 @@ test("deduplicates replayed events by monotonic sequence", () => {
 });
 
 
-test("renders immediate ChatGPT MCP activity without changing the backend event cursor", () => {
-  const opened = reduceWorkbenchEvent(initialWorkbenchState(), {
-    event_id: "mcp-open",
-    sequence: 0,
-    timestamp: "2026-08-26T00:00:00Z",
-    type: "mcp.tool",
-    payload: { tool_name: "cptr_open_live_workbench", summary: "Live Workbench is ready", status: "READY" },
-  });
-  const live = reduceWorkbenchEvent(opened, {
-    event_id: "live-1",
+test("advances the replay cursor for non-terminal events without allocating hidden view state", () => {
+  const toolEvent = reduceWorkbenchEvent(initialWorkbenchState(), {
+    event_id: "tool-1",
     sequence: 1,
-    timestamp: "2026-08-26T00:00:01Z",
-    type: "command.started",
-    payload: { command_id: "cmd-1", summary: "Running CPTR task", status: "RUNNING" },
+    timestamp: "2026-08-26T00:00:00Z",
+    type: "tool.output",
+    payload: { status: "completed", output: "ok" },
   });
 
-  assert.equal(opened.lastSequence, 0);
-  assert.equal(opened.status, "CONNECTING");
-  assert.equal(opened.tools.length, 1);
-  assert.equal(opened.transcript.length, 0);
-  assert.equal(live.lastSequence, 1);
-  assert.equal(live.status, "CONNECTING");
+  assert.equal(toolEvent.lastSequence, 1);
+  assert.equal(toolEvent.status, "CONNECTING");
+  assert.equal(toolEvent.transcript.length, 0);
 });
 
 

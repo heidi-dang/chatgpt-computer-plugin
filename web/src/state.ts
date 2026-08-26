@@ -24,15 +24,9 @@ export type TerminalRow = {
 export type WorkbenchState = {
   status: string;
   lastSequence: number;
-  activity: WorkbenchEvent[];
-  terminal: WorkbenchEvent[];
   transcript: TerminalRow[];
-  tools: WorkbenchEvent[];
-  changes: WorkbenchEvent[];
-  evidence: WorkbenchEvent[];
 };
 
-const MAX_EVENTS = 400;
 const MAX_TERMINAL_ROWS = 2_000;
 
 export const TERMINAL_WORKBENCH_STATUSES = new Set([
@@ -130,7 +124,7 @@ export function eventTerminatesWorkbench(event: WorkbenchEvent): boolean {
   return status !== null && isTerminalWorkbenchStatus(status);
 }
 
-function bounded<T>(items: T[], limit = MAX_EVENTS): T[] {
+function bounded<T>(items: T[], limit: number): T[] {
   return items.length > limit ? items.slice(items.length - limit) : items;
 }
 
@@ -179,7 +173,7 @@ function terminalRows(event: WorkbenchEvent): TerminalRow[] {
     }];
   }
   if (event.type.endsWith(".terminal") || event.type === "session.terminal") {
-    const status = stringValue(payload.status, "COMPLETE");
+    const status = stringValue(payload.status, "COMPLETE").toUpperCase();
     return [{
       id: `${event.event_id}:terminal`,
       sequence: event.sequence,
@@ -213,33 +207,20 @@ export function initialWorkbenchState(): WorkbenchState {
   return {
     status: "CONNECTING",
     lastSequence: 0,
-    activity: [],
-    terminal: [],
     transcript: [],
-    tools: [],
-    changes: [],
-    evidence: [],
   };
 }
 
 export function reduceWorkbenchEvent(state: WorkbenchState, event: WorkbenchEvent): WorkbenchState {
-  const pluginActivity = event.type === "mcp.tool";
-  if (!pluginActivity && (!Number.isFinite(event.sequence) || event.sequence <= state.lastSequence)) return state;
+  if (!Number.isFinite(event.sequence) || event.sequence <= state.lastSequence) return state;
   const next: WorkbenchState = {
     ...state,
-    lastSequence: pluginActivity ? state.lastSequence : event.sequence,
-    activity: bounded([...state.activity, event]),
+    lastSequence: event.sequence,
   };
-  const authoritativeStatus = pluginActivity ? null : authoritativeWorkbenchStatus(event);
+  const authoritativeStatus = authoritativeWorkbenchStatus(event);
   if (authoritativeStatus) next.status = authoritativeStatus;
-  if (event.type.startsWith("tool.") || pluginActivity) next.tools = bounded([...state.tools, event]);
-  if (event.type.startsWith("file.") || event.type.startsWith("diff.")) next.changes = bounded([...state.changes, event]);
-  if (event.type.startsWith("evidence.") || event.type.startsWith("verification.")) {
-    next.evidence = bounded([...state.evidence, event]);
-  }
   const rows = terminalRows(event);
   if (rows.length) {
-    next.terminal = bounded([...state.terminal, event]);
     next.transcript = bounded([...state.transcript, ...rows], MAX_TERMINAL_ROWS);
   }
   return next;
