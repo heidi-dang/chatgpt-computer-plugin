@@ -26,6 +26,10 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_code_search_files",
       "cptr_code_write_file",
       "cptr_code_edit_file",
+      "cptr_code_create_directory",
+      "cptr_code_move_file",
+      "cptr_code_delete_file",
+      "cptr_code_get_git_status",
       "cptr_code_run_command",
       "cptr_code_get_command",
       "cptr_code_cancel_command",
@@ -42,6 +46,8 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_approve_autonomous",
       "cptr_get_task",
       "cptr_get_task_output",
+      "cptr_get_task_review",
+      "cptr_decide_task_review",
       "cptr_send_message",
       "cptr_cancel_task",
       "cptr_get_diff",
@@ -53,6 +59,10 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_code_search_files")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_code_write_file")?.annotations?.destructiveHint, true);
   assert.equal(tools.get("cptr_code_edit_file")?.annotations?.destructiveHint, true);
+  assert.equal(tools.get("cptr_code_create_directory")?.annotations?.readOnlyHint, false);
+  assert.equal(tools.get("cptr_code_move_file")?.annotations?.destructiveHint, true);
+  assert.equal(tools.get("cptr_code_delete_file")?.annotations?.destructiveHint, true);
+  assert.equal(tools.get("cptr_code_get_git_status")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_code_run_command")?.annotations?.openWorldHint, true);
   assert.equal(tools.get("cptr_code_run_command")?.inputSchema.properties?.model_id, undefined);
   assert.equal(tools.get("cptr_execute_task")?.annotations?.readOnlyHint, false);
@@ -70,14 +80,19 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_cancel_autonomous")?.annotations?.destructiveHint, true);
   assert.equal(tools.get("cptr_approve_autonomous")?.annotations?.destructiveHint, true);
   assert.equal(tools.get("cptr_approve_autonomous")?.annotations?.openWorldHint, true);
+  assert.equal(tools.get("cptr_decide_task_review")?.annotations?.destructiveHint, true);
+  const openMeta = tools.get("cptr_open_live_workbench")?._meta as { ui?: { resourceUri?: string } } | undefined;
+  const listMeta = tools.get("cptr_list_workspaces")?._meta as { ui?: { resourceUri?: string } } | undefined;
   const startMeta = tools.get("cptr_start_task")?._meta as { ui?: { resourceUri?: string } } | undefined;
   const monitorMeta = tools.get("cptr_monitor_autonomous")?._meta as { ui?: { resourceUri?: string } } | undefined;
   const terminalMeta = tools.get("cptr_render_live_terminal")?._meta as { ui?: { resourceUri?: string } } | undefined;
-  assert.equal(startMeta?.ui?.resourceUri, undefined);
-  assert.equal(monitorMeta?.ui?.resourceUri, undefined);
+  assert.equal(openMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
+  assert.equal(listMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
+  assert.equal(startMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
+  assert.equal(monitorMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
   assert.equal(terminalMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
   assert.equal(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.action, undefined);
-  assert.equal(tools.size, 25);
+  assert.equal(tools.size, 32);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
   }
@@ -96,6 +111,14 @@ test("invokes every direct-coding tool through MCP without a CPTR model input", 
       seen.push({ url, init });
       const payload = url.includes("/coding/list")
         ? { workspace_id: "ws-1", path: ".", entries: "src/app.ts" }
+        : url.includes("/coding/directories")
+          ? { workspace_id: "ws-1", path: "src/generated", type: "directory" }
+          : url.includes("/coding/move")
+            ? { workspace_id: "ws-1", source: "src/app.ts", destination: "src/main.ts" }
+            : url.includes("/coding/delete")
+              ? { workspace_id: "ws-1", path: "src/obsolete.ts", deleted: true }
+              : url.includes("/git/status")
+                ? { is_repo: true, files: [{ path: "src/app.ts", status: "modified" }] }
         : url.includes("/coding/read")
           ? {
               workspace_id: "ws-1",
@@ -144,6 +167,10 @@ test("invokes every direct-coding tool through MCP without a CPTR model input", 
       name: "cptr_code_edit_file",
       arguments: { workspace_id: "ws-1", path: "src/app.ts", target: "{}", replacement: "{ value: 1 }" },
     },
+    { name: "cptr_code_create_directory", arguments: { workspace_id: "ws-1", path: "src/generated" } },
+    { name: "cptr_code_move_file", arguments: { workspace_id: "ws-1", source: "src/app.ts", destination: "src/main.ts" } },
+    { name: "cptr_code_delete_file", arguments: { workspace_id: "ws-1", path: "src/obsolete.ts" } },
+    { name: "cptr_code_get_git_status", arguments: { workspace_id: "ws-1" } },
     { name: "cptr_code_run_command", arguments: { workspace_id: "ws-1", command: "npm test" } },
     { name: "cptr_code_get_command", arguments: { workspace_id: "ws-1", command_id: "command-1" } },
     { name: "cptr_code_cancel_command", arguments: { workspace_id: "ws-1", command_id: "command-1" } },
@@ -155,20 +182,20 @@ test("invokes every direct-coding tool through MCP without a CPTR model input", 
     assert.ok(result.structuredContent, `${tool.name} should return structured content`);
   }
 
-  assert.equal(seen.length, 8);
+  assert.equal(seen.length, 12);
   for (const request of seen) {
     const body = request.init?.body ? JSON.parse(String(request.init.body)) : {};
     assert.equal(body.model_id, undefined);
     assert.equal((request.init?.headers as Record<string, string>).Authorization, "Bearer test-token");
   }
-  assert.equal(seen[6].url.includes("offset=0&wait_seconds=0"), true);
-  assert.equal(seen[7].url.endsWith("/coding/commands/command-1/cancel"), true);
+  assert.equal(seen[10].url.includes("offset=0&wait_seconds=0"), true);
+  assert.equal(seen[11].url.endsWith("/coding/commands/command-1/cancel"), true);
 
   await client.close();
   await server.close();
 });
 
-test("renders a task terminal with hidden target-bound stream metadata", async () => {
+test("opens the workbench immediately and binds it to a task with hidden target-bound stream metadata", async () => {
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "server-only-token",
@@ -179,11 +206,29 @@ test("renders a task terminal with hidden target-bound stream metadata", async (
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
+  const initialResponse = await client.callTool({ name: "cptr_open_live_workbench", arguments: {} });
+  const initialMeta = initialResponse._meta as {
+    ui?: { resourceUri?: string };
+    "cptr/live"?: unknown;
+    "cptr/activity"?: { type?: string };
+  } | undefined;
+  assert.equal(initialMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
+  assert.equal(initialMeta?.["cptr/live"], undefined);
+  assert.equal(initialMeta?.["cptr/activity"]?.type, "mcp.tool");
+
   const taskResponse = await client.callTool({
     name: "cptr_start_task",
     arguments: { workspace_id: "ws-1", prompt: "Run the bounded fixture test", model_id: "model-1" },
   });
-  assert.equal(taskResponse._meta, undefined);
+  const taskMeta = taskResponse._meta as {
+    ui?: { resourceUri?: string };
+    "cptr/live"?: { ticket?: string; streamUrl?: string; snapshotUrl?: string; workspaceId?: string };
+    "cptr/activity"?: { type?: string };
+  } | undefined;
+  assert.equal(taskMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
+  assert.ok(taskMeta?.["cptr/live"]?.ticket);
+  assert.equal(taskMeta?.["cptr/live"]?.workspaceId, "ws-1");
+  assert.equal(taskMeta?.["cptr/activity"]?.type, "mcp.tool");
 
   const response = await client.callTool({
     name: "cptr_render_live_terminal",
@@ -194,11 +239,12 @@ test("renders a task terminal with hidden target-bound stream metadata", async (
   assert.equal(text.includes("server-only-token"), false);
   const meta = response._meta as {
     ui?: { resourceUri?: string };
-    "cptr/live"?: { ticket?: string; streamUrl?: string; snapshotUrl?: string };
+    "cptr/live"?: { ticket?: string; streamUrl?: string; snapshotUrl?: string; workspaceId?: string };
   } | undefined;
   assert.ok(meta?.ui?.resourceUri);
   assert.ok(meta?.["cptr/live"]?.ticket);
   assert.ok(meta?.["cptr/live"]?.snapshotUrl);
+  assert.equal(meta?.["cptr/live"]?.workspaceId, "ws-1");
   assert.equal(String(meta?.["cptr/live"]?.streamUrl).includes(meta?.["cptr/live"]?.ticket ?? ""), false);
   assert.equal(String(meta?.["cptr/live"]?.snapshotUrl).includes(meta?.["cptr/live"]?.ticket ?? ""), false);
 
@@ -233,6 +279,84 @@ test("adds assignment scope to direct MCP tasks before they reach CPTR", async (
   assert.match(String(requestBody?.prompt), /inspection_scope=assignment/);
   assert.match(String(requestBody?.prompt), /Only inspect or mutate files explicitly named/);
   assert.match(String(requestBody?.prompt), /CHATGPT_LIVE_WORKBENCH_OK\.txt/);
+
+  await client.close();
+  await server.close();
+});
+
+
+test("forwards an explicit task review decision to the scoped control endpoint", async () => {
+  let requestUrl = "";
+  let requestBody: Record<string, unknown> | undefined;
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "server-only-token",
+    fetchImpl: async (url, init) => {
+      requestUrl = String(url);
+      requestBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({
+        id: "task-review",
+        status: "COMPLETE",
+        review: { status: "ACCEPTED", decision: { decision: "ACCEPT" } },
+      }), { status: 200 });
+    },
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const response = await client.callTool({
+    name: "cptr_decide_task_review",
+    arguments: { task_id: "task-review", decision: "ACCEPT", note: "Reviewed the diff." },
+  });
+
+  assert.equal(response.isError, undefined);
+  assert.equal(requestUrl.endsWith("/tasks/task-review/review"), true);
+  assert.deepEqual(requestBody, { decision: "ACCEPT", note: "Reviewed the diff." });
+
+  await client.close();
+  await server.close();
+});
+
+
+test("retrieves a task-bound review checkpoint and diff", async () => {
+  let requestUrl = "";
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "server-only-token",
+    fetchImpl: async (url) => {
+      requestUrl = String(url);
+      return new Response(JSON.stringify({
+        task_id: "task-review",
+        workspace_id: "ws-1",
+        status: "REVIEW_REQUIRED",
+        review: { status: "REQUIRED", summary: { file_count: 1 } },
+        diff: { files: [{ path: "src/app.ts", hunks: [] }] },
+        review_available: true,
+      }), { status: 200 });
+    },
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const response = await client.callTool({
+    name: "cptr_get_task_review",
+    arguments: { task_id: "task-review" },
+  });
+
+  assert.equal(response.isError, undefined);
+  assert.equal(requestUrl.endsWith("/tasks/task-review/review"), true);
+  assert.deepEqual(response.structuredContent, {
+    task_id: "task-review",
+    workspace_id: "ws-1",
+    status: "REVIEW_REQUIRED",
+    review: { status: "REQUIRED", summary: { file_count: 1 } },
+    diff: { files: [{ path: "src/app.ts", hunks: [] }] },
+    review_available: true,
+  });
 
   await client.close();
   await server.close();

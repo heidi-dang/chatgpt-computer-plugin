@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx server/index.ts",
+    "dev": "npm run build:web && tsx server/index.ts",
+    "start": "npm run build:web && tsx server/index.ts",
     "build:web": "esbuild web/src/workbench.tsx --bundle --format=esm --platform=browser --target=es2022 --outfile=web/dist/workbench.js",
     "build": "npm run build:web && tsc -p tsconfig.json",
     "test": "tsx --test tests/*.test.ts",

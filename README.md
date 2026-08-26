@@ -40,7 +40,9 @@ This server follows the MCP Apps contract: the official TypeScript MCP SDK, Stre
 
 ## CPTR Live Workbench
 
-`cptr_start_task` and `cptr_monitor_autonomous` attach target-bound, short-lived widget metadata in result `_meta`; the opaque stream ticket is not placed in visible tool content or a URL. The widget calls the plugin's `/live/stream` gateway with the ticket in an `Authorization` header. The gateway forwards the private CPTR bearer server-side to:
+`cptr_open_live_workbench` is the activation tool for a direct ChatGPT invocation such as `@cptr computer`. It opens the Live Workbench immediately, before a CPTR task exists. Workspace discovery also carries the same UI resource so the terminal stays visible while ChatGPT selects a workspace. The widget renders bounded `ChatGPT → CPTR tool` activity from subsequent MCP result metadata; it then automatically rebinds to the target-bound CPTR stream when `cptr_start_task`, `cptr_execute_task`, or `cptr_monitor_autonomous` returns.
+
+`cptr_start_task`, `cptr_execute_task`, and `cptr_monitor_autonomous` attach target-bound, short-lived widget metadata in result `_meta`; the opaque stream ticket is not placed in visible tool content or a URL. The widget calls the plugin's `/live/stream` gateway with the ticket in an `Authorization` header. The gateway forwards the private CPTR bearer server-side to:
 
 ```text
 GET /api/control/v1/tasks/{task_id}/stream
@@ -49,7 +51,7 @@ GET /api/control/v1/autonomous/{monitor_id}/stream
 
 CPTR persists bounded, redacted per-target events with monotonic sequences and sends an initial safe snapshot followed by replayable SSE. The widget reconnects with its last sequence, deduplicates events, and stops on terminal status. Slow streams are disconnected so they can reconnect and replay instead of growing memory without bound. The task and monitor streams intentionally omit prompts, raw output projections, and chain-of-thought from their snapshots; activity events are bounded and redacted before persistence.
 
-The widget provides Activity, Terminal, Tools, Changes, and Evidence views, plus scoped Stop and Steer actions. Stop and Steer call the existing MCP tools and include caller-generated idempotency keys for steering. CPTR remains authoritative for ownership, cancellation quiescence, approval, steering provenance, and terminal state.
+The widget provides Activity, Terminal, Tools, Changes, and Evidence views, plus scoped Stop and Steer actions. Stop and Steer call the existing MCP tools and include caller-generated idempotency keys for steering. Plugin-side MCP activity is presentation-only and never replaces CPTR's server-authoritative event stream, durable task state, or backend sequence cursor. CPTR remains authoritative for ownership, cancellation quiescence, approval, steering provenance, and terminal state.
 
 Build the browser module and server bundle with:
 
@@ -57,7 +59,7 @@ Build the browser module and server bundle with:
 npm run build
 ```
 
-The build emits an ignored `web/dist/` bundle; the Node server inlines the generated JavaScript and CSS into the registered MCP Apps resource. Local rendered QA can use a disposable static preview, but a real ChatGPT Developer Mode acceptance run is still required to verify the host's MCP Apps bridge and live CPTR stream end to end.
+The build emits an ignored `web/dist/` bundle; the Node server inlines the generated JavaScript and CSS into the registered MCP Apps resource. Both `npm run dev` and `npm start` rebuild that ignored browser bundle before the server starts, preventing a deployment from serving the fallback `CPTR Live Workbench bundle is not built` message. Deployments must start the service through one of those scripts rather than invoking `tsx server/index.ts` directly. Local rendered QA can use a disposable static preview, but a real ChatGPT Developer Mode acceptance run is still required to verify the host's MCP Apps bridge and live CPTR stream end to end.
 
 For local inspection, run `npx @modelcontextprotocol/inspector@latest`, select Streamable HTTP, and enter the configured `/mcp` URL. In ChatGPT Developer Mode, expose the endpoint through an HTTPS tunnel or deployment, add the `/mcp` URL as a connector, and refresh the connector after tool/schema changes.
 

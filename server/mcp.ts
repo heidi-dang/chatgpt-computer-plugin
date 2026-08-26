@@ -8,8 +8,11 @@ import {
   codingCommandCancelSchema,
   codingCommandSchema,
   codingCommandStatusSchema,
+  codingDeleteSchema,
+  codingDirectorySchema,
   codingEditSchema,
   codingListSchema,
+  codingMoveSchema,
   codingReadSchema,
   codingSearchSchema,
   codingWriteSchema,
@@ -17,6 +20,7 @@ import {
   messageSchema,
   monitorAutonomousSchema,
   monitorIdSchema,
+  reviewDecisionSchema,
   startTaskSchema,
   steerAutonomousSchema,
   taskIdSchema,
@@ -42,19 +46,49 @@ function assignmentScopedPrompt(prompt: string): string {
   return `${DIRECT_TASK_SCOPE_PREFIX}\n\nAssignment:\n${value}`;
 }
 
+function mcpActivity(toolName: string, summary: string, status = "COMPLETE") {
+  return {
+    event_id: `mcp-${crypto.randomUUID()}`,
+    timestamp: new Date().toISOString(),
+    type: "mcp.tool",
+    payload: { tool_name: toolName, summary, status },
+  };
+}
+
 function workbenchResult<T extends Record<string, unknown>>(
   value: T,
   target: { targetType: "task" | "monitor"; targetId: string },
   tickets: LiveTicketStore,
+  toolName = "cptr_render_live_terminal",
 ) {
   const stream = tickets.issue(target);
+  const workspaceId = typeof value.workspace_id === "string" ? value.workspace_id : undefined;
   return {
     ...result(value),
     _meta: {
-      "cptr/live": stream,
+      "cptr/live": { ...stream, ...(workspaceId ? { workspaceId } : {}) },
+      "cptr/activity": mcpActivity(toolName, `ChatGPT called ${toolName}; live CPTR activity is attached.`),
       ui: { resourceUri: WORKBENCH_RESOURCE_URI },
     },
   };
+}
+
+function activityResult<T extends Record<string, unknown>>(value: T, toolName: string, summary?: string) {
+  return {
+    ...result(value),
+    _meta: {
+      "cptr/activity": mcpActivity(toolName, summary ?? `ChatGPT completed ${toolName}.`),
+      ui: { resourceUri: WORKBENCH_RESOURCE_URI },
+    },
+  };
+}
+
+function initialWorkbenchResult<T extends Record<string, unknown>>(value: T, toolName: string) {
+  return activityResult(
+    value,
+    toolName,
+    "CPTR Live Workbench is ready; waiting for ChatGPT to select a workspace or start a task.",
+  );
 }
 
 const oauthToolMetadata = {
@@ -99,6 +133,27 @@ export function createMcpServer(
   );
 
   server.registerTool(
+    "cptr_open_live_workbench",
+    {
+      title: "Open the CPTR Live Workbench",
+      description:
+        "Call this first whenever the user explicitly invokes @cptr computer or asks CPTR to work. It immediately opens the CPTR terminal in ChatGPT; later task-start or monitor calls bind the same terminal to the live, redacted CPTR event stream.",
+      inputSchema: {},
+      outputSchema: { status: z.string(), title: z.string(), initial_summary: z.string() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: workbenchToolMetadata,
+    },
+    async () => initialWorkbenchResult(
+      {
+        status: "READY",
+        title: "CPTR computer activity",
+        initial_summary: "Live Workbench is ready. Select a workspace or start a CPTR task to attach the live terminal.",
+      },
+      "cptr_open_live_workbench",
+    ),
+  );
+
+  server.registerTool(
     "cptr_list_workspaces",
     {
       title: "List CPTR workspaces",
@@ -106,9 +161,9 @@ export function createMcpServer(
       inputSchema: {},
       outputSchema: { workspaces: z.array(z.record(z.string(), z.unknown())) },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-      _meta: oauthToolMetadata,
+      _meta: workbenchToolMetadata,
     },
-    async () => result(await client.listWorkspaces()),
+    async () => initialWorkbenchResult(await client.listWorkspaces(), "cptr_list_workspaces"),
   );
 
   server.registerTool(
@@ -121,7 +176,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async ({ workspace_id }) => result(await client.getWorkspace(workspace_id)),
+    async ({ workspace_id }) => activityResult(await client.getWorkspace(workspace_id), "cptr_get_workspace"),
   );
 
   server.registerTool(
@@ -135,7 +190,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async (input) => result(await client.listCodingFiles(input)),
+    async (input) => activityResult(await client.listCodingFiles(input), "cptr_code_list_files"),
   );
 
   server.registerTool(
@@ -157,7 +212,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async (input) => result(await client.readCodingFile(input)),
+    async (input) => activityResult(await client.readCodingFile(input), "cptr_code_read_file"),
   );
 
   server.registerTool(
@@ -171,7 +226,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async (input) => result(await client.searchCodingFiles(input)),
+    async (input) => activityResult(await client.searchCodingFiles(input), "cptr_code_search_files"),
   );
 
   server.registerTool(
@@ -185,7 +240,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async (input) => result(await client.writeCodingFile(input)),
+    async (input) => activityResult(await client.writeCodingFile(input), "cptr_code_write_file"),
   );
 
   server.registerTool(
@@ -204,7 +259,63 @@ export function createMcpServer(
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async (input) => result(await client.editCodingFile(input)),
+    async (input) => activityResult(await client.editCodingFile(input), "cptr_code_edit_file"),
+  );
+
+  server.registerTool(
+    "cptr_code_create_directory",
+    {
+      title: "Create a directory in an authorized CPTR workspace",
+      description:
+        "Use this only when the user explicitly asks ChatGPT to create a source directory in the selected CPTR workspace. Paths remain confined to the workspace.",
+      inputSchema: codingDirectorySchema,
+      outputSchema: { workspace_id: z.string(), path: z.string(), type: z.string() },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.createCodingDirectory(input), "cptr_code_create_directory"),
+  );
+
+  server.registerTool(
+    "cptr_code_move_file",
+    {
+      title: "Move a file in an authorized CPTR workspace",
+      description:
+        "Use this only when the user explicitly asks ChatGPT to rename or move a file. CPTR confines both paths to the selected workspace, refuses directory moves, and refuses overwriting an existing destination.",
+      inputSchema: codingMoveSchema,
+      outputSchema: { workspace_id: z.string(), source: z.string(), destination: z.string() },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.moveCodingFile(input), "cptr_code_move_file"),
+  );
+
+  server.registerTool(
+    "cptr_code_delete_file",
+    {
+      title: "Delete a file in an authorized CPTR workspace",
+      description:
+        "Use this only when the user explicitly asks ChatGPT to delete a file. CPTR confines the path to the selected workspace and refuses directory deletion.",
+      inputSchema: codingDeleteSchema,
+      outputSchema: { workspace_id: z.string(), path: z.string(), deleted: z.boolean() },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.deleteCodingFile(input), "cptr_code_delete_file"),
+  );
+
+  server.registerTool(
+    "cptr_code_get_git_status",
+    {
+      title: "Get Git status for an authorized CPTR workspace",
+      description:
+        "Use this to inspect changed, staged, and untracked files in the selected CPTR workspace before or after direct coding edits.",
+      inputSchema: workspaceIdSchema,
+      outputSchema: { is_repo: z.boolean(), files: z.array(z.record(z.string(), z.unknown())) },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async ({ workspace_id }) => activityResult(await client.getGitStatus(workspace_id), "cptr_code_get_git_status"),
   );
 
   server.registerTool(
@@ -224,7 +335,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
       _meta: oauthToolMetadata,
     },
-    async (input) => result(await client.runCodingCommand(input)),
+    async (input) => activityResult(await client.runCodingCommand(input), "cptr_code_run_command"),
   );
 
   server.registerTool(
@@ -244,7 +355,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async (input) => result(await client.getCodingCommand(input)),
+    async (input) => activityResult(await client.getCodingCommand(input), "cptr_code_get_command"),
   );
 
   server.registerTool(
@@ -264,7 +375,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async (input) => result(await client.cancelCodingCommand(input)),
+    async (input) => activityResult(await client.cancelCodingCommand(input), "cptr_code_cancel_command"),
   );
 
   server.registerTool(
@@ -275,14 +386,19 @@ export function createMcpServer(
       inputSchema: startTaskSchema,
       outputSchema: { id: z.string(), status: z.string(), workspace_id: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-      _meta: oauthToolMetadata,
+      _meta: workbenchToolMetadata,
     },
     async (input) => {
       const task = await client.startTask({
         ...input,
         prompt: assignmentScopedPrompt(input.prompt),
       });
-      return result(task);
+      return workbenchResult(
+        task,
+        { targetType: "task", targetId: task.id },
+        tickets,
+        "cptr_start_task",
+      );
     },
   );
 
@@ -304,9 +420,17 @@ export function createMcpServer(
         wait_seconds: z.number().int(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-      _meta: oauthToolMetadata,
+      _meta: workbenchToolMetadata,
     },
-    async (input) => result(await client.executeTask(input)),
+    async (input) => {
+      const task = await client.executeTask(input);
+      return workbenchResult(
+        task,
+        { targetType: "task", targetId: task.task_id },
+        tickets,
+        "cptr_execute_task",
+      );
+    },
   );
 
   server.registerTool(
@@ -317,9 +441,19 @@ export function createMcpServer(
       inputSchema: monitorAutonomousSchema,
       outputSchema: autonomousSummaryOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-      _meta: oauthToolMetadata,
+      _meta: workbenchToolMetadata,
     },
-    async (input) => result(await client.createAutonomous(input)),
+    async (input) => {
+      const monitor = await client.createAutonomous(input);
+      const monitorId = String(monitor.monitor_id ?? monitor.goal_id ?? "");
+      if (!monitorId) return activityResult(monitor, "cptr_monitor_autonomous");
+      return workbenchResult(
+        monitor,
+        { targetType: "monitor", targetId: monitorId },
+        tickets,
+        "cptr_monitor_autonomous",
+      );
+    },
   );
 
   server.registerTool(
@@ -337,6 +471,8 @@ export function createMcpServer(
         target_type: z.enum(["task", "monitor"]),
         target_id: z.string(),
         status: z.string(),
+        workspace_id: z.string().optional(),
+        review_status: z.string().optional(),
         title: z.string(),
         initial_summary: z.string(),
       },
@@ -351,11 +487,14 @@ export function createMcpServer(
             target_type,
             target_id,
             status: task.status,
+            workspace_id: task.workspace_id,
+            review_status: task.review?.status,
             title: "CPTR task activity",
             initial_summary: `Task ${target_id} is ${task.status}.`,
           },
           { targetType: target_type, targetId: target_id },
           tickets,
+          "cptr_render_live_terminal",
         );
       }
       const monitor = await client.getAutonomous(target_id);
@@ -370,6 +509,7 @@ export function createMcpServer(
         },
         { targetType: target_type, targetId: target_id },
         tickets,
+        "cptr_render_live_terminal",
       );
     },
   );
@@ -384,7 +524,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async ({ monitor_id }) => result(await client.getAutonomous(monitor_id)),
+    async ({ monitor_id }) => activityResult(await client.getAutonomous(monitor_id), "cptr_get_autonomous"),
   );
 
   server.registerTool(
@@ -400,7 +540,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async ({ monitor_id }) => result(await client.getAutonomousEvents(monitor_id)),
+    async ({ monitor_id }) => activityResult(await client.getAutonomousEvents(monitor_id), "cptr_get_autonomous_events"),
   );
 
   server.registerTool(
@@ -416,7 +556,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async ({ monitor_id }) => result(await client.getAutonomousEvidence(monitor_id)),
+    async ({ monitor_id }) => activityResult(await client.getAutonomousEvidence(monitor_id), "cptr_get_autonomous_evidence"),
   );
 
   server.registerTool(
@@ -434,7 +574,7 @@ export function createMcpServer(
       _meta: oauthToolMetadata,
     },
     async ({ monitor_id, content, idempotency_key }) =>
-      result(await client.steerAutonomous(monitor_id, content, idempotency_key)),
+      activityResult(await client.steerAutonomous(monitor_id, content, idempotency_key), "cptr_steer_autonomous"),
   );
 
   server.registerTool(
@@ -447,7 +587,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async ({ monitor_id }) => result(await client.cancelAutonomous(monitor_id)),
+    async ({ monitor_id }) => activityResult(await client.cancelAutonomous(monitor_id), "cptr_cancel_autonomous"),
   );
 
   server.registerTool(
@@ -461,7 +601,7 @@ export function createMcpServer(
       _meta: oauthToolMetadata,
     },
     async ({ monitor_id, approval_id, approved }) =>
-      result(await client.approveAutonomous(monitor_id, approval_id, approved)),
+      activityResult(await client.approveAutonomous(monitor_id, approval_id, approved), "cptr_approve_autonomous"),
   );
 
   server.registerTool(
@@ -474,7 +614,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async ({ task_id }) => result(await client.getTask(task_id)),
+    async ({ task_id }) => activityResult(await client.getTask(task_id), "cptr_get_task"),
   );
 
   server.registerTool(
@@ -487,7 +627,47 @@ export function createMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async ({ task_id }) => result(await client.getTaskOutput(task_id)),
+    async ({ task_id }) => activityResult(await client.getTaskOutput(task_id), "cptr_get_task_output"),
+  );
+
+  server.registerTool(
+    "cptr_get_task_review",
+    {
+      title: "Get a CPTR task review",
+      description:
+        "Use this to retrieve the durable review state and authorized workspace diff for one CPTR task. The diff is task-bound and must be shown before asking the user for a decision.",
+      inputSchema: taskIdSchema,
+      outputSchema: {
+        task_id: z.string(),
+        workspace_id: z.string(),
+        status: z.string(),
+        review: z.record(z.string(), z.unknown()),
+        diff: z.record(z.string(), z.unknown()),
+        review_available: z.boolean(),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async ({ task_id }) => activityResult(await client.getTaskReview(task_id), "cptr_get_task_review"),
+  );
+
+  server.registerTool(
+    "cptr_decide_task_review",
+    {
+      title: "Decide a CPTR task review",
+      description:
+        "Use this only after the user explicitly accepts, rejects, or requests changes to a CPTR task that is awaiting diff review. Acceptance and rejection are durable user decisions; request changes queues a scoped follow-up.",
+      inputSchema: reviewDecisionSchema,
+      outputSchema: {
+        id: z.string(),
+        status: z.string(),
+        review: z.record(z.string(), z.unknown()).optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async ({ task_id, decision, note, idempotency_key }) =>
+      activityResult(await client.decideTaskReview(task_id, { decision, note, idempotency_key }), "cptr_decide_task_review"),
   );
 
   server.registerTool(
@@ -501,7 +681,7 @@ export function createMcpServer(
       _meta: oauthToolMetadata,
     },
     async ({ task_id, content, idempotency_key }) =>
-      result(await client.sendMessage(task_id, content, idempotency_key)),
+      activityResult(await client.sendMessage(task_id, content, idempotency_key), "cptr_send_message"),
   );
 
   server.registerTool(
@@ -514,7 +694,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async ({ task_id }) => result(await client.cancelTask(task_id)),
+    async ({ task_id }) => activityResult(await client.cancelTask(task_id), "cptr_cancel_task"),
   );
 
   server.registerTool(
@@ -527,7 +707,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async ({ workspace_id }) => result(await client.getDiff(workspace_id)),
+    async ({ workspace_id }) => activityResult(await client.getDiff(workspace_id), "cptr_get_diff"),
   );
 
   return server;

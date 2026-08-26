@@ -29,6 +29,31 @@ test("deduplicates replayed events by monotonic sequence", () => {
 });
 
 
+test("renders immediate ChatGPT MCP activity without changing the backend event cursor", () => {
+  const opened = reduceWorkbenchEvent(initialWorkbenchState(), {
+    event_id: "mcp-open",
+    sequence: 0,
+    timestamp: "2026-08-26T00:00:00Z",
+    type: "mcp.tool",
+    payload: { tool_name: "cptr_open_live_workbench", summary: "Live Workbench is ready", status: "READY" },
+  });
+  const live = reduceWorkbenchEvent(opened, {
+    event_id: "live-1",
+    sequence: 1,
+    timestamp: "2026-08-26T00:00:01Z",
+    type: "command.started",
+    payload: { command_id: "cmd-1", summary: "Running CPTR task", status: "RUNNING" },
+  });
+
+  assert.equal(opened.lastSequence, 0);
+  assert.equal(opened.status, "CONNECTING");
+  assert.equal(opened.tools.length, 1);
+  assert.match(opened.transcript[0]?.text ?? "", /ChatGPT → cptr_open_live_workbench/);
+  assert.equal(live.lastSequence, 1);
+  assert.equal(live.status, "RUNNING");
+});
+
+
 test("renders sanitized terminal lifecycle rows and rejects duplicate sequences", () => {
   const started = reduceWorkbenchEvent(initialWorkbenchState(), {
     event_id: "event-1",
@@ -64,4 +89,19 @@ test("renders sanitized terminal lifecycle rows and rejects duplicate sequences"
   assert.equal(completed.transcript[2]?.text, "second");
   assert.equal(completed.transcript[3]?.tone, "success");
   assert.equal(duplicate, completed);
+});
+
+
+test("marks a completed task as awaiting review and adds a review checkpoint row", () => {
+  const reviewed = reduceWorkbenchEvent(initialWorkbenchState(), {
+    event_id: "event-review",
+    sequence: 1,
+    timestamp: "2026-08-26T00:00:04Z",
+    type: "task.review_ready",
+    payload: { status: "REVIEW_REQUIRED", review_status: "REQUIRED" },
+  });
+
+  assert.equal(reviewed.status, "REVIEW_REQUIRED");
+  assert.equal(reviewed.transcript.length, 1);
+  assert.match(reviewed.transcript[0]?.text ?? "", /review the scoped diff/i);
 });

@@ -15,6 +15,13 @@ export type Task = {
   output: string;
   raw_output?: unknown[];
   error?: string | null;
+  review?: {
+    status?: string;
+    summary?: Record<string, unknown> | null;
+    decision?: Record<string, unknown> | null;
+    ready_at?: number | null;
+    reviewed_at?: number | null;
+  } | null;
   created_at?: number;
   updated_at?: number;
 };
@@ -37,6 +44,7 @@ export type TaskOutput = {
   status: string;
   content: string;
   raw_output?: unknown[];
+  review?: Task["review"];
 };
 
 /**

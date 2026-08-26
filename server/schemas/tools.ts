@@ -43,6 +43,13 @@ export const messageSchema = {
   idempotency_key: z.string().min(1).max(200).optional(),
 };
 
+export const reviewDecisionSchema = {
+  task_id: z.string().min(1).max(200),
+  decision: z.enum(["ACCEPT", "REJECT", "REQUEST_CHANGES"]),
+  note: z.string().min(1).max(50_000).optional(),
+  idempotency_key: z.string().min(1).max(200).optional(),
+};
+
 
 export const codingListSchema = {
   workspace_id: z.string().min(1).max(200),
@@ -80,6 +87,22 @@ export const codingEditSchema = {
   replacement: z.string().max(1_000_000),
   start_line: z.number().int().min(0).max(1_000_000).default(0),
   end_line: z.number().int().min(0).max(1_000_000).default(0),
+};
+
+export const codingDirectorySchema = {
+  workspace_id: z.string().min(1).max(200),
+  path: z.string().min(1).max(1_000),
+};
+
+export const codingMoveSchema = {
+  workspace_id: z.string().min(1).max(200),
+  source: z.string().min(1).max(1_000),
+  destination: z.string().min(1).max(1_000),
+};
+
+export const codingDeleteSchema = {
+  workspace_id: z.string().min(1).max(200),
+  path: z.string().min(1).max(1_000),
 };
 
 export const codingCommandSchema = {

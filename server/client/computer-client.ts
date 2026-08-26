@@ -8,7 +8,13 @@ import type {
   Workspace,
 } from "../types.js";
 
-const TERMINAL_TASK_STATUSES = new Set(["COMPLETE", "FAILED", "CANCELLED"]);
+const TERMINAL_TASK_STATUSES = new Set([
+  "COMPLETE",
+  "FAILED",
+  "CANCELLED",
+  "REVIEW_REQUIRED",
+  "REJECTED",
+]);
 const DEFAULT_DIRECT_EXECUTION_WAIT_SECONDS = 30;
 const MAX_DIRECT_EXECUTION_OUTPUT_CHARACTERS = 20_000;
 
@@ -202,6 +208,41 @@ export class ComputerClient {
     });
   }
 
+  async createCodingDirectory(input: {
+    workspace_id: string;
+    path: string;
+  }): Promise<{ workspace_id: string; path: string; type: string }> {
+    return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/directories`, {
+      method: "POST",
+      body: { path: input.path },
+    });
+  }
+
+  async moveCodingFile(input: {
+    workspace_id: string;
+    source: string;
+    destination: string;
+  }): Promise<{ workspace_id: string; source: string; destination: string }> {
+    return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/move`, {
+      method: "POST",
+      body: { source: input.source, destination: input.destination },
+    });
+  }
+
+  async deleteCodingFile(input: {
+    workspace_id: string;
+    path: string;
+  }): Promise<{ workspace_id: string; path: string; deleted: boolean }> {
+    return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/delete`, {
+      method: "POST",
+      body: { path: input.path },
+    });
+  }
+
+  async getGitStatus(workspaceId: string): Promise<Record<string, unknown>> {
+    return this.request(`/workspaces/${encodeURIComponent(workspaceId)}/git/status`);
+  }
+
   async runCodingCommand(input: {
     workspace_id: string;
     command: string;
@@ -299,6 +340,20 @@ export class ComputerClient {
 
   async getTaskOutput(taskId: string): Promise<TaskOutput> {
     return this.request(`/tasks/${encodeURIComponent(taskId)}/output`);
+  }
+
+  async getTaskReview(taskId: string): Promise<Record<string, unknown>> {
+    return this.request(`/tasks/${encodeURIComponent(taskId)}/review`);
+  }
+
+  async decideTaskReview(
+    taskId: string,
+    input: { decision: "ACCEPT" | "REJECT" | "REQUEST_CHANGES"; note?: string; idempotency_key?: string },
+  ): Promise<Task> {
+    return this.request(`/tasks/${encodeURIComponent(taskId)}/review`, {
+      method: "POST",
+      body: input,
+    });
   }
 
   async sendMessage(

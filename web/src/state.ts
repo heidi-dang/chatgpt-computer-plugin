@@ -89,6 +89,24 @@ function terminalRows(event: WorkbenchEvent): TerminalRow[] {
       text: `Session ${status.toLowerCase()}.`,
     }];
   }
+  if (event.type === "task.review_ready") {
+    return [{
+      id: `${event.event_id}:review`,
+      sequence: event.sequence,
+      timestamp: event.timestamp,
+      tone: "success",
+      text: "Agent execution finished; review the scoped diff before accepting changes.",
+    }];
+  }
+  if (event.type === "mcp.tool") {
+    return [{
+      id: `${event.event_id}:mcp`,
+      sequence: event.sequence,
+      timestamp: event.timestamp,
+      tone: "system",
+      text: `ChatGPT → ${stringValue(payload.tool_name, "CPTR tool")}: ${stringValue(payload.summary, "completed")}`,
+    }];
+  }
   if (event.type === "agent.phase") {
     return [{
       id: `${event.event_id}:phase`,
@@ -115,16 +133,17 @@ export function initialWorkbenchState(): WorkbenchState {
 }
 
 export function reduceWorkbenchEvent(state: WorkbenchState, event: WorkbenchEvent): WorkbenchState {
-  if (!Number.isFinite(event.sequence) || event.sequence <= state.lastSequence) return state;
+  const pluginActivity = event.type === "mcp.tool";
+  if (!pluginActivity && (!Number.isFinite(event.sequence) || event.sequence <= state.lastSequence)) return state;
   const payload = event.payload ?? {};
   const status = stringValue(payload.status).toUpperCase();
   const next: WorkbenchState = {
     ...state,
-    lastSequence: event.sequence,
+    lastSequence: pluginActivity ? state.lastSequence : event.sequence,
     activity: bounded([...state.activity, event]),
   };
-  if (status) next.status = status;
-  if (event.type.startsWith("tool.")) next.tools = bounded([...state.tools, event]);
+  if (!pluginActivity && status) next.status = status;
+  if (event.type.startsWith("tool.") || pluginActivity) next.tools = bounded([...state.tools, event]);
   if (event.type.startsWith("file.") || event.type.startsWith("diff.")) next.changes = bounded([...state.changes, event]);
   if (event.type.startsWith("evidence.") || event.type.startsWith("verification.")) {
     next.evidence = bounded([...state.evidence, event]);
