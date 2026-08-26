@@ -42,14 +42,15 @@ function result<T extends Record<string, unknown>>(value: T) {
 }
 
 const DIRECT_TASK_SCOPE_PREFIX =
-  "CPTR control-task safety contract: inspection_scope=assignment. " +
-  "Only inspect or mutate files explicitly named by this assignment or created during this task. " +
-  "Do not list, search, or inspect unrelated historical fixture files. " +
-  "Use only bounded pathless waits or commands against explicitly assigned paths.";
+  "CPTR control-task safety contract: inspection_scope=workspace. " +
+  "Work only inside the selected CPTR workspace. Do not inspect, modify, or verify other workspaces " +
+  "unless the user's assignment explicitly requires cross-workspace work.";
 
-function assignmentScopedPrompt(prompt: string): string {
+function workspaceScopedPrompt(prompt: string): string {
   const value = prompt.trim();
-  if (value.includes("inspection_scope=assignment")) return value;
+  if (value.includes("inspection_scope=assignment") || value.includes("inspection_scope=workspace")) {
+    return value;
+  }
   return `${DIRECT_TASK_SCOPE_PREFIX}\n\nAssignment:\n${value}`;
 }
 
@@ -532,7 +533,7 @@ export function createMcpServer(
     async (input) => {
       const task = await client.startTask({
         ...input,
-        prompt: assignmentScopedPrompt(input.prompt),
+        prompt: workspaceScopedPrompt(input.prompt),
       });
       return workbenchResult(
         task,
@@ -566,7 +567,7 @@ export function createMcpServer(
     async (input) => {
       const task = await client.executeTask({
         ...input,
-        prompt: assignmentScopedPrompt(input.prompt),
+        prompt: workspaceScopedPrompt(input.prompt),
       });
       return workbenchResult(
         task,

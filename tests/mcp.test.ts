@@ -346,7 +346,7 @@ test("opens the workbench immediately and binds it to a task with hidden target-
   await server.close();
 });
 
-test("applies byte-equivalent assignment scope to every MCP task-creation entry point", async () => {
+test("applies byte-equivalent workspace scope to normal MCP task-creation entry points", async () => {
   const requestBodies: Array<Record<string, unknown>> = [];
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
@@ -376,14 +376,47 @@ test("applies byte-equivalent assignment scope to every MCP task-creation entry 
 
   assert.equal(requestBodies.length, 2);
   assert.equal(requestBodies[0]?.prompt, requestBodies[1]?.prompt);
-  assert.match(String(requestBodies[0]?.prompt), /inspection_scope=assignment/);
-  assert.match(String(requestBodies[0]?.prompt), /Only inspect or mutate files explicitly named/);
+  assert.match(String(requestBodies[0]?.prompt), /inspection_scope=workspace/);
+  assert.doesNotMatch(String(requestBodies[0]?.prompt), /inspection_scope=assignment/);
   assert.match(String(requestBodies[0]?.prompt), /CHATGPT_LIVE_WORKBENCH_OK\.txt/);
 
   await client.close();
   await server.close();
 });
 
+
+test("preserves an explicitly requested narrow assignment scope", async () => {
+  const requestBodies: Array<Record<string, unknown>> = [];
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "server-only-token",
+    fetchImpl: async (_url, init) => {
+      requestBodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify({
+        id: "task-narrow",
+        status: "COMPLETE",
+        workspace_id: "ws-1",
+        output: "Scoped fixture complete.",
+      }), { status: 200 });
+    },
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const prompt = "inspection_scope=assignment. Only inspect fixture.txt.";
+  await client.callTool({
+    name: "cptr_start_task",
+    arguments: { workspace_id: "ws-1", prompt, model_id: "heidi-antigravity" },
+  });
+
+  assert.equal(requestBodies.length, 1);
+  assert.equal(requestBodies[0]?.prompt, prompt);
+
+  await client.close();
+  await server.close();
+});
 
 test("forwards an explicit task review decision to the scoped control endpoint", async () => {
   let requestUrl = "";
