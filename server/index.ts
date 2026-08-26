@@ -1,6 +1,4 @@
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
   authenticateMcpRequest,
@@ -11,6 +9,7 @@ import { clientFromEnvironment } from "./client/computer-client.js";
 import { createMcpServer } from "./mcp.js";
 import { LiveGateway } from "./live-gateway.js";
 import { LiveTicketStore } from "./live-tickets.js";
+import { loadWorkbenchAssets } from "./workbench-assets.js";
 
 const host = process.env.HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? "8787");
@@ -47,20 +46,12 @@ const liveTickets = new LiveTicketStore({
   snapshotUrl: `${publicOrigin}/live/snapshot`,
 });
 const liveGateway = new LiveGateway(client, liveTickets);
-const workbenchBundle = (() => {
-  try {
-    return readFileSync(fileURLToPath(new URL("../web/dist/workbench.js", import.meta.url)), "utf8");
-  } catch {
-    return "document.body.textContent = 'CPTR Live Workbench bundle is not built';";
-  }
-})();
-const workbenchStyles = (() => {
-  try {
-    return readFileSync(fileURLToPath(new URL("../web/dist/workbench.css", import.meta.url)), "utf8");
-  } catch {
-    return "";
-  }
-})();
+const workbenchAssets = loadWorkbenchAssets();
+if (!workbenchAssets.ready) {
+  console.error(`CPTR Live Workbench bundle is unavailable; searched: ${workbenchAssets.searchedDirectories.join(", ")}`);
+} else {
+  console.log(`CPTR Live Workbench bundle loaded from ${workbenchAssets.directory}`);
+}
 
 function writeJson(res: import("node:http").ServerResponse, status: number, value: unknown, headers: Record<string, string> = {}) {
   res.writeHead(status, {
@@ -89,7 +80,15 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
   if (url.pathname === "/health") {
-    res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ status: "ok" }));
+    const status = workbenchAssets.ready ? 200 : 503;
+    res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({
+      status: workbenchAssets.ready ? "ok" : "degraded",
+      workbench: {
+        ready: workbenchAssets.ready,
+        asset_directory: workbenchAssets.directory,
+      },
+      release: process.env.GIT_COMMIT_SHA ?? process.env.RAILWAY_GIT_COMMIT_SHA ?? null,
+    }));
     return;
   }
   if (url.pathname === "/.well-known/oauth-protected-resource" && req.method === "GET") {
@@ -145,8 +144,8 @@ const httpServer = createServer(async (req, res) => {
   res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
   const server = createMcpServer(client, {
     tickets: liveTickets,
-    widgetBundle: workbenchBundle,
-    widgetStyles: workbenchStyles,
+    widgetBundle: workbenchAssets.bundle,
+    widgetStyles: workbenchAssets.styles,
     connectDomain: publicOrigin,
   });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
