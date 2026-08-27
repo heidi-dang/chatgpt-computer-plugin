@@ -1,5 +1,12 @@
+import { readFileSync } from "node:fs";
+
 const endpoint = process.env.CPTR_DEPLOYED_MCP_URL?.trim();
 const token = process.env.CPTR_DEPLOYED_MCP_TOKEN?.trim();
+const packageMetadata = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const expectedContractVersion = packageMetadata.version;
+if (typeof expectedContractVersion !== "string" || !expectedContractVersion.trim()) {
+  throw new Error("package.json is missing the canonical CPTR Computer version");
+}
 
 const expectedTools = [
   "cptr_approve_autonomous",
@@ -31,6 +38,7 @@ const expectedTools = [
   "cptr_list_workspaces",
   "cptr_monitor_autonomous",
   "cptr_open_live_workbench",
+  "cptr_plugin_update",
   "cptr_render_live_terminal",
   "cptr_send_message",
   "cptr_ssh_cancel_command",
@@ -41,7 +49,6 @@ const expectedTools = [
   "cptr_steer_autonomous",
 ];
 const expectedResource = "ui://cptr/live-workbench.html";
-const expectedContractVersion = "0.7.0";
 
 if (!endpoint || !token) {
   throw new Error("Set CPTR_DEPLOYED_MCP_URL and CPTR_DEPLOYED_MCP_TOKEN before running the deployed contract check.");
@@ -78,6 +85,9 @@ const healthUrl = new URL("/health", endpoint);
 const healthResponse = await fetch(healthUrl);
 if (!healthResponse.ok) throw new Error(`health check failed with HTTP ${healthResponse.status}`);
 const health = await healthResponse.json();
+if (health?.app_version !== expectedContractVersion) {
+  throw new Error(`app version drift: expected ${expectedContractVersion}, got ${health?.app_version ?? "missing"}`);
+}
 if (health?.workbench?.ready !== true) throw new Error("deployed workbench is not ready");
 if (health?.workbench?.hot_reload !== true) throw new Error("deployed workbench hot reload is not enabled");
 if (typeof health?.workbench?.build_id !== "string" || health.workbench.build_id.length < 12) {
@@ -93,7 +103,7 @@ if (health?.mcp_contract?.tool_count !== expectedTools.length) {
 await rpc("initialize", {
   protocolVersion: "2026-01-26",
   capabilities: {},
-  clientInfo: { name: "cptr-deployed-contract-check", version: "0.7.0" },
+  clientInfo: { name: "cptr-deployed-contract-check", version: expectedContractVersion },
 });
 const tools = await rpc("tools/list", {});
 exactSet((tools.tools ?? []).map((tool) => tool.name), expectedTools, "tool contract");

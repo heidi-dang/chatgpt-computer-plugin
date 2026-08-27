@@ -1,11 +1,16 @@
 import { context } from "esbuild";
 import { spawn } from "node:child_process";
-import { watch } from "node:fs";
+import { readFileSync, watch } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const serverDirectory = resolve(root, "server");
+const packageMetadata = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+const appVersion = typeof packageMetadata.version === "string" ? packageMetadata.version.trim() : "";
+if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(appVersion)) {
+  throw new Error(`package.json contains an invalid CPTR Computer version: ${appVersion || "missing"}`);
+}
 let child = null;
 let restartTimer = null;
 let buildCounter = 0;
@@ -67,7 +72,10 @@ const workbench = await context({
   target: "es2022",
   sourcemap: "inline",
   minify: false,
-  define: { "process.env.NODE_ENV": '"development"' },
+  define: {
+    "process.env.NODE_ENV": '"development"',
+    __CPTR_APP_VERSION__: JSON.stringify(appVersion),
+  },
   outfile: resolve(root, "web/dist/workbench.js"),
 });
 

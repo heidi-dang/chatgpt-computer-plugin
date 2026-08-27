@@ -163,6 +163,12 @@ export const sshCommandCancelSchema = {
   command_id: z.string().min(1).max(200),
 };
 
+export const pluginUpdateSchema = {
+  action: z.enum(["status", "release_notes", "verify_server"]),
+  expected_contract_version: z.string().min(1).max(64).optional(),
+  expected_tool_count: z.number().int().min(1).max(500).optional(),
+};
+
 export const chromeBrowserSchema = {
   workspace_id: z.string().min(1).max(200),
   action: z.enum([

@@ -3,12 +3,16 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const source = readFileSync(new URL("../scripts/check-deployed-contract.mjs", import.meta.url), "utf8");
+const packageMetadata = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: string };
 
-test("deployed contract verifier tracks the current 37-tool browser contract", () => {
+test("deployed contract verifier tracks the current 38-tool update-center contract", () => {
   const toolsBlock = source.match(/const expectedTools = \[(.*?)\];/s)?.[1] ?? "";
   const tools = [...toolsBlock.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
 
-  assert.equal(tools.length, 37);
+  assert.equal(tools.length, 38);
   assert.equal(tools.includes("cptr_chrome_browser"), true);
-  assert.match(source, /const expectedContractVersion = "0\.7\.0";/);
+  assert.equal(tools.includes("cptr_plugin_update"), true);
+  assert.match(packageMetadata.version ?? "", /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
+  assert.match(source, /const expectedContractVersion = packageMetadata\.version;/);
+  assert.match(source, /health\?\.app_version !== expectedContractVersion/);
 });

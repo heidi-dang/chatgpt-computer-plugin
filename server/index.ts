@@ -10,6 +10,8 @@ import {
 } from "./auth.js";
 import { clientFromEnvironment } from "./client/computer-client.js";
 import { MCP_CONTRACT_TOOL_COUNT, MCP_CONTRACT_VERSION, createMcpServer } from "./mcp.js";
+import { currentPluginUpdateManifest } from "./release.js";
+import { CPTR_APP_VERSION } from "./version.js";
 import { LiveGateway } from "./live-gateway.js";
 import { LiveTicketStore } from "./live-tickets.js";
 import { PromptTerminalGateway, PromptTerminalStore } from "./prompt-terminal.js";
@@ -186,6 +188,16 @@ async function handleStatefulInitialize(
         authIdentity: identity,
         lastSeenAt: Date.now(),
       });
+      if (process.env.CPTR_NOTIFY_TOOL_LIST_CHANGED !== "0") {
+        const timer = setTimeout(() => {
+          try {
+            server.sendToolListChanged();
+          } catch {
+            // ChatGPT currently keeps approved action snapshots host-controlled; notification is best-effort.
+          }
+        }, 250);
+        timer.unref?.();
+      }
     },
   });
   transport.onclose = () => {
@@ -323,12 +335,18 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === "/plugin/update" && req.method === "GET") {
+    writeJson(res, 200, currentPluginUpdateManifest());
+    return;
+  }
+
   if (url.pathname === "/health") {
     const assets = currentWorkbenchAssets();
     const reload = resolveWorkbenchHotReload(assets);
     const status = assets.ready ? 200 : 503;
     res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({
       status: assets.ready ? "ok" : "degraded",
+      app_version: CPTR_APP_VERSION,
       workbench: {
         ready: assets.ready,
         asset_directory: assets.directory,

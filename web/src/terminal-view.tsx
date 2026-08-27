@@ -7,6 +7,7 @@ export type TerminalViewProps = {
   connection: string;
   targetLabel: string;
   actionStatus?: string;
+  updateCenter?: React.ReactNode;
   canStop: boolean;
   onStop: () => void;
   onCopy: () => void;
@@ -20,6 +21,7 @@ export function TerminalView({
   connection,
   targetLabel,
   actionStatus,
+  updateCenter,
   canStop,
   onStop,
   onCopy,
@@ -55,6 +57,8 @@ export function TerminalView({
         <span>{status}</span>
       </div>
     </header>
+
+    {updateCenter}
 
     <div className="terminal-meta">
       <span>{connection}</span>

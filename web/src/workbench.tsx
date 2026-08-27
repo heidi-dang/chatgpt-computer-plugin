@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   appendMcpToolActivity,
@@ -15,6 +15,8 @@ import {
 } from "./state.js";
 import { requestHostDisplayMode, type DisplayModeBridge } from "./display-mode.js";
 import { TerminalView } from "./terminal-view.js";
+import { PluginUpdateCenter } from "./plugin-update.js";
+import { CPTR_APP_VERSION } from "./version.js";
 import "./workbench.css";
 
 type LiveMetadata = {
@@ -34,6 +36,7 @@ type BridgeMessage = {
   method?: string;
   params?: Record<string, unknown>;
   result?: unknown;
+  error?: { code?: number; message?: string };
 };
 
 type HostBridge = DisplayModeBridge & {
@@ -277,16 +280,23 @@ function useMcpToolActivity(setState: React.Dispatch<React.SetStateAction<Workbe
 }
 
 function useMcpBridge() {
-  const pending = useRef(new Map<string | number, (value: unknown) => void>());
+  const pending = useRef(new Map<string | number, {
+    resolve: (value: unknown) => void;
+    reject: (reason?: unknown) => void;
+  }>());
   useEffect(() => {
     const onMessage = (event: MessageEvent<BridgeMessage>) => {
       if (event.source !== window.parent) return;
       const message = event.data;
       if (!message || message.id === undefined) return;
-      const resolve = pending.current.get(message.id);
-      if (!resolve) return;
+      const request = pending.current.get(message.id);
+      if (!request) return;
       pending.current.delete(message.id);
-      resolve(message.result);
+      if (message.error) {
+        request.reject(new Error(message.error.message ?? `MCP bridge error ${message.error.code ?? "unknown"}`));
+      } else {
+        request.resolve(message.result);
+      }
     };
     window.addEventListener("message", onMessage);
     window.parent.postMessage({
@@ -296,20 +306,24 @@ function useMcpBridge() {
       params: {
         protocolVersion: "2026-01-26",
         capabilities: {},
-        clientInfo: { name: "cptr-live-terminal", version: "0.5.0" },
+        clientInfo: { name: "cptr-live-terminal", version: CPTR_APP_VERSION },
       },
     }, "*");
-    return () => window.removeEventListener("message", onMessage);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      for (const request of pending.current.values()) request.reject(new Error("MCP bridge closed"));
+      pending.current.clear();
+    };
   }, []);
 
-  return (name: string, args: Record<string, unknown>) => {
+  return useCallback((name: string, args: Record<string, unknown>) => {
     if (hostBridge()?.callTool) return hostBridge()!.callTool!(name, args);
     const id = `call-${crypto.randomUUID()}`;
-    return new Promise((resolve) => {
-      pending.current.set(id, resolve);
+    return new Promise((resolve, reject) => {
+      pending.current.set(id, { resolve, reject });
       window.parent.postMessage({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } }, "*");
     });
-  };
+  }, []);
 }
 
 function useLiveSession(
@@ -614,6 +628,7 @@ function OwnedWorkbench() {
   return <main className="terminal-workbench" aria-label="CPTR live terminal">
     <TerminalView
       rows={state.transcript}
+      updateCenter={<PluginUpdateCenter callTool={callTool} onStatus={setActionStatus} />}
       status={displayStatus}
       connection={connection}
       targetLabel={targetLabel(meta)}

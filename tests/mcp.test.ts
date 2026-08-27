@@ -5,6 +5,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ComputerClient } from "../server/client/computer-client.js";
 import { MCP_CONTRACT_TOOL_COUNT, MCP_CONTRACT_VERSION, createMcpServer } from "../server/mcp.js";
 import { PromptTerminalStore } from "../server/prompt-terminal.js";
+import { CPTR_APP_VERSION } from "../server/version.js";
 
 test("advertises dedicated autonomous tools with accurate annotations", async () => {
   const computer = new ComputerClient({
@@ -17,6 +18,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
 
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  assert.equal(client.getServerVersion()?.version, CPTR_APP_VERSION);
   const listed = await client.listTools();
   const tools = new Map(listed.tools.map((tool) => [tool.name, tool]));
 
@@ -40,6 +42,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_ssh_get_command",
       "cptr_ssh_cancel_command",
       "cptr_chrome_browser",
+      "cptr_plugin_update",
       "cptr_list_workspaces",
       "cptr_get_workspace",
       "cptr_start_task",
@@ -109,12 +112,46 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   const bindMeta = tools.get("cptr_render_live_terminal")?._meta as { ui?: { resourceUri?: string } } | undefined;
   assert.equal(bindMeta?.ui, undefined);
   assert.equal(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.action, undefined);
-  assert.equal(MCP_CONTRACT_VERSION, "0.7.0");
-  assert.equal(MCP_CONTRACT_TOOL_COUNT, 37);
+  assert.equal(tools.get("cptr_plugin_update")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_plugin_update")?.annotations?.openWorldHint, false);
+  assert.match(CPTR_APP_VERSION, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
+  assert.equal(MCP_CONTRACT_VERSION, CPTR_APP_VERSION);
+  assert.equal(MCP_CONTRACT_TOOL_COUNT, 38);
   assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
   }
+
+  await client.close();
+  await server.close();
+});
+
+test("reports plugin release status through the stable update action", async () => {
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async () => new Response(JSON.stringify({}), { status: 200 }),
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const response = await client.callTool({
+    name: "cptr_plugin_update",
+    arguments: {
+      action: "verify_server",
+      expected_contract_version: CPTR_APP_VERSION,
+      expected_tool_count: 38,
+    },
+  });
+  const value = response.structuredContent as Record<string, unknown> | undefined;
+  assert.equal(response.isError, undefined);
+  assert.equal(value?.version, CPTR_APP_VERSION);
+  assert.equal(value?.tool_count, 38);
+  assert.equal(value?.contract_matches, true);
+  assert.equal(value?.tool_count_matches, true);
+  assert.deepEqual((value?.verification as { tool?: string } | undefined)?.tool, "cptr_plugin_update");
 
   await client.close();
   await server.close();

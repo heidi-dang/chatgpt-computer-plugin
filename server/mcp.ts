@@ -4,8 +4,12 @@ import { LiveTicketStore, type LiveTarget } from "./live-tickets.js";
 import { PromptTerminalStore } from "./prompt-terminal.js";
 import { WORKBENCH_RESOURCE_URI, createWorkbenchResource } from "./ui/workbench-resource.js";
 import { z } from "zod";
-export const MCP_CONTRACT_VERSION = "0.7.0";
-export const MCP_CONTRACT_TOOL_COUNT = 37;
+import {
+  MCP_CONTRACT_TOOL_COUNT,
+  MCP_CONTRACT_VERSION,
+  currentPluginUpdateManifest,
+} from "./release.js";
+export { MCP_CONTRACT_TOOL_COUNT, MCP_CONTRACT_VERSION } from "./release.js";
 
 import {
   approveAutonomousSchema,
@@ -25,6 +29,7 @@ import {
   messageSchema,
   monitorAutonomousSchema,
   monitorIdSchema,
+  pluginUpdateSchema,
   reviewDecisionSchema,
   startTaskSchema,
   steerAutonomousSchema,
@@ -224,6 +229,59 @@ export function createMcpServer(
           "cptr/activity": activity,
         },
       };
+    },
+  );
+
+  server.registerTool(
+    "cptr_plugin_update",
+    {
+      title: "Check CPTR plugin update",
+      description:
+        "Check the currently deployed CPTR Computer plugin release, read release notes, or verify the live MCP contract after the user refreshes the app in ChatGPT. This action cannot bypass ChatGPT's native app-action review or force the host to refresh its frozen tool snapshot.",
+      inputSchema: pluginUpdateSchema,
+      outputSchema: {
+        action: z.string(),
+        product: z.string(),
+        version: z.string(),
+        schema_revision: z.string(),
+        contract_version: z.string(),
+        tool_count: z.number().int(),
+        release_sha: z.string().nullable(),
+        released_at: z.string(),
+        summary: z.string(),
+        changes: z.array(z.string()),
+        refresh_required: z.boolean(),
+        refresh_reason: z.string(),
+        refresh_path: z.array(z.string()),
+        verification: z.object({
+          tool: z.string(),
+          arguments: z.record(z.string(), z.unknown()),
+        }),
+        contract_matches: z.boolean().optional(),
+        tool_count_matches: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) => {
+      const manifest = currentPluginUpdateManifest();
+      const verification = input.action === "verify_server"
+        ? {
+            contract_matches:
+              input.expected_contract_version === undefined ||
+              input.expected_contract_version === manifest.contract_version,
+            tool_count_matches:
+              input.expected_tool_count === undefined ||
+              input.expected_tool_count === manifest.tool_count,
+          }
+        : {};
+      return activityResult(
+        { action: input.action, ...manifest, ...verification },
+        "cptr_plugin_update",
+        input.action === "release_notes"
+          ? `ChatGPT read CPTR Computer ${manifest.version} release notes.`
+          : `ChatGPT checked CPTR Computer ${manifest.version} update status.`,
+      );
     },
   );
 
