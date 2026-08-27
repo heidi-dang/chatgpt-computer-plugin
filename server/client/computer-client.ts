@@ -128,6 +128,40 @@ export class ComputerApiError extends Error {
 
 export type FetchLike = typeof fetch;
 
+export type WorkbenchSession = {
+  session_id: string;
+  name: string;
+  workspace_id: string | null;
+  status: string;
+  active_target_type: "task" | "monitor" | "command" | null;
+  active_target_id: string | null;
+  active_workspace_id: string | null;
+  event_count: number;
+  created_at: number;
+  updated_at: number;
+  last_event_at: number | null;
+  archived_at: number | null;
+  deleted_at?: number | null;
+};
+
+export type WorkbenchSessionEvent = {
+  session_id: string;
+  sequence: number;
+  source: string;
+  actor: string;
+  event_type: string;
+  state: string | null;
+  target_type: "task" | "monitor" | "command" | null;
+  target_id: string | null;
+  workspace_id: string | null;
+  tool_name: string | null;
+  summary: string;
+  details: Record<string, unknown>;
+  metrics: Record<string, unknown>;
+  policy: Record<string, unknown>;
+  created_at: number;
+};
+
 export class ComputerClient {
   private readonly baseUrl: string;
   private readonly token: string;
@@ -159,7 +193,7 @@ export class ComputerClient {
   async startTask(input: {
     workspace_id: string;
     prompt: string;
-    model_id: string;
+    model_id?: string;
     idempotency_key?: string;
     execution_policy?: {
       allow_file_writes: boolean;
@@ -179,7 +213,8 @@ export class ComputerClient {
   async executeTask(input: {
     workspace_id: string;
     prompt: string;
-    model_id: string;
+    model_id?: string;
+    delegate_to_cptr_model?: boolean;
     wait_seconds?: number;
     idempotency_key?: string;
     execution_policy?: {
@@ -193,7 +228,7 @@ export class ComputerClient {
     const task = await this.startTask({
       workspace_id: input.workspace_id,
       prompt: input.prompt,
-      model_id: input.model_id,
+      ...(input.model_id ? { model_id: input.model_id } : {}),
       idempotency_key: input.idempotency_key,
       execution_policy: input.execution_policy,
     });
@@ -338,6 +373,114 @@ export class ComputerClient {
     return this.request(`/workspaces/${encodeURIComponent(workspaceId)}/git/status`);
   }
 
+  async createWorkbenchSession(input: { name?: string; workspace_id?: string } = {}): Promise<WorkbenchSession> {
+    return this.request("/workbench-sessions", { method: "POST", body: input });
+  }
+
+  async listWorkbenchSessions(input: { include_archived?: boolean; limit?: number } = {}): Promise<{ sessions: WorkbenchSession[] }> {
+    const query = new URLSearchParams();
+    if (input.include_archived) query.set("include_archived", "true");
+    if (input.limit !== undefined) query.set("limit", String(input.limit));
+    const suffix = query.size ? `?${query}` : "";
+    return this.request(`/workbench-sessions${suffix}`);
+  }
+
+  async getWorkbenchSession(sessionId: string): Promise<WorkbenchSession> {
+    return this.request(`/workbench-sessions/${encodeURIComponent(sessionId)}`);
+  }
+
+  async getWorkbenchSessionEvents(input: { session_id: string; after_sequence?: number; limit?: number }): Promise<{
+    session_id: string;
+    events: WorkbenchSessionEvent[];
+    last_sequence: number;
+  }> {
+    const query = new URLSearchParams({
+      after_sequence: String(input.after_sequence ?? 0),
+      limit: String(input.limit ?? 100),
+    });
+    return this.request(`/workbench-sessions/${encodeURIComponent(input.session_id)}/events?${query}`);
+  }
+
+  async bindWorkbenchSession(input: {
+    session_id: string;
+    target_type: "task" | "monitor" | "command";
+    target_id: string;
+    workspace_id?: string;
+  }): Promise<WorkbenchSession> {
+    const { session_id, ...body } = input;
+    return this.request(`/workbench-sessions/${encodeURIComponent(session_id)}/bind`, { method: "POST", body });
+  }
+
+  async renameWorkbenchSession(input: { session_id: string; name: string }): Promise<WorkbenchSession> {
+    const { session_id, ...body } = input;
+    return this.request(`/workbench-sessions/${encodeURIComponent(session_id)}`, { method: "PATCH", body });
+  }
+
+  async archiveWorkbenchSession(sessionId: string): Promise<WorkbenchSession> {
+    return this.request(`/workbench-sessions/${encodeURIComponent(sessionId)}/archive`, { method: "POST" });
+  }
+
+  async requestWorkbenchSessionDelete(sessionId: string): Promise<{
+    session_id: string;
+    confirmation_id: string;
+    expires_at: number;
+    event_count: number;
+    impact: string;
+  }> {
+    return this.request(`/workbench-sessions/${encodeURIComponent(sessionId)}/delete-request`, { method: "POST" });
+  }
+
+  async confirmWorkbenchSessionDelete(confirmationId: string): Promise<{
+    session_id: string;
+    status: string;
+    deleted_at: number;
+  }> {
+    return this.request("/workbench-sessions/delete-confirm", { method: "POST", body: { confirmation_id: confirmationId } });
+  }
+
+  async appendWorkbenchSessionEvent(input: {
+    session_id: string;
+    event_type: string;
+    summary: string;
+    state?: string;
+    target_type?: "task" | "monitor" | "command";
+    target_id?: string;
+    workspace_id?: string;
+    tool_name?: string;
+  }): Promise<WorkbenchSessionEvent> {
+    const { session_id, ...body } = input;
+    return this.request(`/workbench-sessions/${encodeURIComponent(session_id)}/events`, { method: "POST", body });
+  }
+
+  async inspectWorkspace(input: {
+    workspace_id: string;
+    kind: "project" | "tree" | "metadata" | "read_many" | "symbols" | "tests" | "dependencies" | "scripts" | "release";
+    path?: string;
+    paths?: string[];
+    query?: string;
+    depth?: number;
+  }): Promise<Record<string, unknown>> {
+    const { workspace_id, ...body } = input;
+    return this.request(`/workspaces/${encodeURIComponent(workspace_id)}/coding/inspect`, {
+      method: "POST",
+      body: { path: ".", ...body },
+    });
+  }
+
+  async runWorkspaceTestTarget(input: {
+    workspace_id: string;
+    target: "python_pytest" | "node_test" | "node_vitest" | "node_build";
+    path?: string;
+    test_path?: string;
+    wait_seconds?: number;
+  }): Promise<DirectCommand & { target: string }> {
+    const { workspace_id, ...body } = input;
+    return this.request(`/workspaces/${encodeURIComponent(workspace_id)}/coding/test-targets`, {
+      method: "POST",
+      body: { path: ".", wait_seconds: 0, ...body },
+    });
+  }
+
   async runCodingCommand(input: {
     workspace_id: string;
     command: string;
@@ -451,7 +594,7 @@ export class ComputerClient {
     workspace_id: string;
     goal: string;
     acceptance_criteria: string[];
-    model_id: string;
+    model_id?: string;
     idempotency_key?: string;
     execution_policy?: {
       allow_file_writes: boolean;

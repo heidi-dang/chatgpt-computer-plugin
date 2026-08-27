@@ -1,7 +1,7 @@
 import { CPTR_APP_VERSION } from "./version.js";
 
 export const MCP_CONTRACT_VERSION = CPTR_APP_VERSION;
-export const MCP_CONTRACT_TOOL_COUNT = 38;
+export const MCP_CONTRACT_TOOL_COUNT = 56;
 export const CPTR_PLUGIN_VERSION = CPTR_APP_VERSION;
 export const CPTR_PLUGIN_SCHEMA_REVISION = CPTR_APP_VERSION;
 
@@ -33,13 +33,15 @@ export function currentPluginUpdateManifest(env: NodeJS.ProcessEnv = process.env
     tool_count: MCP_CONTRACT_TOOL_COUNT,
     release_sha: env.GIT_COMMIT_SHA ?? env.RAILWAY_GIT_COMMIT_SHA ?? env.CPTR_WORKBENCH_BUILD_ID ?? null,
     released_at: "2026-08-27",
-    summary: "Establishes CPTR Computer's canonical app-version system and Update Center so every release reports one consistent version, changelog, and refresh-verification state.",
+    summary: "Unifies CPTR Computer release metadata while adding durable Workbench Sessions and bounded owner-scoped workspace tooling to the Plugin console.",
     changes: [
       `Sets CPTR Computer ${CPTR_APP_VERSION} as the canonical release line matching the version currently shown by ChatGPT.`,
       "Derives MCP serverInfo, contract version, Update Center, health metadata, deployment checks, and Workbench client metadata from package.json instead of independent version literals.",
       "Adds a stable cptr_plugin_update action and same-origin release manifest for update status, release notes, and server-contract verification.",
       "Shows Update available, release notes, refresh instructions, and post-refresh verification inside the existing single Live Terminal card.",
       "Emits MCP tools/list_changed notifications for connected stateful MCP sessions after initialization while keeping ChatGPT's native Refresh/review step authoritative.",
+      "Adds durable owner-scoped Workbench Session lifecycle and target-binding tools with bounded redacted event replay.",
+      "Adds static workspace inspection plus fixed-profile local test execution without granting unrestricted host or shell access.",
     ],
     refresh_required: true,
     refresh_reason: "This release changes the MCP action schema. ChatGPT must refresh its frozen action snapshot before the new action can be used natively.",

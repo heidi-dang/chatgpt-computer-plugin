@@ -25,6 +25,24 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.deepEqual(
     [
       "cptr_open_live_workbench",
+      "cptr_list_workbench_sessions",
+      "cptr_get_workbench_session",
+      "cptr_get_workbench_session_events",
+      "cptr_bind_live_workbench_session",
+      "cptr_rename_workbench_session",
+      "cptr_archive_workbench_session",
+      "cptr_request_delete_workbench_session",
+      "cptr_confirm_delete_workbench_session",
+      "cptr_workspace_detect_project",
+      "cptr_workspace_tree",
+      "cptr_workspace_file_metadata",
+      "cptr_workspace_read_many",
+      "cptr_workspace_search_symbols",
+      "cptr_workspace_discover_tests",
+      "cptr_workspace_dependency_summary",
+      "cptr_workspace_package_scripts",
+      "cptr_workspace_release_readiness",
+      "cptr_workspace_run_test_target",
       "cptr_code_list_files",
       "cptr_code_read_file",
       "cptr_code_search_files",
@@ -76,6 +94,11 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_code_get_git_status")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_code_run_command")?.annotations?.openWorldHint, true);
   assert.equal(tools.get("cptr_code_run_command")?.inputSchema.properties?.model_id, undefined);
+  assert.equal(tools.get("cptr_workspace_detect_project")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_workspace_read_many")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_workspace_run_test_target")?.annotations?.openWorldHint, false);
+  assert.equal(tools.get("cptr_workspace_run_test_target")?.inputSchema.properties?.command, undefined);
+  assert.notEqual(tools.get("cptr_workspace_run_test_target")?.inputSchema.properties?.target, undefined);
   assert.equal(tools.get("cptr_ssh_list_hosts")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_ssh_run_command")?.annotations?.openWorldHint, true);
   assert.equal(tools.get("cptr_ssh_get_command")?.annotations?.readOnlyHint, true);
@@ -116,7 +139,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_plugin_update")?.annotations?.openWorldHint, false);
   assert.match(CPTR_APP_VERSION, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
   assert.equal(MCP_CONTRACT_VERSION, CPTR_APP_VERSION);
-  assert.equal(MCP_CONTRACT_TOOL_COUNT, 38);
+  assert.equal(MCP_CONTRACT_TOOL_COUNT, 56);
   assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
@@ -142,13 +165,13 @@ test("reports plugin release status through the stable update action", async () 
     arguments: {
       action: "verify_server",
       expected_contract_version: CPTR_APP_VERSION,
-      expected_tool_count: 38,
+      expected_tool_count: 56,
     },
   });
   const value = response.structuredContent as Record<string, unknown> | undefined;
   assert.equal(response.isError, undefined);
   assert.equal(value?.version, CPTR_APP_VERSION);
-  assert.equal(value?.tool_count, 38);
+  assert.equal(value?.tool_count, 56);
   assert.equal(value?.contract_matches, true);
   assert.equal(value?.tool_count_matches, true);
   assert.deepEqual((value?.verification as { tool?: string } | undefined)?.tool, "cptr_plugin_update");
@@ -384,7 +407,25 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "server-only-token",
-    fetchImpl: async () => new Response(JSON.stringify({ id: "task-1", status: "RUNNING", workspace_id: "ws-1" }), { status: 200 }),
+    fetchImpl: async (url) => {
+      const payload = String(url).endsWith("/workbench-sessions")
+        ? {
+            session_id: "wbs_session_00000001",
+            name: "CPTR plugin session",
+            status: "OPEN",
+            workspace_id: null,
+            active_target_type: null,
+            active_target_id: null,
+            active_workspace_id: null,
+            event_count: 0,
+            created_at: 1,
+            updated_at: 1,
+            last_event_at: null,
+            archived_at: null,
+          }
+        : { id: "task-1", status: "RUNNING", workspace_id: "ws-1" };
+      return new Response(JSON.stringify(payload), { status: 200 });
+    },
   });
   const promptSessions = new PromptTerminalStore();
   const server = createMcpServer(computer, {
@@ -412,8 +453,8 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
     name: "cptr_start_task",
     arguments: {
       workspace_id: "ws-1",
-      prompt: "Run the bounded fixture test using Bearer top-secret-value",
-      model_id: "model-1",
+      prompt: "Run the bounded fixture test allow:delegation using Bearer top-secret-value",
+      model_id: "provider/model-1",
     },
   });
   const taskMeta = taskResponse._meta as {
@@ -432,7 +473,7 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
   assert.equal(completedEvent?.type, "mcp.tool");
   if (startedEvent?.type === "mcp.tool") {
     assert.match(startedEvent.payload.arguments_json ?? "", /\"workspace_id\": \"ws-1\"/);
-    assert.match(startedEvent.payload.arguments_json ?? "", /\"model_id\": \"model-1\"/);
+    assert.match(startedEvent.payload.arguments_json ?? "", /\"model_id\": \"provider\/model-1\"/);
     assert.match(startedEvent.payload.arguments_json ?? "", /Bearer \[REDACTED\]/);
     assert.equal((startedEvent.payload.arguments_json ?? "").includes("top-secret-value"), false);
   }
@@ -495,8 +536,8 @@ test("applies byte-equivalent workspace scope to normal MCP task-creation entry 
 
   const input = {
     workspace_id: "ws-1",
-    prompt: "Create CHATGPT_LIVE_WORKBENCH_OK.txt with the requested marker, then wait for steering.",
-    model_id: "heidi-antigravity",
+    prompt: "Create CHATGPT_LIVE_WORKBENCH_OK.txt with the requested marker, then wait for steering. allow:delegation",
+    model_id: "provider/heidi-antigravity",
   };
   await client.callTool({ name: "cptr_start_task", arguments: input });
   await client.callTool({ name: "cptr_execute_task", arguments: { ...input, wait_seconds: 1 } });
@@ -539,14 +580,42 @@ test("preserves an explicitly requested narrow assignment scope", async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
-  const prompt = "inspection_scope=assignment. Only inspect fixture.txt.";
+  const prompt = "inspection_scope=assignment. Only inspect fixture.txt. allow:delegation";
   await client.callTool({
     name: "cptr_start_task",
-    arguments: { workspace_id: "ws-1", prompt, model_id: "heidi-antigravity" },
+    arguments: { workspace_id: "ws-1", prompt, model_id: "provider/heidi-antigravity" },
   });
 
   assert.equal(requestBodies.length, 1);
   assert.equal(requestBodies[0]?.prompt, prompt);
+
+  await client.close();
+  await server.close();
+});
+
+test("does not delegate ChatGPT work to a CPTR model without explicit opt-in", async () => {
+  let requestCount = 0;
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "server-only-token",
+    fetchImpl: async () => {
+      requestCount += 1;
+      return new Response(JSON.stringify({}), { status: 200 });
+    },
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const response = await client.callTool({
+    name: "cptr_start_task",
+    arguments: { workspace_id: "ws-1", prompt: "Audit this workspace", model_id: "provider/heidi-antigravity" },
+  });
+
+  assert.equal(response.isError, true);
+  assert.match(JSON.stringify(response.content), /allow:delegation/i);
+  assert.equal(requestCount, 0);
 
   await client.close();
   await server.close();

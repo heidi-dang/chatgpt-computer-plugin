@@ -39,6 +39,24 @@ import {
   sshHostsSchema,
   taskIdSchema,
   workspaceIdSchema,
+  openWorkbenchSessionSchema,
+  workbenchSessionIdSchema,
+  workbenchSessionListSchema,
+  workbenchSessionEventsSchema,
+  workbenchSessionBindSchema,
+  workbenchSessionRenameSchema,
+  workbenchSessionDeleteRequestSchema,
+  workbenchSessionDeleteConfirmSchema,
+  workspaceDependencySchema,
+  workspaceMetadataSchema,
+  workspaceProjectSchema,
+  workspaceReadManySchema,
+  workspaceReleaseReadinessSchema,
+  workspaceScriptsSchema,
+  workspaceSymbolSearchSchema,
+  workspaceTestDiscoverySchema,
+  workspaceTestTargetSchema,
+  workspaceTreeSchema,
 } from "./schemas/tools.js";
 
 function result<T extends Record<string, unknown>>(value: T) {
@@ -166,6 +184,61 @@ function activityResult<T extends Record<string, unknown>>(value: T, toolName: s
     },
   };
 }
+
+function requireExplicitCptrModelDelegation(input: {
+  model_id?: string;
+  prompt?: string;
+  goal?: string;
+}): void {
+  const delegationText = input.prompt ?? input.goal ?? "";
+  if (!/(^|[^\w:])allow:delegation([^\w:]|$)/i.test(delegationText)) {
+    throw new Error(
+      "CPTR model delegation is disabled by default. Use CPTR coding tools for normal work; only delegate when the user includes the literal allow:delegation marker in the delegated task or goal.",
+    );
+  }
+  if (!input.model_id) {
+    throw new Error(
+      "CPTR model delegation requires the user to name a fully qualified provider/model or agent:profile/model.",
+    );
+  }
+}
+
+function recordWorkbenchActivity(
+  client: ComputerClient,
+  sessionId: string | undefined,
+  input: {
+    event_type: string;
+    summary: string;
+    state?: string;
+    target_type?: "task" | "monitor" | "command";
+    target_id?: string;
+    workspace_id?: string;
+    tool_name?: string;
+  },
+): void {
+  if (!sessionId) return;
+  void client.appendWorkbenchSessionEvent({ session_id: sessionId, ...input }).catch(() => undefined);
+}
+
+const workspaceInsightOutputSchema = {
+  workspace_id: z.string(),
+  kind: z.string(),
+};
+
+const workbenchSessionOutputSchema = {
+  session_id: z.string(),
+  name: z.string(),
+  workspace_id: z.string().nullable(),
+  status: z.string(),
+  active_target_type: z.enum(["task", "command", "monitor"]).nullable(),
+  active_target_id: z.string().nullable(),
+  active_workspace_id: z.string().nullable(),
+  event_count: z.number().int(),
+  created_at: z.number(),
+  updated_at: z.number(),
+  last_event_at: z.number().nullable(),
+  archived_at: z.number().nullable(),
+};
 
 function initialWorkbenchResult<T extends Record<string, unknown>>(value: T, toolName: string) {
   return activityResult(
@@ -327,18 +400,34 @@ export function createMcpServer(
       title: "Prepare CPTR Live Workbench context",
       description:
         "Call this first whenever the user explicitly invokes CPTR. This is the sole CPTR UI-producing tool: it opens exactly one Live Terminal for the current prompt before any target exists. All later task, monitor, command, status, and render/bind calls are data-only and update this existing terminal instead of creating another widget.",
-      inputSchema: {},
-      outputSchema: { status: z.string(), title: z.string(), initial_summary: z.string() },
+      inputSchema: openWorkbenchSessionSchema,
+      outputSchema: {
+        session_id: z.string(),
+        name: z.string(),
+        status: z.string(),
+        workspace_id: z.string().nullable(),
+        title: z.string(),
+        initial_summary: z.string(),
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: openWorkbenchToolMetadata,
     },
-    async () => {
+    async (input) => {
       const prompt = promptSessions.open();
       activePromptTicket = prompt.ticket;
+      const session = input.resume_session_id
+        ? await client.getWorkbenchSession(input.resume_session_id)
+        : await client.createWorkbenchSession({
+            ...(input.session_name ? { name: input.session_name } : {}),
+            ...(input.workspace_id ? { workspace_id: input.workspace_id } : {}),
+          });
       const value = {
-        status: "READY",
+        session_id: session.session_id,
+        name: session.name,
+        status: session.status,
+        workspace_id: session.workspace_id,
         title: "CPTR computer activity",
-        initial_summary: "CPTR Workbench is attached to this prompt. Later CPTR tool calls update this same terminal without creating another widget.",
+        initial_summary: `Workbench Session ${session.session_id} is ready. Later CPTR calls update this same terminal without creating another widget.`,
       };
       const activity = publishActivity(
         "cptr_open_live_workbench",
@@ -408,6 +497,130 @@ export function createMcpServer(
   );
 
   server.registerTool(
+    "cptr_list_workbench_sessions",
+    {
+      title: "List CPTR Workbench Sessions",
+      description: "List active or archived Workbench Sessions owned by the current CPTR user. Sessions are durable Plugin activity records, not live access tickets.",
+      inputSchema: workbenchSessionListSchema,
+      outputSchema: { sessions: z.array(z.record(z.string(), z.unknown())) },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.listWorkbenchSessions(input), "cptr_list_workbench_sessions"),
+  );
+
+  server.registerTool(
+    "cptr_get_workbench_session",
+    {
+      title: "Get a CPTR Workbench Session",
+      description: "Get one current-user Workbench Session by opaque session ID. It never returns a live stream ticket or another user's session.",
+      inputSchema: workbenchSessionIdSchema,
+      outputSchema: workbenchSessionOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async ({ workbench_session_id }) => activityResult(await client.getWorkbenchSession(workbench_session_id), "cptr_get_workbench_session"),
+  );
+
+  server.registerTool(
+    "cptr_get_workbench_session_events",
+    {
+      title: "Get CPTR Workbench Session activity",
+      description: "Retrieve bounded, redacted, ordered activity for one current-user Workbench Session.",
+      inputSchema: workbenchSessionEventsSchema,
+      outputSchema: { session_id: z.string(), events: z.array(z.record(z.string(), z.unknown())), last_sequence: z.number().int() },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.getWorkbenchSessionEvents({
+      session_id: input.workbench_session_id,
+      after_sequence: input.after_sequence,
+      limit: input.limit,
+    }), "cptr_get_workbench_session_events"),
+  );
+
+  server.registerTool(
+    "cptr_bind_live_workbench_session",
+    {
+      title: "Bind the existing Live Workbench to a session target",
+      description: "Bind an already-open Live Workbench to an owned task, monitor, or workspace-owned command inside a Workbench Session. This is data-only and never opens another widget.",
+      inputSchema: workbenchSessionBindSchema,
+      outputSchema: workbenchSessionOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) => {
+      const session = await client.bindWorkbenchSession({
+        session_id: input.workbench_session_id,
+        target_type: input.target_type,
+        target_id: input.target_id,
+        ...(input.workspace_id ? { workspace_id: input.workspace_id } : {}),
+      });
+      let target: LiveTarget;
+      if (input.target_type === "command") {
+        const workspaceId = input.workspace_id;
+        if (!workspaceId) throw new Error("workspace_id is required when binding a command target");
+        target = { targetType: "command", targetId: input.target_id, workspaceId };
+      } else {
+        target = { targetType: input.target_type, targetId: input.target_id };
+      }
+      return workbenchResult(session, target, "cptr_bind_live_workbench_session");
+    },
+  );
+
+  server.registerTool(
+    "cptr_rename_workbench_session",
+    {
+      title: "Rename a CPTR Workbench Session",
+      description: "Rename an owned Workbench Session only when the user explicitly requests a new name.",
+      inputSchema: workbenchSessionRenameSchema,
+      outputSchema: workbenchSessionOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.renameWorkbenchSession({ session_id: input.workbench_session_id, name: input.name }), "cptr_rename_workbench_session"),
+  );
+
+  server.registerTool(
+    "cptr_archive_workbench_session",
+    {
+      title: "Archive a CPTR Workbench Session",
+      description: "Archive an owned Workbench Session when the user asks to hide it from active sessions. Archiving is reversible and does not affect CPTR tasks, files, or workspaces.",
+      inputSchema: workbenchSessionIdSchema,
+      outputSchema: workbenchSessionOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async ({ workbench_session_id }) => activityResult(await client.archiveWorkbenchSession(workbench_session_id), "cptr_archive_workbench_session"),
+  );
+
+  server.registerTool(
+    "cptr_request_delete_workbench_session",
+    {
+      title: "Request deletion of a CPTR Workbench Session",
+      description: "Begin deletion of an owned Workbench Session only after the user explicitly asks. This returns a short-lived confirmation ID and deletes no data by itself.",
+      inputSchema: workbenchSessionDeleteRequestSchema,
+      outputSchema: { session_id: z.string(), confirmation_id: z.string(), expires_at: z.number(), event_count: z.number(), impact: z.string() },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async ({ workbench_session_id }) => activityResult(await client.requestWorkbenchSessionDelete(workbench_session_id), "cptr_request_delete_workbench_session"),
+  );
+
+  server.registerTool(
+    "cptr_confirm_delete_workbench_session",
+    {
+      title: "Confirm deletion of a CPTR Workbench Session",
+      description: "Delete the session UI record and its redacted Plugin activity only after the user has clearly confirmed the deletion impact. It never deletes tasks, workspaces, files, or control audit records.",
+      inputSchema: workbenchSessionDeleteConfirmSchema,
+      outputSchema: { session_id: z.string(), status: z.string(), deleted_at: z.number() },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async ({ confirmation_id }) => activityResult(await client.confirmWorkbenchSessionDelete(confirmation_id), "cptr_confirm_delete_workbench_session"),
+  );
+
+  server.registerTool(
     "cptr_list_workspaces",
     {
       title: "List CPTR workspaces",
@@ -431,6 +644,169 @@ export function createMcpServer(
       _meta: oauthToolMetadata,
     },
     async ({ workspace_id }) => activityResult(await client.getWorkspace(workspace_id), "cptr_get_workspace"),
+  );
+
+  server.registerTool(
+    "cptr_workspace_detect_project",
+    {
+      title: "Detect an authorized CPTR workspace project",
+      description: "Use this read-only tool to identify common project manifests and local runtimes in one selected CPTR workspace. It never runs code or opens files outside that workspace.",
+      inputSchema: workspaceProjectSchema,
+      outputSchema: workspaceInsightOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "project" }), "cptr_workspace_detect_project"),
+  );
+
+  server.registerTool(
+    "cptr_workspace_tree",
+    {
+      title: "Inspect a bounded CPTR workspace tree",
+      description: "Use this read-only tool to inspect a bounded tree inside the selected workspace. Generated and credential-sensitive directories remain excluded by CPTR.",
+      inputSchema: workspaceTreeSchema,
+      outputSchema: workspaceInsightOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "tree" }), "cptr_workspace_tree"),
+  );
+
+  server.registerTool(
+    "cptr_workspace_file_metadata",
+    {
+      title: "Get safe CPTR workspace file metadata",
+      description: "Use this read-only tool for one workspace-relative path's file type, size, and modification metadata. It does not return file content.",
+      inputSchema: workspaceMetadataSchema,
+      outputSchema: workspaceInsightOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "metadata" }), "cptr_workspace_file_metadata"),
+  );
+
+  server.registerTool(
+    "cptr_workspace_read_many",
+    {
+      title: "Read multiple bounded CPTR workspace files",
+      description: "Use this read-only tool when a small set of known workspace-relative text files must be compared. CPTR bounds file count and content and refuses binary or environment files.",
+      inputSchema: workspaceReadManySchema,
+      outputSchema: workspaceInsightOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "read_many" }), "cptr_workspace_read_many"),
+  );
+
+  server.registerTool(
+    "cptr_workspace_search_symbols",
+    {
+      title: "Search symbols in an authorized CPTR workspace",
+      description: "Use this read-only text search for an identifier, symbol, or literal within the selected workspace. It does not execute the project or fabricate terminal output.",
+      inputSchema: workspaceSymbolSearchSchema,
+      outputSchema: workspaceInsightOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "symbols" }), "cptr_workspace_search_symbols"),
+  );
+
+  server.registerTool(
+    "cptr_workspace_discover_tests",
+    {
+      title: "Discover local tests in an authorized CPTR workspace",
+      description: "Use this read-only inventory to find likely Python and JavaScript test files inside a bounded workspace tree. It does not run them.",
+      inputSchema: workspaceTestDiscoverySchema,
+      outputSchema: workspaceInsightOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "tests" }), "cptr_workspace_discover_tests"),
+  );
+
+  server.registerTool(
+    "cptr_workspace_dependency_summary",
+    {
+      title: "Summarize local workspace dependencies",
+      description: "Use this read-only tool to summarize dependencies declared in selected local project manifests. It does not resolve, install, update, or contact package registries.",
+      inputSchema: workspaceDependencySchema,
+      outputSchema: workspaceInsightOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "dependencies" }), "cptr_workspace_dependency_summary"),
+  );
+
+  server.registerTool(
+    "cptr_workspace_package_scripts",
+    {
+      title: "List local workspace package scripts",
+      description: "Use this read-only tool to inspect declared package.json scripts. It lists local metadata only and does not execute any script.",
+      inputSchema: workspaceScriptsSchema,
+      outputSchema: workspaceInsightOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "scripts" }), "cptr_workspace_package_scripts"),
+  );
+
+  server.registerTool(
+    "cptr_workspace_release_readiness",
+    {
+      title: "Inspect static CPTR workspace release readiness",
+      description: "Use this read-only static inventory to see whether a project manifest and likely tests are present. It is not release approval and does not execute code.",
+      inputSchema: workspaceReleaseReadinessSchema,
+      outputSchema: workspaceInsightOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "release" }), "cptr_workspace_release_readiness"),
+  );
+
+  server.registerTool(
+    "cptr_workspace_run_test_target",
+    {
+      title: "Run a fixed local CPTR test profile",
+      description: "Use this only after the user explicitly asks to run local validation in the selected workspace. Choose one server-owned test profile; arbitrary shell syntax, installs, and network access are not accepted. If workbench_session_id is supplied, CPTR streams actual bounded stdout/stderr to that durable session's terminal.",
+      inputSchema: workspaceTestTargetSchema,
+      outputSchema: {
+        target: z.string(),
+        workspace_id: z.string(),
+        command_id: z.string(),
+        status: z.string(),
+        exit_code: z.number().int().nullable(),
+        output: z.string(),
+        next_offset: z.number().int(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) => {
+      const { workbench_session_id, ...testInput } = input;
+      const command = await client.runWorkspaceTestTarget(testInput);
+      if (workbench_session_id) {
+        await client.bindWorkbenchSession({
+          session_id: workbench_session_id,
+          target_type: "command",
+          target_id: command.command_id,
+          workspace_id: input.workspace_id,
+        });
+        recordWorkbenchActivity(client, workbench_session_id, {
+          event_type: "test_profile.started",
+          state: command.status,
+          target_type: "command",
+          target_id: command.command_id,
+          workspace_id: input.workspace_id,
+          tool_name: "cptr_workspace_run_test_target",
+          summary: `ChatGPT started the CPTR ${command.target} test profile.`,
+        });
+      }
+      return workbenchResult(
+        { ...command, workspace_id: input.workspace_id },
+        { targetType: "command", targetId: command.command_id, workspaceId: input.workspace_id },
+        "cptr_workspace_run_test_target",
+      );
+    },
   );
 
   server.registerTool(
@@ -591,7 +967,25 @@ export function createMcpServer(
       _meta: workbenchToolMetadata,
     },
     async (input) => {
-      const command = await client.runCodingCommand(input);
+      const { workbench_session_id, ...commandInput } = input;
+      const command = await client.runCodingCommand(commandInput);
+      if (workbench_session_id) {
+        await client.bindWorkbenchSession({
+          session_id: workbench_session_id,
+          target_type: "command",
+          target_id: command.command_id,
+          workspace_id: input.workspace_id,
+        });
+        recordWorkbenchActivity(client, workbench_session_id, {
+          event_type: "command.started",
+          state: command.status,
+          target_type: "command",
+          target_id: command.command_id,
+          workspace_id: input.workspace_id,
+          tool_name: "cptr_code_run_command",
+          summary: "ChatGPT started a CPTR workspace command.",
+        });
+      }
       return workbenchResult(
         { ...command, workspace_id: input.workspace_id },
         { targetType: "command", targetId: command.command_id, workspaceId: input.workspace_id },
@@ -796,32 +1190,47 @@ export function createMcpServer(
   server.registerTool(
     "cptr_start_task",
     {
-      title: "Start a CPTR task",
-      description: "Use this when the user explicitly wants CPTR to start an engineering task in a selected workspace. When the user restricts writes, commands, network access, or package installation, encode those restrictions in execution_policy so CPTR enforces them server-side rather than relying on prompt wording.",
+      title: "Delegate to an explicitly requested CPTR model",
+      description: "Do not use this for ordinary CPTR work: ChatGPT must complete the user's request itself by chaining the scoped workspace and coding tools. Use this only when the user explicitly asks to delegate to a named CPTR model. The delegated task text must include the literal allow:delegation marker and name model_id; CPTR never discovers or chooses a model implicitly. When delegating, encode any write, command, network, or package restrictions in execution_policy.",
       inputSchema: startTaskSchema,
       outputSchema: { id: z.string(), status: z.string(), workspace_id: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
     async (input) => {
+      requireExplicitCptrModelDelegation(input);
+      const { workbench_session_id, ...taskInput } = input;
       const task = await client.startTask({
-        ...input,
+        ...taskInput,
         prompt: workspaceScopedPrompt(input.prompt),
       });
-      return workbenchResult(
-        task,
-        { targetType: "task", targetId: task.id },
-        "cptr_start_task",
-      );
+      if (workbench_session_id) {
+        await client.bindWorkbenchSession({
+          session_id: workbench_session_id,
+          target_type: "task",
+          target_id: task.id,
+          workspace_id: task.workspace_id,
+        });
+        recordWorkbenchActivity(client, workbench_session_id, {
+          event_type: "task.started",
+          state: task.status,
+          target_type: "task",
+          target_id: task.id,
+          workspace_id: task.workspace_id,
+          tool_name: "cptr_start_task",
+          summary: "ChatGPT started a CPTR task.",
+        });
+      }
+      return workbenchResult(task, { targetType: "task", targetId: task.id }, "cptr_start_task");
     },
   );
 
   server.registerTool(
     "cptr_execute_task",
     {
-      title: "Execute a CPTR task now",
+      title: "Execute an explicitly requested CPTR model delegation",
       description:
-        "Use this only when the user explicitly asks ChatGPT to execute a contained task in a selected CPTR workspace. It starts an authorized CPTR task and waits up to 60 seconds for a result. If it remains active, return the task ID and use task-status tools rather than retrying. Encode user restrictions on writes, commands, network access, and package installation in execution_policy so CPTR enforces them server-side. This tool does not grant additional CPTR permissions; CPTR authorization and approval policy remain authoritative.",
+        "Do not use this for ordinary CPTR work: ChatGPT must perform the user's request itself through scoped workspace and coding tools. Use it only when the user explicitly asks CPTR to delegate the contained task, includes the literal allow:delegation marker, and names model_id. CPTR never discovers or chooses a model implicitly. The call waits at most 60 seconds; durable task status remains available for follow-up.",
       inputSchema: executeTaskSchema,
       outputSchema: {
         task_id: z.string(),
@@ -837,37 +1246,67 @@ export function createMcpServer(
       _meta: workbenchToolMetadata,
     },
     async (input) => {
+      requireExplicitCptrModelDelegation(input);
+      const { workbench_session_id, ...taskInput } = input;
       const task = await client.executeTask({
-        ...input,
+        ...taskInput,
         prompt: workspaceScopedPrompt(input.prompt),
       });
-      return workbenchResult(
-        task,
-        { targetType: "task", targetId: task.task_id },
-        "cptr_execute_task",
-      );
+      if (workbench_session_id) {
+        await client.bindWorkbenchSession({
+          session_id: workbench_session_id,
+          target_type: "task",
+          target_id: task.task_id,
+          workspace_id: task.workspace_id,
+        });
+        recordWorkbenchActivity(client, workbench_session_id, {
+          event_type: "task.executed",
+          state: task.status,
+          target_type: "task",
+          target_id: task.task_id,
+          workspace_id: task.workspace_id,
+          tool_name: "cptr_execute_task",
+          summary: "ChatGPT executed a CPTR task.",
+        });
+      }
+      return workbenchResult(task, { targetType: "task", targetId: task.task_id }, "cptr_execute_task");
     },
   );
 
   server.registerTool(
     "cptr_monitor_autonomous",
     {
-      title: "Monitor a CPTR engineering goal",
-      description: "Use this to create a persistent CPTR engineering monitor. The monitor continues server-side after the MCP call ends. Encode user restrictions on writes, commands, network access, and package installation in execution_policy; every spawned worker inherits those server-enforced limits.",
+      title: "Delegate an autonomous goal to an explicitly requested CPTR model",
+      description: "Do not use this for ordinary CPTR work: ChatGPT must carry out the user's task through scoped workspace and coding tools. Use it only when the user explicitly requests an autonomous CPTR model delegation, includes the literal allow:delegation marker, and names model_id. CPTR never discovers or chooses a model implicitly; delegated workers still inherit server-enforced execution_policy limits.",
       inputSchema: monitorAutonomousSchema,
       outputSchema: autonomousSummaryOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
     async (input) => {
-      const monitor = await client.createAutonomous(input);
+      requireExplicitCptrModelDelegation(input);
+      const { workbench_session_id, ...monitorInput } = input;
+      const monitor = await client.createAutonomous(monitorInput);
       const monitorId = String(monitor.monitor_id ?? monitor.goal_id ?? "");
       if (!monitorId) return activityResult(monitor, "cptr_monitor_autonomous");
-      return workbenchResult(
-        monitor,
-        { targetType: "monitor", targetId: monitorId },
-        "cptr_monitor_autonomous",
-      );
+      if (workbench_session_id) {
+        await client.bindWorkbenchSession({
+          session_id: workbench_session_id,
+          target_type: "monitor",
+          target_id: monitorId,
+          workspace_id: input.workspace_id,
+        });
+        recordWorkbenchActivity(client, workbench_session_id, {
+          event_type: "monitor.started",
+          state: String(monitor.status ?? "RUNNING"),
+          target_type: "monitor",
+          target_id: monitorId,
+          workspace_id: input.workspace_id,
+          tool_name: "cptr_monitor_autonomous",
+          summary: "ChatGPT started a CPTR autonomous monitor.",
+        });
+      }
+      return workbenchResult(monitor, { targetType: "monitor", targetId: monitorId }, "cptr_monitor_autonomous");
     },
   );
 
@@ -881,6 +1320,7 @@ export function createMcpServer(
         target_type: z.enum(["task", "monitor", "command"]),
         target_id: z.string().min(1),
         workspace_id: z.string().min(1).max(200).optional(),
+        workbench_session_id: z.string().regex(/^wbs_[A-Za-z0-9_-]{16,80}$/).optional(),
       }),
       outputSchema: {
         target_type: z.enum(["task", "monitor", "command"]),
@@ -894,9 +1334,30 @@ export function createMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
-    async ({ target_type, target_id, workspace_id }) => {
+    async ({ target_type, target_id, workspace_id, workbench_session_id }) => {
+      const bindSession = async (resolvedWorkspaceId?: string) => {
+        if (!workbench_session_id) return;
+        if (target_type === "command" && !resolvedWorkspaceId) {
+          throw new Error("workspace_id is required when binding a command target");
+        }
+        await client.bindWorkbenchSession({
+          session_id: workbench_session_id,
+          target_type,
+          target_id,
+          ...(resolvedWorkspaceId ? { workspace_id: resolvedWorkspaceId } : {}),
+        });
+        recordWorkbenchActivity(client, workbench_session_id, {
+          event_type: "terminal.bound",
+          target_type,
+          target_id,
+          ...(resolvedWorkspaceId ? { workspace_id: resolvedWorkspaceId } : {}),
+          tool_name: "cptr_render_live_terminal",
+          summary: "ChatGPT bound the Live Terminal to an owned CPTR target.",
+        });
+      };
       if (target_type === "task") {
         const task = await client.getTask(target_id);
+        await bindSession(task.workspace_id);
         return workbenchResult(
           {
             target_type,
@@ -919,6 +1380,7 @@ export function createMcpServer(
           offset: 0,
           wait_seconds: 0,
         });
+        await bindSession(workspace_id);
         return workbenchResult(
           {
             target_type,
@@ -934,6 +1396,7 @@ export function createMcpServer(
       }
       const monitor = await client.getAutonomous(target_id);
       const status = String(monitor.status ?? "UNKNOWN");
+      await bindSession(workspace_id);
       return workbenchResult(
         {
           target_type,
