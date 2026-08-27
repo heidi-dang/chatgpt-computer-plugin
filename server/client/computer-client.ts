@@ -145,22 +145,62 @@ export type WorkbenchSession = {
 };
 
 export type WorkbenchSessionEvent = {
-  session_id: string;
+    session_id: string;
+    sequence: number;
+    source: string;
+    actor: string;
+    event_type: string;
+    state: string | null;
+    target_type: "task" | "monitor" | "command" | null;
+    target_id: string | null;
+    workspace_id: string | null;
+    tool_name: string | null;
+    summary: string;
+    details: Record<string, unknown>;
+    metrics: Record<string, unknown>;
+    policy: Record<string, unknown>;
+    created_at: number;
+  };
+
+export type WorkspaceMemoryFact = {
+  fact_id: string;
+  category: string;
+  content: string;
+  paths: string[];
+  source_event_id: string | null;
+  status: "ACTIVE" | "STALE" | "ARCHIVED" | string;
+  pinned: boolean;
+  revision: number;
+  verified_fingerprint: string | null;
+  created_at: number;
+  updated_at: number;
+};
+
+export type WorkspaceMemoryEvent = {
+  event_id: string;
   sequence: number;
+  operation_id: string;
+  kind: string;
   source: string;
-  actor: string;
-  event_type: string;
-  state: string | null;
-  target_type: "task" | "monitor" | "command" | null;
-  target_id: string | null;
-  workspace_id: string | null;
+  session_id: string | null;
   tool_name: string | null;
+  outcome: string;
   summary: string;
+  affected_paths: string[];
   details: Record<string, unknown>;
-  metrics: Record<string, unknown>;
-  policy: Record<string, unknown>;
+  workspace_fingerprint: string | null;
   created_at: number;
 };
+
+export type WorkspaceMemoryContext = {
+  workspace_id: string;
+  memory_cursor: number;
+  workspace_stage: Record<string, unknown>;
+  relevant_facts: WorkspaceMemoryFact[];
+  freshness: Record<string, unknown>;
+};
+
+
 
 export class ComputerClient {
   private readonly baseUrl: string;
@@ -450,6 +490,87 @@ export class ComputerClient {
   }): Promise<WorkbenchSessionEvent> {
     const { session_id, ...body } = input;
     return this.request(`/workbench-sessions/${encodeURIComponent(session_id)}/events`, { method: "POST", body });
+  }
+
+  async appendWorkspaceMemoryEvent(input: {
+    workspace_id: string;
+    operation_id: string;
+    kind: string;
+    summary: string;
+    tool_name?: string;
+    outcome?: string;
+    source?: string;
+    session_id?: string;
+    affected_paths?: string[];
+    details?: Record<string, unknown>;
+    workspace_fingerprint?: string;
+  }): Promise<{ event: WorkspaceMemoryEvent; idempotent: boolean }> {
+    return this.request("/workspace-memory/events", { method: "POST", body: input });
+  }
+
+  async getWorkspaceMemoryContext(input: {
+    workspace_id: string;
+    refresh?: boolean;
+  }): Promise<WorkspaceMemoryContext> {
+    const suffix = input.refresh ? "?refresh=true" : "";
+    return this.request(`/workspace-memory/workspaces/${encodeURIComponent(input.workspace_id)}/context${suffix}`);
+  }
+
+  async getWorkspaceMemoryTimeline(input: {
+    workspace_id: string;
+    after_sequence?: number;
+    limit?: number;
+  }): Promise<{ workspace_id: string; events: WorkspaceMemoryEvent[]; last_sequence: number }> {
+    const query = new URLSearchParams({
+      after_sequence: String(input.after_sequence ?? 0),
+      limit: String(input.limit ?? 50),
+    });
+    return this.request(`/workspace-memory/workspaces/${encodeURIComponent(input.workspace_id)}/timeline?${query}`);
+  }
+
+  async listWorkspaceMemoryFacts(input: {
+    workspace_id: string;
+    include_stale?: boolean;
+  }): Promise<{ workspace_id: string; facts: WorkspaceMemoryFact[] }> {
+    const suffix = input.include_stale === false ? "?include_stale=false" : "";
+    return this.request(`/workspace-memory/workspaces/${encodeURIComponent(input.workspace_id)}/facts${suffix}`);
+  }
+
+  async recordWorkspaceMemoryFact(input: {
+    workspace_id: string;
+    content: string;
+    category?: string;
+    pinned?: boolean;
+    paths?: string[];
+    source_event_id?: string;
+    workspace_fingerprint?: string;
+  }): Promise<WorkspaceMemoryFact> {
+    return this.request("/workspace-memory/facts", { method: "POST", body: input });
+  }
+
+  async updateWorkspaceMemoryFact(input: {
+    workspace_id: string;
+    fact_id: string;
+    content?: string;
+    pinned?: boolean;
+    status?: string;
+  }): Promise<WorkspaceMemoryFact> {
+    const { workspace_id, fact_id, ...body } = input;
+    return this.request(
+      `/workspace-memory/workspaces/${encodeURIComponent(workspace_id)}/facts/${encodeURIComponent(fact_id)}`,
+      { method: "PATCH", body },
+    );
+  }
+
+  async forgetWorkspaceMemoryFact(input: { workspace_id: string; fact_id: string }): Promise<Record<string, unknown>> {
+    return this.request(
+      `/workspace-memory/workspaces/${encodeURIComponent(input.workspace_id)}/facts/${encodeURIComponent(input.fact_id)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  async clearWorkspaceMemory(input: { workspace_id: string; confirm: true }): Promise<Record<string, unknown>> {
+    return this.request("/workspace-memory/clear", { method: "POST", body: input });
   }
 
   async inspectWorkspace(input: {

@@ -43,6 +43,12 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_workspace_package_scripts",
       "cptr_workspace_release_readiness",
       "cptr_workspace_run_test_target",
+      "cptr_prepare_workspace_context",
+      "cptr_workspace_memory_timeline",
+      "cptr_workspace_memory_record_fact",
+      "cptr_workspace_memory_update_fact",
+      "cptr_workspace_memory_forget_fact",
+      "cptr_workspace_memory_clear",
       "cptr_code_list_files",
       "cptr_code_read_file",
       "cptr_code_search_files",
@@ -139,7 +145,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_plugin_update")?.annotations?.openWorldHint, false);
   assert.match(CPTR_APP_VERSION, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
   assert.equal(MCP_CONTRACT_VERSION, CPTR_APP_VERSION);
-  assert.equal(MCP_CONTRACT_TOOL_COUNT, 56);
+  assert.equal(MCP_CONTRACT_TOOL_COUNT, 62);
   assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
@@ -165,13 +171,13 @@ test("reports plugin release status through the stable update action", async () 
     arguments: {
       action: "verify_server",
       expected_contract_version: CPTR_APP_VERSION,
-      expected_tool_count: 56,
+      expected_tool_count: 62,
     },
   });
   const value = response.structuredContent as Record<string, unknown> | undefined;
   assert.equal(response.isError, undefined);
   assert.equal(value?.version, CPTR_APP_VERSION);
-  assert.equal(value?.tool_count, 56);
+  assert.equal(value?.tool_count, 62);
   assert.equal(value?.contract_matches, true);
   assert.equal(value?.tool_count_matches, true);
   assert.deepEqual((value?.verification as { tool?: string } | undefined)?.tool, "cptr_plugin_update");
@@ -325,14 +331,17 @@ test("invokes every direct-coding tool through MCP without a CPTR model input", 
     assert.equal(meta?.["cptr/live"], undefined, `${name} must bind through the already-open prompt terminal instead of returning another live widget`);
   }
 
-  assert.equal(seen.length, 12);
-  for (const request of seen) {
+  const primaryRequests = seen.filter(({ url }) => !url.includes("/workspace-memory/events"));
+  const memoryRequests = seen.filter(({ url }) => url.includes("/workspace-memory/events"));
+  assert.equal(primaryRequests.length, 12);
+  assert.equal(memoryRequests.length, 12, "each direct coding operation should append one memory event");
+  for (const request of primaryRequests) {
     const body = request.init?.body ? JSON.parse(String(request.init.body)) : {};
     assert.equal(body.model_id, undefined);
     assert.equal((request.init?.headers as Record<string, string>).Authorization, "Bearer test-token");
   }
-  assert.equal(seen[10].url.includes("offset=0&wait_seconds=0"), true);
-  assert.equal(seen[11].url.endsWith("/coding/commands/command-1/cancel"), true);
+  assert.equal(primaryRequests[10].url.includes("offset=0&wait_seconds=0"), true);
+  assert.equal(primaryRequests[11].url.endsWith("/coding/commands/command-1/cancel"), true);
 
   await client.close();
   await server.close();

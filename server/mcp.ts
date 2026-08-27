@@ -57,6 +57,12 @@ import {
   workspaceTestDiscoverySchema,
   workspaceTestTargetSchema,
   workspaceTreeSchema,
+  workspaceMemoryClearSchema,
+  workspaceMemoryContextSchema,
+  workspaceMemoryFactSchema,
+  workspaceMemoryFactUpdateSchema,
+  workspaceMemoryForgetSchema,
+  workspaceMemoryTimelineSchema,
 } from "./schemas/tools.js";
 
 function result<T extends Record<string, unknown>>(value: T) {
@@ -292,6 +298,85 @@ export function createMcpServer(
   const promptSessions = options.promptSessions ?? new PromptTerminalStore();
   let activePromptTicket: string | null = null;
 
+  const captureWorkspaceMemory = (
+    toolName: string,
+    input: unknown,
+    value: unknown,
+    operationId: string,
+  ): void => {
+    // The ledger is an asynchronous observability side effect. A database retry
+    // must never delay ChatGPT's direct coding action or turn a successful CPTR
+    // operation into an MCP failure.
+    if (
+      toolName.startsWith("cptr_workspace_memory_") ||
+      !(
+        toolName.startsWith("cptr_code_") ||
+        toolName.startsWith("cptr_workspace_") ||
+        toolName === "cptr_open_live_workbench"
+      )
+    ) return;
+    const inputRecord = input && typeof input === "object" && !Array.isArray(input)
+      ? input as Record<string, unknown>
+      : {};
+    const resultValue = terminalToolResult(value);
+    const resultRecord = resultValue && typeof resultValue === "object" && !Array.isArray(resultValue)
+      ? resultValue as Record<string, unknown>
+      : {};
+    const workspaceId = typeof inputRecord.workspace_id === "string"
+      ? inputRecord.workspace_id
+      : typeof resultRecord.workspace_id === "string"
+        ? resultRecord.workspace_id
+        : undefined;
+    if (!workspaceId) return;
+
+    const status = String(resultRecord.status ?? "").toUpperCase();
+    const exitCode = typeof resultRecord.exit_code === "number" ? resultRecord.exit_code : undefined;
+    const failed = status === "FAILED" || status === "ERROR" || exitCode !== undefined && exitCode !== 0;
+    const running = status === "RUNNING" || status === "PENDING";
+    const changedTools = new Set([
+      "cptr_code_write_file",
+      "cptr_code_edit_file",
+      "cptr_code_create_directory",
+      "cptr_code_move_file",
+      "cptr_code_delete_file",
+    ]);
+    let kind = "workspace.inspected";
+    if (changedTools.has(toolName)) kind = "workspace.changed";
+    else if (toolName === "cptr_code_get_git_status") kind = "workspace.git_observed";
+    else if (toolName === "cptr_workspace_run_test_target") kind = running ? "workspace.command_started" : failed ? "workspace.test_failed" : "workspace.test_completed";
+    else if (toolName === "cptr_code_run_command" || toolName === "cptr_code_get_command") kind = running ? "workspace.command_started" : failed ? "workspace.command_failed" : "workspace.command_completed";
+    else if (toolName === "cptr_code_cancel_command") kind = "workspace.command_completed";
+    else if (toolName === "cptr_open_live_workbench") kind = "workspace.session_linked";
+
+    const affectedPaths = [
+      inputRecord.path,
+      inputRecord.source,
+      inputRecord.destination,
+      ...(Array.isArray(inputRecord.paths) ? inputRecord.paths : []),
+    ].filter((item): item is string => typeof item === "string");
+    const details: Record<string, unknown> = {
+      ...(typeof resultRecord.command_id === "string" ? { command_id: resultRecord.command_id } : {}),
+      ...(status ? { status } : {}),
+      ...(exitCode !== undefined ? { exit_code: exitCode } : {}),
+    };
+    const sessionId = typeof inputRecord.workbench_session_id === "string"
+      ? inputRecord.workbench_session_id
+      : typeof resultRecord.session_id === "string"
+        ? resultRecord.session_id
+        : undefined;
+    void client.appendWorkspaceMemoryEvent({
+      workspace_id: workspaceId,
+      operation_id: operationId,
+      kind,
+      summary: `ChatGPT ${failed ? "did not complete" : running ? "started" : "completed"} ${toolName}.`,
+      tool_name: toolName,
+      outcome: failed ? "FAILED" : running ? "RUNNING" : "COMPLETE",
+      session_id: sessionId,
+      affected_paths: affectedPaths,
+      details,
+    }).catch(() => undefined);
+  };
+
   const publishActivity = (
     toolName: string,
     summary?: string,
@@ -326,6 +411,7 @@ export function createMcpServer(
     (async (...args: unknown[]) => {
       const label = config.title?.trim() || name;
       const input = args.length ? args[0] : {};
+      const memoryOperationId = `mcp:${name}:${crypto.randomUUID()}`;
       publishActivity(
         name,
         `Working: ${label}.`,
@@ -334,6 +420,7 @@ export function createMcpServer(
       );
       try {
         const value = await handler(...args);
+        captureWorkspaceMemory(name, input, value, memoryOperationId);
         publishActivity(
           name,
           `Completed: ${label}.`,
@@ -441,6 +528,140 @@ export function createMcpServer(
         },
       };
     },
+  );
+
+  server.registerTool(
+    "cptr_prepare_workspace_context",
+    {
+      title: "Prepare current CPTR workspace context for direct coding",
+      description:
+        "Call this immediately after opening or resuming a CPTR Workbench when continuing or starting direct coding in a selected workspace. It returns a compact, owner-scoped current-stage summary, active verified facts, blockers, recent CPTR work, and freshness status. Then use direct CPTR read/search/edit/test tools yourself. It never delegates work to a CPTR model, never exposes raw terminal logs or private prompts, and refresh=false is the fast default.",
+      inputSchema: workspaceMemoryContextSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        memory_cursor: z.number().int(),
+        workspace_stage: z.record(z.string(), z.unknown()),
+        relevant_facts: z.array(z.record(z.string(), z.unknown())),
+        freshness: z.record(z.string(), z.unknown()),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(
+      await client.getWorkspaceMemoryContext(input),
+      "cptr_prepare_workspace_context",
+      "Prepared compact CPTR workspace context for ChatGPT direct coding.",
+    ),
+  );
+
+  server.registerTool(
+    "cptr_workspace_memory_timeline",
+    {
+      title: "Read bounded CPTR workspace activity history",
+      description:
+        "Read a paginated, redacted, owner-scoped CPTR workspace activity ledger when earlier project history is needed. This returns normalized CPTR events, not private prompts, reasoning, credentials, absolute paths, or raw terminal transcripts.",
+      inputSchema: workspaceMemoryTimelineSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        events: z.array(z.record(z.string(), z.unknown())),
+        last_sequence: z.number().int(),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(
+      await client.getWorkspaceMemoryTimeline(input),
+      "cptr_workspace_memory_timeline",
+      "Read bounded CPTR workspace history.",
+    ),
+  );
+
+  server.registerTool(
+    "cptr_workspace_memory_record_fact",
+    {
+      title: "Record a user-visible durable CPTR workspace fact",
+      description:
+        "Use only when the user asks CPTR to remember a durable workspace decision, convention, verified command, architectural fact, limitation, or note. Save concise facts grounded in user instructions or visible direct CPTR results. Never save secrets, private prompts, raw output, hidden reasoning, or unverified guesses.",
+      inputSchema: workspaceMemoryFactSchema,
+      outputSchema: {
+        fact_id: z.string(),
+        category: z.string(),
+        content: z.string(),
+        paths: z.array(z.string()),
+        status: z.string(),
+        pinned: z.boolean(),
+        revision: z.number().int(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(
+      await client.recordWorkspaceMemoryFact(input),
+      "cptr_workspace_memory_record_fact",
+      "Recorded an explicit user-visible workspace memory fact.",
+    ),
+  );
+
+  server.registerTool(
+    "cptr_workspace_memory_update_fact",
+    {
+      title: "Edit, pin, or archive a CPTR workspace fact",
+      description:
+        "Use only after the user asks to edit, pin, refresh, or archive an existing user-visible workspace memory fact. This does not alter the immutable CPTR activity ledger.",
+      inputSchema: workspaceMemoryFactUpdateSchema,
+      outputSchema: {
+        fact_id: z.string(),
+        category: z.string(),
+        content: z.string(),
+        paths: z.array(z.string()),
+        status: z.string(),
+        pinned: z.boolean(),
+        revision: z.number().int(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(
+      await client.updateWorkspaceMemoryFact(input),
+      "cptr_workspace_memory_update_fact",
+      "Updated a user-visible workspace memory fact.",
+    ),
+  );
+
+  server.registerTool(
+    "cptr_workspace_memory_forget_fact",
+    {
+      title: "Forget one CPTR workspace fact",
+      description:
+        "Use only when the user specifically asks CPTR to forget an individual durable workspace fact. The fact is removed from normal retrieval; this does not delete unrelated workspace history.",
+      inputSchema: workspaceMemoryForgetSchema,
+      outputSchema: { workspace_id: z.string(), fact_id: z.string(), forgotten_at: z.number().int() },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(
+      await client.forgetWorkspaceMemoryFact(input),
+      "cptr_workspace_memory_forget_fact",
+      "Forgot one user-visible workspace memory fact.",
+    ),
+  );
+
+  server.registerTool(
+    "cptr_workspace_memory_clear",
+    {
+      title: "Permanently clear CPTR workspace memory",
+      description:
+        "Use only when the user explicitly asks to permanently delete all CPTR workspace-memory facts and recorded history for this selected workspace. The required confirm=true input makes the destructive request unambiguous.",
+      inputSchema: workspaceMemoryClearSchema,
+      outputSchema: { workspace_id: z.string(), cleared_at: z.number().int(), cursor: z.number().int() },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(
+      await client.clearWorkspaceMemory(input),
+      "cptr_workspace_memory_clear",
+      "Permanently cleared CPTR workspace memory at the user's request.",
+    ),
   );
 
   server.registerTool(
