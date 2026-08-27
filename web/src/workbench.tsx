@@ -21,6 +21,7 @@ type LiveMetadata = {
   ticket?: string;
   streamUrl?: string;
   snapshotUrl?: string;
+  renewUrl?: string;
   expiresAt?: number;
   targetType?: "task" | "monitor" | "command";
   targetId?: string;
@@ -110,29 +111,55 @@ function tryClaimTerminal(instanceId: string): boolean {
 
 function useTerminalOwnership(): boolean {
   const instanceId = useRef(crypto.randomUUID()).current;
-  const [owner, setOwner] = useState(() => tryClaimTerminal(instanceId));
+  const [owner, setOwner] = useState(false);
 
   useEffect(() => {
+    let disposed = false;
+    let retryTimer: number | undefined;
+    let releaseWebLock: (() => void) | undefined;
+    const locks = navigator.locks;
+
+    if (locks?.request) {
+      const claimWebLock = async (): Promise<void> => {
+        if (disposed) return;
+        const acquired = await locks.request(
+          TERMINAL_OWNER_KEY,
+          { mode: "exclusive", ifAvailable: true },
+          async (lock) => {
+            if (!lock || disposed) return false;
+            setOwner(true);
+            await new Promise<void>((resolve) => { releaseWebLock = resolve; });
+            return true;
+          },
+        );
+        if (!disposed && acquired === false) {
+          setOwner(false);
+          retryTimer = window.setTimeout(() => void claimWebLock(), TERMINAL_OWNER_REFRESH_MS);
+        }
+      };
+      void claimWebLock();
+      return () => {
+        disposed = true;
+        if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+        releaseWebLock?.();
+      };
+    }
+
+    setOwner(tryClaimTerminal(instanceId));
     const refresh = () => {
       const current = readOwnerLease();
-      if (owner) {
-        if (!current || current.instanceId === instanceId) {
-          if (!writeOwnerLease(instanceId)) setOwner(false);
-        } else {
-          setOwner(false);
-        }
-      } else if (!current && tryClaimTerminal(instanceId)) {
+      if (current?.instanceId === instanceId) {
+        if (!writeOwnerLease(instanceId)) setOwner(false);
+      } else if (current) {
+        setOwner(false);
+      } else if (tryClaimTerminal(instanceId)) {
         setOwner(true);
       }
     };
     const onStorage = (event: StorageEvent) => {
       if (event.key !== TERMINAL_OWNER_KEY) return;
-      const current = readOwnerLease();
-      if (current?.instanceId === instanceId) setOwner(true);
-      else if (current) setOwner(false);
-      else if (tryClaimTerminal(instanceId)) setOwner(true);
+      refresh();
     };
-    refresh();
     const timer = window.setInterval(refresh, TERMINAL_OWNER_REFRESH_MS);
     window.addEventListener("storage", onStorage);
     return () => {
@@ -143,7 +170,7 @@ function useTerminalOwnership(): boolean {
         try { window.localStorage.removeItem(TERMINAL_OWNER_KEY); } catch { /* storage unavailable */ }
       }
     };
-  }, [instanceId, owner]);
+  }, [instanceId]);
 
   return owner;
 }
@@ -289,12 +316,9 @@ function useLiveSession(
   meta: LiveMetadata | null,
   setMeta: React.Dispatch<React.SetStateAction<LiveMetadata | null>>,
   setState: React.Dispatch<React.SetStateAction<WorkbenchState>>,
-  callTool: (name: string, args: Record<string, unknown>) => Promise<unknown>,
 ) {
   const [connection, setConnection] = useState("waiting for live terminal");
   const liveTarget = useRef(new LiveTargetSession());
-  const callToolRef = useRef(callTool);
-  callToolRef.current = callTool;
 
   useEffect(() => {
     if (liveTarget.current.bind(meta?.targetType, meta?.targetId, meta?.workspaceId)) {
@@ -307,28 +331,44 @@ function useLiveSession(
 
     const controller = new AbortController();
     let retryTimer: number | undefined;
+    let renewalTimer: number | undefined;
     let stopped = false;
     let terminalSeen = false;
     let retryAttempts = 0;
 
     const renewTicket = async (): Promise<boolean> => {
-      if (!meta.targetType || !meta.targetId || liveTarget.current.renewalAttempts >= 2) return false;
+      if (!meta.targetType || !meta.targetId || !meta.renewUrl || liveTarget.current.renewalAttempts >= 2) return false;
       liveTarget.current.renewalAttempts += 1;
       setConnection("renewing session");
       try {
-        const response = await callToolRef.current("cptr_render_live_terminal", {
-          target_type: meta.targetType,
-          target_id: meta.targetId,
-          ...(meta.targetType === "command" && meta.workspaceId ? { workspace_id: meta.workspaceId } : {}),
+        const response = await fetch(new URL(meta.renewUrl, window.location.href), {
+          method: "POST",
+          headers: { Authorization: `Bearer ${meta.ticket}`, Accept: "application/json" },
+          signal: controller.signal,
         });
-        const renewed = findLiveMetadata(response);
-        if (!renewed?.ticket || !renewed.streamUrl || !renewed.snapshotUrl) return false;
+        if (!response.ok) return false;
+        const renewed = await response.json() as LiveMetadata;
+        const sameTarget =
+          renewed.targetType === meta.targetType &&
+          renewed.targetId === meta.targetId &&
+          (meta.targetType !== "command" || renewed.workspaceId === meta.workspaceId);
+        if (!sameTarget || !renewed.ticket || !renewed.streamUrl || !renewed.snapshotUrl || !renewed.renewUrl) return false;
+        liveTarget.current.renewalAttempts = 0;
         setMeta(renewed);
         return true;
       } catch {
         return false;
       }
     };
+
+    if (typeof meta.expiresAt === "number" && meta.renewUrl) {
+      const renewInMs = Math.max(1_000, meta.expiresAt - Date.now() - 60_000);
+      renewalTimer = window.setTimeout(() => {
+        void renewTicket().then((renewed) => {
+          if (!renewed && !stopped) setConnection("ticket renewal failed");
+        });
+      }, renewInMs);
+    }
 
     const unavailable = (status: number) => {
       const error = new Error(`live session unavailable (${status})`) as Error & { status?: number };
@@ -469,8 +509,9 @@ function useLiveSession(
       stopped = true;
       controller.abort();
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      if (renewalTimer !== undefined) window.clearTimeout(renewalTimer);
     };
-  }, [meta?.ticket, meta?.streamUrl, meta?.snapshotUrl, meta?.targetType, meta?.targetId, meta?.workspaceId, setMeta, setState]);
+  }, [meta?.ticket, meta?.streamUrl, meta?.snapshotUrl, meta?.renewUrl, meta?.expiresAt, meta?.targetType, meta?.targetId, meta?.workspaceId, setMeta, setState]);
 
   return connection;
 }
@@ -489,7 +530,7 @@ function OwnedWorkbench() {
   const callTool = useMcpBridge();
   const [meta, setMeta] = useLiveMetadata();
   useMcpToolActivity(setState);
-  const connection = useLiveSession(meta, setMeta, setState, callTool);
+  const connection = useLiveSession(meta, setMeta, setState);
   const visibleTarget = useRef<string | null>(null);
   const autoPinAttempted = useRef(false);
   const isCommand = meta?.targetType === "command" && !!meta.targetId && !!meta.workspaceId;

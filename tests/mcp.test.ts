@@ -98,9 +98,11 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   const renderedTools = [...tools.values()]
     .filter((tool) => (tool._meta as { ui?: { resourceUri?: string } } | undefined)?.ui?.resourceUri)
     .map((tool) => tool.name);
-  assert.deepEqual(renderedTools, ["cptr_render_live_terminal"]);
-  const terminalMeta = tools.get("cptr_render_live_terminal")?._meta as { ui?: { resourceUri?: string } } | undefined;
+  assert.deepEqual(renderedTools, ["cptr_open_live_workbench"]);
+  const terminalMeta = tools.get("cptr_open_live_workbench")?._meta as { ui?: { resourceUri?: string } } | undefined;
   assert.equal(terminalMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
+  const bindMeta = tools.get("cptr_render_live_terminal")?._meta as { ui?: { resourceUri?: string } } | undefined;
+  assert.equal(bindMeta?.ui, undefined);
   assert.equal(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.action, undefined);
   assert.equal(MCP_CONTRACT_VERSION, "0.5.0");
   assert.equal(MCP_CONTRACT_TOOL_COUNT, 36);
@@ -289,7 +291,7 @@ test("routes dedicated SSH tools through the SSH control API and live command ta
   await server.close();
 });
 
-test("keeps setup and execution data-only and mounts exactly one terminal through the render tool", async () => {
+test("mounts exactly one prompt terminal through open and keeps later target binding data-only", async () => {
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "server-only-token",
@@ -316,7 +318,7 @@ test("keeps setup and execution data-only and mounts exactly one terminal throug
   });
   const taskMeta = taskResponse._meta as {
     ui?: { resourceUri?: string };
-    "cptr/live"?: { ticket?: string; streamUrl?: string; snapshotUrl?: string; workspaceId?: string };
+    "cptr/live"?: { ticket?: string; streamUrl?: string; snapshotUrl?: string; renewUrl?: string; workspaceId?: string };
     "cptr/activity"?: { type?: string };
   } | undefined;
   assert.equal(taskMeta?.ui, undefined);
@@ -333,14 +335,16 @@ test("keeps setup and execution data-only and mounts exactly one terminal throug
   assert.equal(text.includes("server-only-token"), false);
   const meta = response._meta as {
     ui?: { resourceUri?: string };
-    "cptr/live"?: { ticket?: string; streamUrl?: string; snapshotUrl?: string; workspaceId?: string };
+    "cptr/live"?: { ticket?: string; streamUrl?: string; snapshotUrl?: string; renewUrl?: string; workspaceId?: string };
   } | undefined;
-  assert.ok(meta?.ui?.resourceUri);
+  assert.equal(meta?.ui, undefined);
   assert.ok(meta?.["cptr/live"]?.ticket);
   assert.ok(meta?.["cptr/live"]?.snapshotUrl);
+  assert.ok(meta?.["cptr/live"]?.renewUrl);
   assert.equal(meta?.["cptr/live"]?.workspaceId, "ws-1");
   assert.equal(String(meta?.["cptr/live"]?.streamUrl).includes(meta?.["cptr/live"]?.ticket ?? ""), false);
   assert.equal(String(meta?.["cptr/live"]?.snapshotUrl).includes(meta?.["cptr/live"]?.ticket ?? ""), false);
+  assert.equal(String(meta?.["cptr/live"]?.renewUrl).includes(meta?.["cptr/live"]?.ticket ?? ""), false);
 
   await client.close();
   await server.close();

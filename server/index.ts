@@ -53,6 +53,8 @@ const client = clientFromEnvironment();
 const liveTickets = new LiveTicketStore({
   streamUrl: `${publicOrigin}/live/stream`,
   snapshotUrl: `${publicOrigin}/live/snapshot`,
+  renewUrl: `${publicOrigin}/live/renew`,
+  renewGraceMs: 5 * 60_000,
 });
 const liveGateway = new LiveGateway(client, liveTickets);
 const workbenchAssets = loadWorkbenchAssets();
@@ -86,6 +88,7 @@ const httpServer = createServer(async (req, res) => {
   const workbenchBrowserRequest =
     url.pathname === "/live/stream" ||
     url.pathname === "/live/snapshot" ||
+    url.pathname === "/live/renew" ||
     url.pathname.startsWith("/__cptr/dev/");
   const browserOriginAllowed = workbenchBrowserRequest
     ? isAllowedWorkbenchBrowserOrigin(requestOrigin, allowedBrowserOrigins)
@@ -165,14 +168,22 @@ const httpServer = createServer(async (req, res) => {
     }));
     return;
   }
-  if (url.pathname === "/live/stream" || url.pathname === "/live/snapshot") {
+  if (url.pathname === "/live/stream" || url.pathname === "/live/snapshot" || url.pathname === "/live/renew") {
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
         ...originHeaders,
         "access-control-allow-headers": "Authorization, Accept, Last-Event-ID",
-        "access-control-allow-methods": "GET, OPTIONS",
+        "access-control-allow-methods": "GET, POST, OPTIONS",
         "cache-control": "no-store",
       }).end();
+      return;
+    }
+    if (url.pathname === "/live/renew") {
+      if (req.method !== "POST") {
+        res.writeHead(405, { "cache-control": "no-store" }).end();
+        return;
+      }
+      await liveGateway.handleRenew(req, res);
       return;
     }
     if (req.method !== "GET") {

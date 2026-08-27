@@ -80,22 +80,6 @@ function workbenchResult<T extends Record<string, unknown>>(
   };
 }
 
-function renderWorkbenchResult<T extends Record<string, unknown>>(
-  value: T,
-  target: LiveTarget,
-  tickets: LiveTicketStore,
-  toolName = "cptr_render_live_terminal",
-) {
-  const response = workbenchResult(value, target, tickets, toolName);
-  return {
-    ...response,
-    _meta: {
-      ...response._meta,
-      ui: { resourceUri: WORKBENCH_RESOURCE_URI },
-    },
-  };
-}
-
 function activityResult<T extends Record<string, unknown>>(value: T, toolName: string, summary?: string) {
   return {
     ...result(value),
@@ -119,7 +103,9 @@ const oauthToolMetadata = {
 
 const workbenchToolMetadata = oauthToolMetadata;
 
-const renderToolMetadata = {
+// One ChatGPT prompt gets exactly one UI-producing tool call: cptr_open_live_workbench.
+// Every later CPTR tool only publishes activity/live metadata into that existing widget.
+const openWorkbenchToolMetadata = {
   ...oauthToolMetadata,
   ui: { resourceUri: WORKBENCH_RESOURCE_URI },
 };
@@ -161,11 +147,11 @@ export function createMcpServer(
     {
       title: "Prepare CPTR Live Workbench context",
       description:
-        "Optional readiness check for CPTR. This data-only tool does not render a widget and is not a prerequisite for normal CPTR work. To show the UI, call cptr_render_live_terminal exactly once after a task, monitor, or command target exists.",
+        "Call this first whenever the user explicitly invokes CPTR. This is the sole CPTR UI-producing tool: it opens exactly one Live Terminal for the current prompt before any target exists. All later task, monitor, command, status, and render/bind calls are data-only and update this existing terminal instead of creating another widget.",
       inputSchema: {},
       outputSchema: { status: z.string(), title: z.string(), initial_summary: z.string() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-      _meta: workbenchToolMetadata,
+      _meta: openWorkbenchToolMetadata,
     },
     async () => initialWorkbenchResult(
       {
@@ -622,7 +608,7 @@ export function createMcpServer(
     {
       title: "Render the CPTR Live Terminal",
       description:
-        "The sole CPTR UI render tool. Call this exactly once after a task, monitor, or workspace-owned command target exists. Status, polling, cancellation, file, SSH, task, and autonomous tools are data-only and must not be used to render additional terminal widgets. The terminal is redacted and resumable and does not grant additional permissions.",
+        "Bind or refresh the already-open CPTR Live Terminal to a task, monitor, or workspace-owned command target. This tool is data-only and must never create another widget; cptr_open_live_workbench is the sole UI-producing call for the prompt. The terminal remains redacted and resumable and this binding grants no additional permissions.",
       inputSchema: z.object({
         target_type: z.enum(["task", "monitor", "command"]),
         target_id: z.string().min(1),
@@ -638,12 +624,12 @@ export function createMcpServer(
         initial_summary: z.string(),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-      _meta: renderToolMetadata,
+      _meta: workbenchToolMetadata,
     },
     async ({ target_type, target_id, workspace_id }) => {
       if (target_type === "task") {
         const task = await client.getTask(target_id);
-        return renderWorkbenchResult(
+        return workbenchResult(
           {
             target_type,
             target_id,
@@ -666,7 +652,7 @@ export function createMcpServer(
           offset: 0,
           wait_seconds: 0,
         });
-        return renderWorkbenchResult(
+        return workbenchResult(
           {
             target_type,
             target_id,
@@ -682,7 +668,7 @@ export function createMcpServer(
       }
       const monitor = await client.getAutonomous(target_id);
       const status = String(monitor.status ?? "UNKNOWN");
-      return renderWorkbenchResult(
+      return workbenchResult(
         {
           target_type,
           target_id,

@@ -42,6 +42,39 @@ test("expired tickets are rejected", () => {
   assert.equal(store.validate(issued.ticket, { targetType: "monitor", targetId: "mon-1" }), null);
 });
 
+test("renews the same target without invoking an MCP UI tool", () => {
+  let now = 1_000;
+  const store = new LiveTicketStore({
+    now: () => now,
+    ttlMs: 5_000,
+    renewGraceMs: 2_000,
+    streamUrl: "https://plugin.test/live/stream",
+    snapshotUrl: "https://plugin.test/live/snapshot",
+    renewUrl: "https://plugin.test/live/renew",
+  });
+  const issued = store.issue({ targetType: "command", targetId: "cmd-1", workspaceId: "ws-1" });
+  now = 6_500;
+
+  const renewed = store.renew(issued.ticket);
+
+  assert.ok(renewed);
+  assert.notEqual(renewed?.ticket, issued.ticket);
+  assert.equal(renewed?.targetType, "command");
+  assert.equal(renewed?.targetId, "cmd-1");
+  assert.equal(renewed?.workspaceId, "ws-1");
+  assert.equal(renewed?.renewUrl, "https://plugin.test/live/renew");
+  assert.equal(store.validate(issued.ticket), null);
+  assert.ok(store.validate(renewed!.ticket, { targetType: "command", targetId: "cmd-1", workspaceId: "ws-1" }));
+});
+
+test("rejects renewal after the bounded grace window", () => {
+  let now = 1_000;
+  const store = new LiveTicketStore({ now: () => now, ttlMs: 5_000, renewGraceMs: 2_000 });
+  const issued = store.issue({ targetType: "task", targetId: "task-1" });
+  now = 8_001;
+  assert.equal(store.renew(issued.ticket), null);
+});
+
 test("prunes expired tickets and bounds retained ticket state", () => {
   let now = 1_000;
   const store = new LiveTicketStore({ now: () => now, ttlMs: 1_000, maxTickets: 2 });
@@ -189,6 +222,37 @@ test("releases capacity when a backpressured client disconnects", async () => {
   await second;
 });
 
+
+test("renews a live session over the data-only HTTP gateway", async () => {
+  const store = new LiveTicketStore({
+    ttlMs: 5_000,
+    renewGraceMs: 5_000,
+    renewUrl: "https://plugin.test/live/renew",
+  });
+  const issued = store.issue({ targetType: "task", targetId: "task-1" });
+  const gateway = new LiveGateway({} as never, store);
+  const request = Object.assign(new EventEmitter(), {
+    method: "POST",
+    url: "/live/renew",
+    headers: { authorization: `Bearer ${issued.ticket}` },
+  });
+  const response = {
+    status: 0,
+    body: "",
+    writeHead(status: number) { this.status = status; },
+    end(body?: string) { this.body = body ?? ""; },
+  };
+
+  await gateway.handleRenew(request as never, response as never);
+
+  assert.equal(response.status, 200);
+  const renewed = JSON.parse(response.body) as { ticket?: string; targetType?: string; targetId?: string; renewUrl?: string };
+  assert.ok(renewed.ticket);
+  assert.notEqual(renewed.ticket, issued.ticket);
+  assert.equal(renewed.targetType, "task");
+  assert.equal(renewed.targetId, "task-1");
+  assert.equal(renewed.renewUrl, "https://plugin.test/live/renew");
+});
 
 test("returns a target-bound live snapshot without exposing the ticket", async () => {
   const store = new LiveTicketStore({ ttlMs: 5_000, snapshotUrl: "https://plugin.test/live/snapshot" });

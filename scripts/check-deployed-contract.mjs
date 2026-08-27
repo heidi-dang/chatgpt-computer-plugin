@@ -96,6 +96,12 @@ await rpc("initialize", {
 });
 const tools = await rpc("tools/list", {});
 exactSet((tools.tools ?? []).map((tool) => tool.name), expectedTools, "tool contract");
+const uiTools = (tools.tools ?? [])
+  .filter((tool) => tool?._meta?.ui?.resourceUri === expectedResource)
+  .map((tool) => tool.name);
+if (JSON.stringify(uiTools) !== JSON.stringify(["cptr_open_live_workbench"])) {
+  throw new Error(`live-terminal UI ownership drift: expected only cptr_open_live_workbench, got [${uiTools.join(", ") || "none"}]`);
+}
 const resources = await rpc("resources/list", {});
 if (!(resources.resources ?? []).some((resource) => resource.uri === expectedResource)) {
   throw new Error(`resource contract drift: ${expectedResource} is unavailable`);

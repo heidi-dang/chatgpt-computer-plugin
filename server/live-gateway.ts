@@ -39,6 +39,32 @@ export class LiveGateway {
     private readonly limits: { maxConcurrent?: number; maxBytes?: number; maxDurationMs?: number } = {},
   ) {}
 
+  async handleRenew(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    const ticket = bearerValue(request);
+    const url = new URL(request.url ?? "/", "http://localhost");
+    if (url.pathname !== "/live/renew" || request.method !== "POST" || !ticket) {
+      response.writeHead(404, { "content-type": "application/json", "cache-control": "no-store" });
+      response.end(JSON.stringify({ error: "live renewal not found" }));
+      return;
+    }
+    const renewed = this.tickets.renew(ticket);
+    if (!renewed) {
+      response.writeHead(401, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+        "www-authenticate": "Bearer",
+      });
+      response.end(JSON.stringify({ error: "live renewal ticket is invalid or outside the renewal window" }));
+      return;
+    }
+    response.writeHead(200, {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+      "referrer-policy": "no-referrer",
+    });
+    response.end(JSON.stringify(renewed));
+  }
+
   async handleSnapshot(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const ticket = bearerValue(request);
     const url = new URL(request.url ?? "/", "http://localhost");
