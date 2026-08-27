@@ -2,6 +2,14 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { WidgetStreamMetadata } from "./live-tickets.js";
 
+type Environment = Record<string, string | undefined>;
+
+export function resolveLiveTerminalStreaming(env: Environment = process.env): boolean {
+  return ["1", "true", "on", "yes"].includes(
+    (env.CPTR_LIVE_TERMINAL_STREAMING ?? "").trim().toLowerCase(),
+  );
+}
+
 export type PromptActivityEvent = {
   event_id: string;
   sequence: number;
@@ -34,6 +42,7 @@ export type PromptTerminalMetadata = {
   streamUrl: string;
   snapshotUrl: string;
   expiresAt: number;
+  streamingEnabled: boolean;
 };
 
 type PendingPromptEvent =
@@ -56,6 +65,7 @@ type PromptStoreOptions = {
   maxEvents?: number;
   streamUrl?: string;
   snapshotUrl?: string;
+  streamingEnabled?: boolean;
 };
 
 export class PromptTerminalStore {
@@ -66,6 +76,7 @@ export class PromptTerminalStore {
   private readonly maxEvents: number;
   private readonly streamUrl: string;
   private readonly snapshotUrl: string;
+  private readonly streamingEnabledValue: boolean;
 
   constructor(options: PromptStoreOptions = {}) {
     this.now = options.now ?? (() => Date.now());
@@ -74,6 +85,11 @@ export class PromptTerminalStore {
     this.maxEvents = Math.max(16, options.maxEvents ?? 2_000);
     this.streamUrl = options.streamUrl ?? "/live/prompt/stream";
     this.snapshotUrl = options.snapshotUrl ?? "/live/prompt/snapshot";
+    this.streamingEnabledValue = options.streamingEnabled ?? true;
+  }
+
+  get streamingEnabled(): boolean {
+    return this.streamingEnabledValue;
   }
 
   get size(): number {
@@ -98,7 +114,13 @@ export class PromptTerminalStore {
       listeners: new Set(),
       allowDelegate: options.allowDelegate === true,
     });
-    return { ticket, expiresAt, streamUrl: this.streamUrl, snapshotUrl: this.snapshotUrl };
+    return {
+      ticket,
+      expiresAt,
+      streamUrl: this.streamUrl,
+      snapshotUrl: this.snapshotUrl,
+      streamingEnabled: this.streamingEnabledValue,
+    };
   }
 
   allowsDelegation(ticket: string | null | undefined): boolean {
@@ -107,7 +129,7 @@ export class PromptTerminalStore {
   }
 
   append(ticket: string | null | undefined, event: PendingPromptEvent): PromptTerminalEvent | null {
-    if (!ticket) return null;
+    if (!this.streamingEnabledValue || !ticket) return null;
     const session = this.getSession(ticket);
     if (!session) return null;
     session.lastSequence += 1;
@@ -136,6 +158,7 @@ export class PromptTerminalStore {
   }
 
   subscribe(ticket: string, listener: (event: PromptTerminalEvent) => void): (() => void) | null {
+    if (!this.streamingEnabledValue) return null;
     const session = this.getSession(ticket);
     if (!session) return null;
     session.listeners.add(listener);

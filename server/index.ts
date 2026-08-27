@@ -14,7 +14,7 @@ import { currentPluginUpdateManifest } from "./release.js";
 import { CPTR_APP_VERSION } from "./version.js";
 import { LiveGateway } from "./live-gateway.js";
 import { LiveTicketStore } from "./live-tickets.js";
-import { PromptTerminalGateway, PromptTerminalStore } from "./prompt-terminal.js";
+import { PromptTerminalGateway, PromptTerminalStore, resolveLiveTerminalStreaming } from "./prompt-terminal.js";
 import { loadWorkbenchAssets, resolveWorkbenchHotReload } from "./workbench-assets.js";
 import {
   corsHeaders,
@@ -57,6 +57,7 @@ const oauthConfig: McpAuthConfig = {
 };
 
 const client = clientFromEnvironment();
+const liveTerminalStreamingEnabled = resolveLiveTerminalStreaming();
 const liveTickets = new LiveTicketStore({
   streamUrl: `${publicOrigin}/live/stream`,
   snapshotUrl: `${publicOrigin}/live/snapshot`,
@@ -66,6 +67,7 @@ const liveGateway = new LiveGateway(client, liveTickets);
 const promptSessions = new PromptTerminalStore({
   streamUrl: `${publicOrigin}/live/prompt/stream`,
   snapshotUrl: `${publicOrigin}/live/prompt/snapshot`,
+  streamingEnabled: liveTerminalStreamingEnabled,
 });
 const promptGateway = new PromptTerminalGateway(promptSessions);
 

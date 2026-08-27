@@ -50,6 +50,7 @@ type PromptMetadata = {
   streamUrl?: string;
   snapshotUrl?: string;
   expiresAt?: number;
+  streamingEnabled?: boolean;
 };
 
 type PromptEvent = {
@@ -87,12 +88,17 @@ function findPromptMetadata(value: unknown): PromptMetadata | null {
 function usePromptActivity(
   setMeta: React.Dispatch<React.SetStateAction<LiveMetadata | null>>,
   setState: React.Dispatch<React.SetStateAction<WorkbenchState>>,
+  streamingEnabled: boolean,
 ) {
   const prompt = useRef<PromptMetadata | null>(findPromptMetadata(hostBridge()?.toolResponseMetadata));
   const cursor = useRef(0);
   const [connection, setConnection] = useState("connecting prompt activity");
 
   useEffect(() => {
+    if (!streamingEnabled) {
+      setConnection("live streaming disabled");
+      return;
+    }
     const meta = prompt.current;
     if (!meta?.ticket || !meta.streamUrl || !meta.snapshotUrl) {
       setConnection("prompt activity unavailable");
@@ -192,7 +198,7 @@ function usePromptActivity(
     };
     void consume();
     return () => { stopped = true; controller.abort(); if (retryTimer !== undefined) window.clearTimeout(retryTimer); };
-  }, [setMeta, setState]);
+  }, [setMeta, setState, streamingEnabled]);
 
   return connection;
 }
@@ -248,11 +254,16 @@ function useLiveSession(
   meta: LiveMetadata | null,
   setMeta: React.Dispatch<React.SetStateAction<LiveMetadata | null>>,
   setState: React.Dispatch<React.SetStateAction<WorkbenchState>>,
+  streamingEnabled: boolean,
 ) {
   const [connection, setConnection] = useState("waiting for live terminal");
   const liveTarget = useRef(new LiveTargetSession());
 
   useEffect(() => {
+    if (!streamingEnabled) {
+      setConnection("live streaming disabled");
+      return;
+    }
     if (liveTarget.current.bind(meta?.targetType, meta?.targetId, meta?.workspaceId)) {
       setState((current) => ({ ...current, status: "CONNECTING", lastSequence: 0 }));
     }
@@ -443,7 +454,7 @@ function useLiveSession(
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
       if (renewalTimer !== undefined) window.clearTimeout(renewalTimer);
     };
-  }, [meta?.ticket, meta?.streamUrl, meta?.snapshotUrl, meta?.renewUrl, meta?.expiresAt, meta?.targetType, meta?.targetId, meta?.workspaceId, setMeta, setState]);
+  }, [meta?.ticket, meta?.streamUrl, meta?.snapshotUrl, meta?.renewUrl, meta?.expiresAt, meta?.targetType, meta?.targetId, meta?.workspaceId, setMeta, setState, streamingEnabled]);
 
   return connection;
 }
@@ -461,12 +472,13 @@ function OwnedWorkbench() {
   const [actionStatus, setActionStatus] = useState("");
   const callTool = useMcpBridge();
   const promptMetadata = findPromptMetadata(hostBridge()?.toolResponseMetadata);
+  const liveStreamingEnabled = promptMetadata?.streamingEnabled === true;
   const updateManifestUrl = promptMetadata?.streamUrl
     ? new URL("/plugin/update", promptMetadata.streamUrl).toString()
     : undefined;
   const [meta, setMeta] = useState<LiveMetadata | null>(null);
-  const promptConnection = usePromptActivity(setMeta, setState);
-  const targetConnection = useLiveSession(meta, setMeta, setState);
+  const promptConnection = usePromptActivity(setMeta, setState, liveStreamingEnabled);
+  const targetConnection = useLiveSession(meta, setMeta, setState, liveStreamingEnabled);
   const connection = meta?.targetId ? targetConnection : promptConnection;
   const visibleTarget = useRef<string | null>(null);
   const autoPinAttempted = useRef(false);
@@ -484,14 +496,14 @@ function OwnedWorkbench() {
   }, [meta?.targetType, meta?.targetId, meta?.workspaceId]);
 
   useEffect(() => {
-    if (autoPinAttempted.current) return;
+    if (!liveStreamingEnabled || autoPinAttempted.current) return;
     autoPinAttempted.current = true;
     void requestHostDisplayMode(hostBridge(), "pip")
       .then((granted) => {
         if (granted === "pip") setActionStatus("terminal pinned");
       })
       .catch(() => undefined);
-  }, []);
+  }, [liveStreamingEnabled]);
 
   useEffect(() => {
     hostBridge()?.notifyIntrinsicHeight?.(Math.min(680, Math.max(280, document.body.scrollHeight)));

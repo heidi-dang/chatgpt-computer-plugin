@@ -493,11 +493,13 @@ export function createMcpServer(
     _toolName?: string,
     presentation?: Record<string, unknown>,
   ) => {
-    const live = tickets.issue(target);
-    promptSessions.append(activePromptTicket, {
-      type: "live.bind",
-      payload: { live },
-    });
+    if (promptSessions.streamingEnabled) {
+      const live = tickets.issue(target);
+      promptSessions.append(activePromptTicket, {
+        type: "live.bind",
+        payload: { live },
+      });
+    }
     return {
       ...result(value),
       ...(presentation ? { _meta: { ui: { presentation } } } : {}),
