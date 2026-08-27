@@ -12,6 +12,17 @@ export type WorkbenchEvent = {
   redaction_applied?: boolean;
 };
 
+export type McpToolActivity = {
+  event_id: string;
+  timestamp: string;
+  type: "mcp.tool";
+  payload?: {
+    tool_name?: unknown;
+    summary?: unknown;
+    status?: unknown;
+  };
+};
+
 export type TerminalRow = {
   id: string;
   sequence: number;
@@ -19,6 +30,7 @@ export type TerminalRow = {
   tone: "prompt" | "stdout" | "stderr" | "system" | "success" | "error";
   text: string;
   commandId?: string;
+  label?: string;
 };
 
 export type WorkbenchState = {
@@ -130,6 +142,32 @@ function bounded<T>(items: T[], limit: number): T[] {
 
 function stringValue(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
+}
+
+export function appendMcpToolActivity(state: WorkbenchState, activity: McpToolActivity): WorkbenchState {
+  const rowId = `${activity.event_id}:mcp`;
+  if (state.transcript.some((row) => row.id === rowId)) return state;
+  const payload = activity.payload ?? {};
+  const toolName = stringValue(payload.tool_name, "CPTR tool");
+  const summary = stringValue(payload.summary, `ChatGPT completed ${toolName}.`);
+  const status = stringValue(payload.status, "COMPLETE").toUpperCase();
+  const tone: TerminalRow["tone"] = ["FAILED", "ERROR", "CANCELLED", "BLOCKED"].includes(status)
+    ? "error"
+    : "system";
+  return {
+    ...state,
+    transcript: bounded([
+      ...state.transcript,
+      {
+        id: rowId,
+        sequence: state.lastSequence,
+        timestamp: activity.timestamp,
+        tone,
+        text: summary,
+        label: "tool",
+      },
+    ], MAX_TERMINAL_ROWS),
+  };
 }
 
 function terminalRows(event: WorkbenchEvent): TerminalRow[] {

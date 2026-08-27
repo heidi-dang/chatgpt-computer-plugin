@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  appendMcpToolActivity,
   eventTerminatesWorkbench,
   initialWorkbenchState,
   isTerminalWorkbenchStatus,
@@ -8,6 +9,7 @@ import {
   reduceWorkbenchEvent,
   reduceWorkbenchEvents,
   workbenchTargetIdentity,
+  type McpToolActivity,
   type WorkbenchEvent,
   type WorkbenchState,
 } from "./state.js";
@@ -55,6 +57,23 @@ function findLiveMetadata(value: unknown): LiveMetadata | null {
   return null;
 }
 
+function findMcpToolActivity(value: unknown): McpToolActivity | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const direct = record["cptr/activity"];
+  if (direct && typeof direct === "object") {
+    const activity = direct as Record<string, unknown>;
+    if (activity.type === "mcp.tool" && typeof activity.event_id === "string" && typeof activity.timestamp === "string") {
+      return direct as McpToolActivity;
+    }
+  }
+  for (const key of ["_meta", "params", "result", "toolResult"]) {
+    const found = findMcpToolActivity(record[key]);
+    if (found) return found;
+  }
+  return null;
+}
+
 function useLiveMetadata(): [LiveMetadata | null, React.Dispatch<React.SetStateAction<LiveMetadata | null>>] {
   const [metadata, setMetadata] = useState<LiveMetadata | null>(() => findLiveMetadata(hostBridge()?.toolResponseMetadata));
   useEffect(() => {
@@ -67,6 +86,22 @@ function useLiveMetadata(): [LiveMetadata | null, React.Dispatch<React.SetStateA
     return () => window.removeEventListener("message", onMessage);
   }, []);
   return [metadata, setMetadata];
+}
+
+function useMcpToolActivity(setState: React.Dispatch<React.SetStateAction<WorkbenchState>>) {
+  useEffect(() => {
+    const apply = (value: unknown) => {
+      const activity = findMcpToolActivity(value);
+      if (activity) setState((current) => appendMcpToolActivity(current, activity));
+    };
+    apply(hostBridge()?.toolResponseMetadata);
+    const onMessage = (event: MessageEvent<BridgeMessage>) => {
+      if (event.source !== window.parent || event.data?.method !== "ui/notifications/tool-result") return;
+      apply(event.data.params);
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [setState]);
 }
 
 function useMcpBridge() {
@@ -118,10 +153,10 @@ function useLiveSession(
 
   useEffect(() => {
     if (liveTarget.current.bind(meta?.targetType, meta?.targetId, meta?.workspaceId)) {
-      setState(initialWorkbenchState());
+      setState((current) => ({ ...current, status: "CONNECTING", lastSequence: 0 }));
     }
     if (!meta?.ticket || !meta.streamUrl || !meta.snapshotUrl) {
-      setConnection("waiting for a CPTR task or monitor");
+      setConnection("activity feed ready");
       return;
     }
 
@@ -308,10 +343,14 @@ function Workbench() {
   const [actionStatus, setActionStatus] = useState("");
   const callTool = useMcpBridge();
   const [meta, setMeta] = useLiveMetadata();
+  useMcpToolActivity(setState);
   const connection = useLiveSession(meta, setMeta, setState, callTool);
   const visibleTarget = useRef<string | null>(null);
   const isCommand = meta?.targetType === "command" && !!meta.targetId && !!meta.workspaceId;
   const canControl = !!meta?.targetType && ["RUNNING", "WORKING", "CONNECTING", "APPROVAL_REQUIRED"].includes(state.status);
+  const displayStatus = meta?.targetType && meta.targetId
+    ? state.status
+    : state.transcript.length ? "ACTIVE" : "READY";
 
   useEffect(() => {
     const identity = workbenchTargetIdentity(meta?.targetType, meta?.targetId, meta?.workspaceId);
@@ -378,7 +417,7 @@ function Workbench() {
   return <main className="terminal-workbench" aria-label="CPTR live terminal">
     <TerminalView
       rows={state.transcript}
-      status={state.status}
+      status={displayStatus}
       connection={connection}
       targetLabel={targetLabel(meta)}
       actionStatus={actionStatus}

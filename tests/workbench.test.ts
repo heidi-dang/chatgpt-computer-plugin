@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  appendMcpToolActivity,
   eventTerminatesWorkbench,
   initialWorkbenchState,
   isTerminalWorkbenchStatus,
@@ -15,6 +16,48 @@ const initial: WorkbenchState = {
   lastSequence: 0,
   transcript: [],
 };
+
+test("appends MCP tool usage without disturbing the authoritative live-event cursor", () => {
+  const withLiveOutput = reduceWorkbenchEvent(initialWorkbenchState(), {
+    event_id: "live-7",
+    sequence: 7,
+    timestamp: "2026-08-27T00:00:00Z",
+    type: "terminal.chunk",
+    payload: { text: "command output" },
+  });
+  const activity = {
+    event_id: "mcp-read-1",
+    timestamp: "2026-08-27T00:00:01Z",
+    type: "mcp.tool" as const,
+    payload: {
+      tool_name: "cptr_code_read_file",
+      summary: "ChatGPT completed cptr_code_read_file.",
+      status: "COMPLETE",
+    },
+  };
+
+  const appended = appendMcpToolActivity(withLiveOutput, activity);
+  const duplicate = appendMcpToolActivity(appended, activity);
+
+  assert.equal(appended.lastSequence, 7);
+  assert.equal(appended.transcript.at(-1)?.label, "tool");
+  assert.equal(appended.transcript.at(-1)?.text, "ChatGPT completed cptr_code_read_file.");
+  assert.deepEqual(duplicate, appended);
+});
+
+test("renders failed MCP tool usage as an error without changing task status", () => {
+  const running: WorkbenchState = { status: "RUNNING", lastSequence: 19, transcript: [] };
+  const next = appendMcpToolActivity(running, {
+    event_id: "mcp-failed-1",
+    timestamp: "2026-08-27T00:00:02Z",
+    type: "mcp.tool",
+    payload: { tool_name: "cptr_get_diff", summary: "cptr_get_diff failed.", status: "FAILED" },
+  });
+
+  assert.equal(next.status, "RUNNING");
+  assert.equal(next.lastSequence, 19);
+  assert.equal(next.transcript[0]?.tone, "error");
+});
 
 test("batch replay is byte-equivalent to ordered single-event reduction", () => {
   const events = [

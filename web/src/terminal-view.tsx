@@ -71,11 +71,11 @@ export function TerminalView({
       aria-relevant="additions text"
     >
       {rows.length ? rows.map((row) => <div className={`terminal-row terminal-${row.tone}`} key={row.id}>
-        <span className="terminal-seq" aria-hidden="true">{row.sequence}</span>
+        <span className="terminal-seq" aria-hidden="true">{row.label ?? row.sequence}</span>
         <code>{row.text}</code>
       </div>) : <div className="terminal-empty">
         <strong>Terminal ready</strong>
-        <span>Real CPTR command output will appear here.</span>
+        <span>CPTR tool activity and real command output will appear here.</span>
       </div>}
     </div>
 
