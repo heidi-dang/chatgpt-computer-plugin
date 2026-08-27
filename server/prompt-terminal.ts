@@ -11,6 +11,9 @@ export type PromptActivityEvent = {
     tool_name: string;
     summary: string;
     status: string;
+    arguments_json?: string;
+    result_json?: string;
+    error?: string;
   };
 };
 

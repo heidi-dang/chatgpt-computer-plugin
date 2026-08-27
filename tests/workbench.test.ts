@@ -31,8 +31,9 @@ test("appends MCP tool usage without disturbing the authoritative live-event cur
     type: "mcp.tool" as const,
     payload: {
       tool_name: "cptr_code_read_file",
-      summary: "ChatGPT completed cptr_code_read_file.",
-      status: "COMPLETE",
+      summary: "Working: Read source file.",
+      status: "STARTED",
+      arguments_json: "{\n  \"path\": \"server/mcp.ts\"\n}",
     },
   };
 
@@ -40,9 +41,28 @@ test("appends MCP tool usage without disturbing the authoritative live-event cur
   const duplicate = appendMcpToolActivity(appended, activity);
 
   assert.equal(appended.lastSequence, 7);
-  assert.equal(appended.transcript.at(-1)?.label, "tool");
-  assert.equal(appended.transcript.at(-1)?.text, "ChatGPT completed cptr_code_read_file.");
+  assert.deepEqual(appended.transcript.slice(-3).map((row) => row.label), ["work", "call", "args"]);
+  assert.equal(appended.transcript.at(-2)?.text, "cptr_code_read_file");
+  assert.match(appended.transcript.at(-1)?.text ?? "", /server\/mcp\.ts/);
   assert.deepEqual(duplicate, appended);
+});
+
+test("renders MCP tool result as result and done rows", () => {
+  const next = appendMcpToolActivity(initialWorkbenchState(), {
+    event_id: "mcp-result-1",
+    timestamp: "2026-08-27T00:00:02Z",
+    type: "mcp.tool",
+    payload: {
+      tool_name: "cptr_list_workspaces",
+      summary: "Completed: List CPTR workspaces.",
+      status: "COMPLETE",
+      result_json: "{\n  \"workspaces\": [{ \"name\": \"tests\" }]\n}",
+    },
+  });
+
+  assert.deepEqual(next.transcript.map((row) => row.label), ["result", "done"]);
+  assert.match(next.transcript[0]?.text ?? "", /workspaces/);
+  assert.equal(next.transcript[1]?.tone, "success");
 });
 
 test("renders failed MCP tool usage as an error without changing task status", () => {

@@ -20,6 +20,9 @@ export type McpToolActivity = {
     tool_name?: unknown;
     summary?: unknown;
     status?: unknown;
+    arguments_json?: unknown;
+    result_json?: unknown;
+    error?: unknown;
   };
 };
 
@@ -145,28 +148,43 @@ function stringValue(value: unknown, fallback = ""): string {
 }
 
 export function appendMcpToolActivity(state: WorkbenchState, activity: McpToolActivity): WorkbenchState {
-  const rowId = `${activity.event_id}:mcp`;
-  if (state.transcript.some((row) => row.id === rowId)) return state;
+  const rowPrefix = `${activity.event_id}:mcp`;
+  if (state.transcript.some((row) => row.id.startsWith(rowPrefix))) return state;
   const payload = activity.payload ?? {};
   const toolName = stringValue(payload.tool_name, "CPTR tool");
   const summary = stringValue(payload.summary, `ChatGPT completed ${toolName}.`);
   const status = stringValue(payload.status, "COMPLETE").toUpperCase();
-  const tone: TerminalRow["tone"] = ["FAILED", "ERROR", "CANCELLED", "BLOCKED"].includes(status)
-    ? "error"
-    : "system";
+  const argumentsJson = stringValue(payload.arguments_json);
+  const resultJson = stringValue(payload.result_json);
+  const errorText = stringValue(payload.error);
+  const rows: TerminalRow[] = [];
+  const add = (suffix: string, label: string, text: string, tone: TerminalRow["tone"] = "system") => {
+    if (!text) return;
+    rows.push({
+      id: `${rowPrefix}:${suffix}`,
+      sequence: state.lastSequence,
+      timestamp: activity.timestamp,
+      tone,
+      text,
+      label,
+    });
+  };
+
+  if (status === "STARTED") {
+    add("work", "work", summary);
+    add("call", "call", toolName, "prompt");
+    add("args", "args", argumentsJson);
+  } else if (["FAILED", "ERROR", "CANCELLED", "BLOCKED"].includes(status)) {
+    add("error", "error", errorText || summary, "error");
+  } else {
+    add("result", "result", resultJson, "stdout");
+    add("done", "done", summary, "success");
+  }
+
+  if (!rows.length) add("tool", "tool", summary);
   return {
     ...state,
-    transcript: bounded([
-      ...state.transcript,
-      {
-        id: rowId,
-        sequence: state.lastSequence,
-        timestamp: activity.timestamp,
-        tone,
-        text: summary,
-        label: "tool",
-      },
-    ], MAX_TERMINAL_ROWS),
+    transcript: bounded([...state.transcript, ...rows], MAX_TERMINAL_ROWS),
   };
 }
 

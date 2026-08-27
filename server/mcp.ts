@@ -61,12 +61,83 @@ function workspaceScopedPrompt(prompt: string): string {
   return `${DIRECT_TASK_SCOPE_PREFIX}\n\nAssignment:\n${value}`;
 }
 
-function mcpActivity(toolName: string, summary: string, status = "COMPLETE") {
+const TERMINAL_JSON_LIMIT = 12_000;
+const SENSITIVE_TERMINAL_KEY = /(?:authorization|token|secret|password|passwd|credential|cookie|api[_-]?key|access[_-]?key|identityfile)/i;
+
+function redactTerminalString(value: string): string {
+  return value
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
+    .replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{8,}\b/g, "sk-[REDACTED]");
+}
+
+function sanitizeTerminalValue(value: unknown, seen = new WeakSet<object>(), depth = 0): unknown {
+  if (depth > 6) return "[MAX_DEPTH]";
+  if (typeof value === "string") return redactTerminalString(value);
+  if (typeof value === "number" || typeof value === "boolean" || value === null) return value;
+  if (typeof value === "bigint") return value.toString();
+  if (value === undefined) return "[UNDEFINED]";
+  if (Array.isArray(value)) {
+    return value.slice(0, 100).map((item) => sanitizeTerminalValue(item, seen, depth + 1));
+  }
+  if (typeof value === "object") {
+    if (seen.has(value)) return "[CIRCULAR]";
+    seen.add(value);
+    if (value instanceof Error) {
+      return { name: value.name, message: redactTerminalString(value.message) };
+    }
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value).slice(0, 100)) {
+      if (key === "_meta") {
+        sanitized[key] = "[OMITTED]";
+      } else if (SENSITIVE_TERMINAL_KEY.test(key)) {
+        sanitized[key] = "[REDACTED]";
+      } else {
+        sanitized[key] = sanitizeTerminalValue(item, seen, depth + 1);
+      }
+    }
+    return sanitized;
+  }
+  return redactTerminalString(String(value));
+}
+
+function terminalJson(value: unknown): string {
+  let json: string;
+  try {
+    json = JSON.stringify(sanitizeTerminalValue(value), null, 2) ?? "null";
+  } catch {
+    json = JSON.stringify("[UNSERIALIZABLE]");
+  }
+  if (json.length <= TERMINAL_JSON_LIMIT) return json;
+  return `${json.slice(0, TERMINAL_JSON_LIMIT)}\n… [truncated ${json.length - TERMINAL_JSON_LIMIT} chars]`;
+}
+
+function terminalToolResult(value: unknown): unknown {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (record.structuredContent !== undefined) return record.structuredContent;
+    if (record.content !== undefined) return record.content;
+  }
+  return value;
+}
+
+function mcpActivity(
+  toolName: string,
+  summary: string,
+  status = "COMPLETE",
+  details: { argumentsJson?: string; resultJson?: string; error?: string } = {},
+) {
   return {
     event_id: `mcp-${crypto.randomUUID()}`,
     timestamp: new Date().toISOString(),
     type: "mcp.tool",
-    payload: { tool_name: toolName, summary, status },
+    payload: {
+      tool_name: toolName,
+      summary,
+      status,
+      ...(details.argumentsJson ? { arguments_json: details.argumentsJson } : {}),
+      ...(details.resultJson ? { result_json: details.resultJson } : {}),
+      ...(details.error ? { error: details.error } : {}),
+    },
   };
 }
 
@@ -148,8 +219,18 @@ export function createMcpServer(
   const promptSessions = options.promptSessions ?? new PromptTerminalStore();
   let activePromptTicket: string | null = null;
 
-  const publishActivity = (toolName: string, summary?: string, status = "COMPLETE") => {
-    const activity = mcpActivity(toolName, summary ?? `ChatGPT completed ${toolName}.`, status);
+  const publishActivity = (
+    toolName: string,
+    summary?: string,
+    status = "COMPLETE",
+    details: { argumentsJson?: string; resultJson?: string; error?: string } = {},
+  ) => {
+    const activity = mcpActivity(
+      toolName,
+      summary ?? `ChatGPT completed ${toolName}.`,
+      status,
+      details,
+    );
     promptSessions.append(activePromptTicket, {
       type: "mcp.tool",
       payload: activity.payload,
@@ -158,9 +239,9 @@ export function createMcpServer(
   };
 
   // Instrument every registered MCP action at the registration boundary. This
-  // produces real-time STARTED/COMPLETE/FAILED rows without exposing private
-  // chain-of-thought. Task/monitor/command targets still provide their richer
-  // worker/tool/shell streams through the existing live.bind pipeline.
+  // produces real-time WORK/TOOL CALL/ARGS and RESULT/FAILED rows without
+  // exposing private chain-of-thought or transport-only metadata. Rich
+  // task/monitor/command shell streams continue through the live.bind pipeline.
   const rawRegisterTool = server.registerTool.bind(server);
   (server as unknown as { registerTool: typeof server.registerTool }).registerTool = ((
     name: string,
@@ -171,13 +252,30 @@ export function createMcpServer(
     config as never,
     (async (...args: unknown[]) => {
       const label = config.title?.trim() || name;
-      publishActivity(name, `ChatGPT started: ${label}.`, "STARTED");
+      const input = args.length ? args[0] : {};
+      publishActivity(
+        name,
+        `Working: ${label}.`,
+        "STARTED",
+        { argumentsJson: terminalJson(input) },
+      );
       try {
         const value = await handler(...args);
-        publishActivity(name, `ChatGPT completed: ${label}.`, "COMPLETE");
+        publishActivity(
+          name,
+          `Completed: ${label}.`,
+          "COMPLETE",
+          { resultJson: terminalJson(terminalToolResult(value)) },
+        );
         return value as never;
       } catch (error) {
-        publishActivity(name, `ChatGPT failed: ${label}.`, "FAILED");
+        const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+        publishActivity(
+          name,
+          `Failed: ${label}.`,
+          "FAILED",
+          { error: redactTerminalString(message) },
+        );
         throw error;
       }
     }) as never,

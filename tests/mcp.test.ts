@@ -410,7 +410,11 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
 
   const taskResponse = await client.callTool({
     name: "cptr_start_task",
-    arguments: { workspace_id: "ws-1", prompt: "Run the bounded fixture test", model_id: "model-1" },
+    arguments: {
+      workspace_id: "ws-1",
+      prompt: "Run the bounded fixture test using Bearer top-secret-value",
+      model_id: "model-1",
+    },
   });
   const taskMeta = taskResponse._meta as {
     ui?: { resourceUri?: string };
@@ -422,6 +426,20 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
   assert.ok(taskReplay);
   const taskEvents = taskReplay.events.filter((event) => event.type === "mcp.tool" && event.payload.tool_name === "cptr_start_task");
   assert.deepEqual(taskEvents.map((event) => event.type === "mcp.tool" ? event.payload.status : ""), ["STARTED", "COMPLETE"]);
+  const startedEvent = taskEvents[0];
+  const completedEvent = taskEvents[1];
+  assert.equal(startedEvent?.type, "mcp.tool");
+  assert.equal(completedEvent?.type, "mcp.tool");
+  if (startedEvent?.type === "mcp.tool") {
+    assert.match(startedEvent.payload.arguments_json ?? "", /\"workspace_id\": \"ws-1\"/);
+    assert.match(startedEvent.payload.arguments_json ?? "", /\"model_id\": \"model-1\"/);
+    assert.match(startedEvent.payload.arguments_json ?? "", /Bearer \[REDACTED\]/);
+    assert.equal((startedEvent.payload.arguments_json ?? "").includes("top-secret-value"), false);
+  }
+  if (completedEvent?.type === "mcp.tool") {
+    assert.match(completedEvent.payload.result_json ?? "", /\"id\": \"task-1\"/);
+    assert.equal((completedEvent.payload.result_json ?? "").includes("server-only-token"), false);
+  }
   const taskBind = taskReplay.events.find((event) => event.type === "live.bind");
   assert.equal(taskBind?.type, "live.bind");
   if (taskBind?.type === "live.bind") {

@@ -61,6 +61,9 @@ type PromptEvent = {
     tool_name?: unknown;
     summary?: unknown;
     status?: unknown;
+    arguments_json?: unknown;
+    result_json?: unknown;
+    error?: unknown;
     live?: LiveMetadata;
   };
 };
@@ -112,6 +115,9 @@ function usePromptActivity(
             tool_name: event.payload?.tool_name,
             summary: event.payload?.summary,
             status: event.payload?.status,
+            arguments_json: event.payload?.arguments_json,
+            result_json: event.payload?.result_json,
+            error: event.payload?.error,
           },
         }));
       } else if (event.type === "live.bind" && event.payload?.live) {
