@@ -59,6 +59,39 @@ export const workbenchSessionDeleteConfirmSchema = {
   confirmation_id: z.string().min(1).max(200),
 };
 
+export const workspaceMemoryContextSchema = {
+  workspace_id: z.string().min(1).max(200),
+  refresh: z.boolean().default(false).describe("Set true only when a full bounded workspace-fingerprint verification is needed; false is the low-latency default."),
+};
+export const workspaceMemoryTimelineSchema = {
+  workspace_id: z.string().min(1).max(200),
+  after_sequence: z.number().int().min(0).max(100_000_000).default(0),
+  limit: z.number().int().min(1).max(100).default(50),
+};
+export const workspaceMemoryFactSchema = {
+  workspace_id: z.string().min(1).max(200),
+  content: z.string().min(1).max(1_600).describe("A durable, user-visible workspace fact only. Do not include secrets, raw output, private prompts, or reasoning."),
+  category: z.enum(["architecture", "convention", "decision", "verification", "limitation", "note"]).default("note"),
+  pinned: z.boolean().default(false),
+  paths: z.array(z.string().min(1).max(300)).max(32).default([]),
+  source_event_id: z.string().min(1).max(200).optional(),
+};
+export const workspaceMemoryFactUpdateSchema = {
+  workspace_id: z.string().min(1).max(200),
+  fact_id: z.string().regex(/^wmf_[A-Za-z0-9_-]{16,80}$/),
+  content: z.string().min(1).max(1_600).optional(),
+  pinned: z.boolean().optional(),
+  status: z.enum(["ACTIVE", "STALE", "ARCHIVED"]).optional(),
+};
+export const workspaceMemoryForgetSchema = {
+  workspace_id: z.string().min(1).max(200),
+  fact_id: z.string().regex(/^wmf_[A-Za-z0-9_-]{16,80}$/),
+};
+export const workspaceMemoryClearSchema = {
+  workspace_id: z.string().min(1).max(200),
+  confirm: z.literal(true).describe("Must be true because this permanently deletes all workspace-memory facts and history for this workspace."),
+};
+
 export const startTaskSchema = {
   workspace_id: z.string().min(1).max(200),
   prompt: z.string().min(1).max(100_000),
