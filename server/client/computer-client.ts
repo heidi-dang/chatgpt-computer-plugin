@@ -193,7 +193,8 @@ export class ComputerClient {
   async startTask(input: {
     workspace_id: string;
     prompt: string;
-    model_id: string;
+    model_id?: string;
+    delegate_to_cptr_model?: boolean;
     idempotency_key?: string;
     execution_policy?: {
       allow_file_writes: boolean;
@@ -213,7 +214,8 @@ export class ComputerClient {
   async executeTask(input: {
     workspace_id: string;
     prompt: string;
-    model_id: string;
+    model_id?: string;
+    delegate_to_cptr_model?: boolean;
     wait_seconds?: number;
     idempotency_key?: string;
     execution_policy?: {
@@ -227,7 +229,8 @@ export class ComputerClient {
     const task = await this.startTask({
       workspace_id: input.workspace_id,
       prompt: input.prompt,
-      model_id: input.model_id,
+      ...(input.model_id ? { model_id: input.model_id } : {}),
+      ...(input.delegate_to_cptr_model ? { delegate_to_cptr_model: true } : {}),
       idempotency_key: input.idempotency_key,
       execution_policy: input.execution_policy,
     });
@@ -593,7 +596,8 @@ export class ComputerClient {
     workspace_id: string;
     goal: string;
     acceptance_criteria: string[];
-    model_id: string;
+    model_id?: string;
+    delegate_to_cptr_model?: boolean;
     idempotency_key?: string;
     execution_policy?: {
       allow_file_writes: boolean;

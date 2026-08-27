@@ -454,7 +454,8 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
     arguments: {
       workspace_id: "ws-1",
       prompt: "Run the bounded fixture test using Bearer top-secret-value",
-      model_id: "model-1",
+      model_id: "provider/model-1",
+      delegate_to_cptr_model: true,
     },
   });
   const taskMeta = taskResponse._meta as {
@@ -537,7 +538,8 @@ test("applies byte-equivalent workspace scope to normal MCP task-creation entry 
   const input = {
     workspace_id: "ws-1",
     prompt: "Create CHATGPT_LIVE_WORKBENCH_OK.txt with the requested marker, then wait for steering.",
-    model_id: "heidi-antigravity",
+    model_id: "provider/heidi-antigravity",
+    delegate_to_cptr_model: true,
   };
   await client.callTool({ name: "cptr_start_task", arguments: input });
   await client.callTool({ name: "cptr_execute_task", arguments: { ...input, wait_seconds: 1 } });
@@ -583,11 +585,39 @@ test("preserves an explicitly requested narrow assignment scope", async () => {
   const prompt = "inspection_scope=assignment. Only inspect fixture.txt.";
   await client.callTool({
     name: "cptr_start_task",
-    arguments: { workspace_id: "ws-1", prompt, model_id: "heidi-antigravity" },
+    arguments: { workspace_id: "ws-1", prompt, model_id: "provider/heidi-antigravity", delegate_to_cptr_model: true },
   });
 
   assert.equal(requestBodies.length, 1);
   assert.equal(requestBodies[0]?.prompt, prompt);
+
+  await client.close();
+  await server.close();
+});
+
+test("does not delegate ChatGPT work to a CPTR model without explicit opt-in", async () => {
+  let requestCount = 0;
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "server-only-token",
+    fetchImpl: async () => {
+      requestCount += 1;
+      return new Response(JSON.stringify({}), { status: 200 });
+    },
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const response = await client.callTool({
+    name: "cptr_start_task",
+    arguments: { workspace_id: "ws-1", prompt: "Audit this workspace", model_id: "provider/heidi-antigravity" },
+  });
+
+  assert.equal(response.isError, true);
+  assert.match(JSON.stringify(response.content), /model delegation is opt-in/i);
+  assert.equal(requestCount, 0);
 
   await client.close();
   await server.close();

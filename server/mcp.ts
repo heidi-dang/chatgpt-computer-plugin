@@ -185,6 +185,17 @@ function activityResult<T extends Record<string, unknown>>(value: T, toolName: s
   };
 }
 
+function requireExplicitCptrModelDelegation(input: {
+  model_id?: string;
+  delegate_to_cptr_model?: boolean;
+}): void {
+  if (!input.delegate_to_cptr_model || !input.model_id) {
+    throw new Error(
+      "CPTR model delegation is opt-in. Complete the user's request with ChatGPT and CPTR workspace tools by default; only delegate when the user explicitly requests the named CPTR model.",
+    );
+  }
+}
+
 function recordWorkbenchActivity(
   client: ComputerClient,
   sessionId: string | undefined,
@@ -1172,14 +1183,15 @@ export function createMcpServer(
   server.registerTool(
     "cptr_start_task",
     {
-      title: "Start a CPTR task",
-      description: "Use this when the user explicitly wants CPTR to start an engineering task in a selected workspace. When the user restricts writes, commands, network access, or package installation, encode those restrictions in execution_policy so CPTR enforces them server-side rather than relying on prompt wording.",
+      title: "Delegate to an explicitly requested CPTR model",
+      description: "Do not use this for ordinary CPTR work: ChatGPT must complete the user's request itself by chaining the scoped workspace and coding tools. Use this only when the user explicitly asks to delegate to a named CPTR model. Both model_id and delegate_to_cptr_model=true are required; CPTR never discovers or chooses a model implicitly. When delegating, encode any write, command, network, or package restrictions in execution_policy.",
       inputSchema: startTaskSchema,
       outputSchema: { id: z.string(), status: z.string(), workspace_id: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
     async (input) => {
+      requireExplicitCptrModelDelegation(input);
       const { workbench_session_id, ...taskInput } = input;
       const task = await client.startTask({
         ...taskInput,
@@ -1209,9 +1221,9 @@ export function createMcpServer(
   server.registerTool(
     "cptr_execute_task",
     {
-      title: "Execute a CPTR task now",
+      title: "Execute an explicitly requested CPTR model delegation",
       description:
-        "Use this only when the user explicitly asks ChatGPT to execute a contained task in a selected CPTR workspace. It starts an authorized CPTR task and waits up to 60 seconds for a result. If it remains active, return the task ID and use task-status tools rather than retrying. Encode user restrictions on writes, commands, network access, and package installation in execution_policy so CPTR enforces them server-side. This tool does not grant additional CPTR permissions; CPTR authorization and approval policy remain authoritative.",
+        "Do not use this for ordinary CPTR work: ChatGPT must perform the user's request itself through scoped workspace and coding tools. Use it only when the user explicitly asks CPTR to delegate the contained task to the named model_id, with delegate_to_cptr_model=true. CPTR never discovers or chooses a model implicitly. The call waits at most 60 seconds; durable task status remains available for follow-up.",
       inputSchema: executeTaskSchema,
       outputSchema: {
         task_id: z.string(),
@@ -1227,6 +1239,7 @@ export function createMcpServer(
       _meta: workbenchToolMetadata,
     },
     async (input) => {
+      requireExplicitCptrModelDelegation(input);
       const { workbench_session_id, ...taskInput } = input;
       const task = await client.executeTask({
         ...taskInput,
@@ -1256,14 +1269,15 @@ export function createMcpServer(
   server.registerTool(
     "cptr_monitor_autonomous",
     {
-      title: "Monitor a CPTR engineering goal",
-      description: "Use this to create a persistent CPTR engineering monitor. The monitor continues server-side after the MCP call ends. Encode user restrictions on writes, commands, network access, and package installation in execution_policy; every spawned worker inherits those server-enforced limits.",
+      title: "Delegate an autonomous goal to an explicitly requested CPTR model",
+      description: "Do not use this for ordinary CPTR work: ChatGPT must carry out the user's task through scoped workspace and coding tools. Use it only when the user explicitly requests an autonomous CPTR model delegation and names model_id, with delegate_to_cptr_model=true. CPTR never discovers or chooses a model implicitly; delegated workers still inherit server-enforced execution_policy limits.",
       inputSchema: monitorAutonomousSchema,
       outputSchema: autonomousSummaryOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
     async (input) => {
+      requireExplicitCptrModelDelegation(input);
       const { workbench_session_id, ...monitorInput } = input;
       const monitor = await client.createAutonomous(monitorInput);
       const monitorId = String(monitor.monitor_id ?? monitor.goal_id ?? "");

@@ -462,10 +462,10 @@ const httpServer = createServer(async (req, res) => {
         await handleStatefulInitialize(req, res, body, identity);
         return;
       }
-      // Migration compatibility for a ChatGPT connection created before v0.6.0.
-      // After the one-time connector metadata Refresh, initialize-capable clients
-      // receive an Mcp-Session-Id and all prompt activity remains session-scoped.
-      res.setHeader("X-CPTR-Contract-Refresh", "required-v0.6.0");
+      // Migration compatibility for a ChatGPT connection created before the
+      // current contract. After connector metadata Refresh, initialize-capable
+      // clients receive an Mcp-Session-Id and all prompt activity stays scoped.
+      res.setHeader("X-CPTR-Contract-Refresh", `required-v${CPTR_APP_VERSION}`);
       await handleStatelessCompatibilityRequest(req, res, body);
       return;
     }
