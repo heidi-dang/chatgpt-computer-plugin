@@ -69,18 +69,11 @@ const workbench = await context({
   minify: false,
   define: { "process.env.NODE_ENV": '"development"' },
   outfile: resolve(root, "web/dist/workbench.js"),
-  plugins: [{
-    name: "restart-cptr-server",
-    setup(build) {
-      build.onEnd((result) => {
-        if (result.errors.length === 0) scheduleRestart("Workbench rebuilt");
-      });
-    },
-  }],
 });
 
 await workbench.watch();
-console.log("[dev] watching Workbench sources");
+console.log("[dev] watching Workbench sources; Workbench rebuilds hot-reload in place without restarting MCP");
+startServer("initial startup");
 
 const serverWatcher = watch(serverDirectory, { recursive: true }, (_eventType, filename) => {
   if (!filename || filename.endsWith("~") || filename.includes(".swp")) return;

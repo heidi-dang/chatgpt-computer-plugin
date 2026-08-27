@@ -162,3 +162,28 @@ export const sshCommandCancelSchema = {
   workspace_id: z.string().min(1).max(200),
   command_id: z.string().min(1).max(200),
 };
+
+export const chromeBrowserSchema = {
+  workspace_id: z.string().min(1).max(200),
+  action: z.enum([
+    "status",
+    "navigate",
+    "snapshot",
+    "click",
+    "type",
+    "press_key",
+    "scroll",
+    "screenshot",
+    "close",
+  ]),
+  url: z.string().max(4_096).optional(),
+  ref: z.string().max(64).optional(),
+  text: z.string().max(20_000).optional(),
+  key: z.string().max(128).optional(),
+  modifiers: z.array(z.enum(["Alt", "Control", "Meta", "Shift"])).max(4).default([]),
+  direction: z.enum(["up", "down"]).default("down"),
+  amount: z.number().int().min(1).max(20).default(3),
+  width: z.number().int().min(320).max(3_840).optional(),
+  height: z.number().int().min(240).max(2_160).optional(),
+  allow_network: z.boolean().default(false),
+};

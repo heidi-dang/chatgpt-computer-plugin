@@ -13,6 +13,40 @@ test("forwards the scoped token and returns JSON", async () => {
   assert.equal((seenRequest?.headers as Record<string, string>).Authorization, "Bearer secret");
 });
 
+test("routes managed Chrome control through the existing scoped Control API", async () => {
+  let seenUrl = "";
+  let seenBody: Record<string, unknown> = {};
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seenUrl = String(input);
+      seenBody = JSON.parse(String(init?.body ?? "{}"));
+      return new Response(
+        JSON.stringify({
+          workspace_id: "ws-1",
+          action: "status",
+          status: "ready",
+          managed: true,
+          available: true,
+          active: false,
+          browser: "google-chrome",
+        }),
+        { status: 200 },
+      );
+    },
+  });
+
+  const response = await client.controlChromeBrowser({
+    workspace_id: "ws-1",
+    action: "status",
+  });
+
+  assert.equal(seenUrl, "http://cptr.test/api/control/v1/workspaces/ws-1/browser");
+  assert.deepEqual(seenBody, { action: "status" });
+  assert.equal(response.managed, true);
+});
+
 test("normalizes CPTR errors without exposing credentials", async () => {
   const client = new ComputerClient({
     baseUrl: "http://cptr.test",

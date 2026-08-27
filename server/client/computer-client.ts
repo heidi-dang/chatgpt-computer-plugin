@@ -426,6 +426,27 @@ export class ComputerClient {
     );
   }
 
+  async controlChromeBrowser(input: {
+    workspace_id: string;
+    action: "status" | "navigate" | "snapshot" | "click" | "type" | "press_key" | "scroll" | "screenshot" | "close";
+    url?: string;
+    ref?: string;
+    text?: string;
+    key?: string;
+    modifiers?: Array<"Alt" | "Control" | "Meta" | "Shift">;
+    direction?: "up" | "down";
+    amount?: number;
+    width?: number;
+    height?: number;
+    allow_network?: boolean;
+  }): Promise<Record<string, unknown>> {
+    const { workspace_id, ...body } = input;
+    return this.request(`/workspaces/${encodeURIComponent(workspace_id)}/browser`, {
+      method: "POST",
+      body,
+    });
+  }
+
   async createAutonomous(input: {
     workspace_id: string;
     goal: string;

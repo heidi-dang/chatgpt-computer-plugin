@@ -14,13 +14,14 @@ function registeredToolBlocks(): Array<{ name: string; body: string }> {
 
 test("every registered CPTR MCP tool emits Workbench activity metadata", () => {
   const blocks = registeredToolBlocks();
-  assert.equal(blocks.length, 36);
+  assert.equal(blocks.length, 37);
   const missing = blocks
     .filter(({ body }) => ![
       "activityResult(",
       "workbenchResult(",
       "renderWorkbenchResult(",
       "initialWorkbenchResult(",
+      "publishActivity(",
     ].some((helper) => body.includes(helper)))
     .map(({ name }) => name);
 

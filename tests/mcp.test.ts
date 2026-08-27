@@ -4,6 +4,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ComputerClient } from "../server/client/computer-client.js";
 import { MCP_CONTRACT_TOOL_COUNT, MCP_CONTRACT_VERSION, createMcpServer } from "../server/mcp.js";
+import { PromptTerminalStore } from "../server/prompt-terminal.js";
 
 test("advertises dedicated autonomous tools with accurate annotations", async () => {
   const computer = new ComputerClient({
@@ -38,6 +39,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_ssh_run_command",
       "cptr_ssh_get_command",
       "cptr_ssh_cancel_command",
+      "cptr_chrome_browser",
       "cptr_list_workspaces",
       "cptr_get_workspace",
       "cptr_start_task",
@@ -75,6 +77,9 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_ssh_run_command")?.annotations?.openWorldHint, true);
   assert.equal(tools.get("cptr_ssh_get_command")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_ssh_cancel_command")?.annotations?.destructiveHint, true);
+  assert.equal(tools.get("cptr_chrome_browser")?.annotations?.readOnlyHint, false);
+  assert.equal(tools.get("cptr_chrome_browser")?.annotations?.openWorldHint, true);
+  assert.notEqual(tools.get("cptr_chrome_browser")?.inputSchema.properties?.action, undefined);
   assert.equal(tools.get("cptr_execute_task")?.annotations?.readOnlyHint, false);
   assert.equal(tools.get("cptr_execute_task")?.annotations?.destructiveHint, false);
   assert.equal(tools.get("cptr_execute_task")?.annotations?.openWorldHint, true);
@@ -104,12 +109,65 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   const bindMeta = tools.get("cptr_render_live_terminal")?._meta as { ui?: { resourceUri?: string } } | undefined;
   assert.equal(bindMeta?.ui, undefined);
   assert.equal(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.action, undefined);
-  assert.equal(MCP_CONTRACT_VERSION, "0.5.0");
-  assert.equal(MCP_CONTRACT_TOOL_COUNT, 36);
+  assert.equal(MCP_CONTRACT_VERSION, "0.7.0");
+  assert.equal(MCP_CONTRACT_TOOL_COUNT, 37);
   assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
   }
+
+  await client.close();
+  await server.close();
+});
+
+test("invokes managed Chrome control through the ChatGPT-visible MCP tool", async () => {
+  const seen: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async (input, init) => {
+      seen.push({
+        url: String(input),
+        body: init?.body ? JSON.parse(String(init.body)) : {},
+      });
+      return new Response(
+        JSON.stringify({
+          workspace_id: "ws-1",
+          action: "status",
+          status: "ready",
+          managed: true,
+          available: true,
+          active: false,
+          browser: "google-chrome",
+        }),
+        { status: 200 },
+      );
+    },
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const response = await client.callTool({
+    name: "cptr_chrome_browser",
+    arguments: { workspace_id: "ws-1", action: "status" },
+  });
+
+  assert.equal(response.isError, undefined);
+  assert.equal((response.structuredContent as { status?: string } | undefined)?.status, "ready");
+  assert.deepEqual(seen, [
+    {
+      url: "http://cptr.test/api/control/v1/workspaces/ws-1/browser",
+      body: {
+        action: "status",
+        modifiers: [],
+        direction: "down",
+        amount: 3,
+        allow_network: false,
+      },
+    },
+  ]);
 
   await client.close();
   await server.close();
@@ -201,13 +259,10 @@ test("invokes every direct-coding tool through MCP without a CPTR model input", 
   for (const name of ["cptr_code_run_command", "cptr_code_get_command", "cptr_code_cancel_command"]) {
     const meta = results.get(name)?._meta as {
       ui?: { resourceUri?: string };
-      "cptr/live"?: { targetType?: string; targetId?: string; workspaceId?: string; ticket?: string };
+      "cptr/live"?: unknown;
     } | undefined;
     assert.equal(meta?.ui, undefined, `${name} must remain data-only and must not mount another terminal widget`);
-    assert.equal(meta?.["cptr/live"]?.targetType, "command");
-    assert.equal(meta?.["cptr/live"]?.targetId, "command-1");
-    assert.equal(meta?.["cptr/live"]?.workspaceId, "ws-1");
-    assert.ok(meta?.["cptr/live"]?.ticket);
+    assert.equal(meta?.["cptr/live"], undefined, `${name} must bind through the already-open prompt terminal instead of returning another live widget`);
   }
 
   assert.equal(seen.length, 12);
@@ -269,12 +324,9 @@ test("routes dedicated SSH tools through the SSH control API and live command ta
     arguments: { workspace_id: "ws-1", command_id: "ssh-command-1" },
   });
 
-  const live = run._meta as {
-    "cptr/live"?: { targetType?: string; targetId?: string; workspaceId?: string };
-  } | undefined;
-  assert.equal(live?.["cptr/live"]?.targetType, "command");
-  assert.equal(live?.["cptr/live"]?.targetId, "ssh-command-1");
-  assert.equal(live?.["cptr/live"]?.workspaceId, "ws-1");
+  const live = run._meta as { ui?: unknown; "cptr/live"?: unknown } | undefined;
+  assert.equal(live?.ui, undefined);
+  assert.equal(live?.["cptr/live"], undefined);
 
   assert.equal(seen.length, 4);
   assert.equal(seen[0].url.endsWith("/workspaces/ws-1/ssh/hosts"), true);
@@ -297,7 +349,11 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
     token: "server-only-token",
     fetchImpl: async () => new Response(JSON.stringify({ id: "task-1", status: "RUNNING", workspace_id: "ws-1" }), { status: 200 }),
   });
-  const server = createMcpServer(computer, { widgetBundle: "console.log('bundle')" });
+  const promptSessions = new PromptTerminalStore();
+  const server = createMcpServer(computer, {
+    widgetBundle: "console.log('bundle')",
+    promptSessions,
+  });
   const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
@@ -307,10 +363,13 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
     ui?: { resourceUri?: string };
     "cptr/live"?: unknown;
     "cptr/activity"?: { type?: string };
+    "cptr/prompt"?: { ticket?: string };
   } | undefined;
   assert.equal(initialMeta?.ui, undefined);
   assert.equal(initialMeta?.["cptr/live"], undefined);
   assert.equal(initialMeta?.["cptr/activity"]?.type, "mcp.tool");
+  const promptTicket = initialMeta?.["cptr/prompt"]?.ticket;
+  assert.ok(promptTicket);
 
   const taskResponse = await client.callTool({
     name: "cptr_start_task",
@@ -318,13 +377,18 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
   });
   const taskMeta = taskResponse._meta as {
     ui?: { resourceUri?: string };
-    "cptr/live"?: { ticket?: string; streamUrl?: string; snapshotUrl?: string; renewUrl?: string; workspaceId?: string };
-    "cptr/activity"?: { type?: string };
+    "cptr/live"?: unknown;
   } | undefined;
   assert.equal(taskMeta?.ui, undefined);
-  assert.ok(taskMeta?.["cptr/live"]?.ticket);
-  assert.equal(taskMeta?.["cptr/live"]?.workspaceId, "ws-1");
-  assert.equal(taskMeta?.["cptr/activity"]?.type, "mcp.tool");
+  assert.equal(taskMeta?.["cptr/live"], undefined);
+  const taskReplay = promptSessions.replay(promptTicket, 0);
+  assert.ok(taskReplay);
+  const taskBind = taskReplay.events.find((event) => event.type === "live.bind");
+  assert.equal(taskBind?.type, "live.bind");
+  if (taskBind?.type === "live.bind") {
+    assert.equal(taskBind.payload.live.targetType, "task");
+    assert.equal(taskBind.payload.live.targetId, "task-1");
+  }
 
   const response = await client.callTool({
     name: "cptr_render_live_terminal",
@@ -333,18 +397,18 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
   const text = JSON.stringify(response.content);
   assert.match(text, /task-1/);
   assert.equal(text.includes("server-only-token"), false);
-  const meta = response._meta as {
-    ui?: { resourceUri?: string };
-    "cptr/live"?: { ticket?: string; streamUrl?: string; snapshotUrl?: string; renewUrl?: string; workspaceId?: string };
-  } | undefined;
+  const meta = response._meta as { ui?: unknown; "cptr/live"?: unknown } | undefined;
   assert.equal(meta?.ui, undefined);
-  assert.ok(meta?.["cptr/live"]?.ticket);
-  assert.ok(meta?.["cptr/live"]?.snapshotUrl);
-  assert.ok(meta?.["cptr/live"]?.renewUrl);
-  assert.equal(meta?.["cptr/live"]?.workspaceId, "ws-1");
-  assert.equal(String(meta?.["cptr/live"]?.streamUrl).includes(meta?.["cptr/live"]?.ticket ?? ""), false);
-  assert.equal(String(meta?.["cptr/live"]?.snapshotUrl).includes(meta?.["cptr/live"]?.ticket ?? ""), false);
-  assert.equal(String(meta?.["cptr/live"]?.renewUrl).includes(meta?.["cptr/live"]?.ticket ?? ""), false);
+  assert.equal(meta?.["cptr/live"], undefined);
+  const renderReplay = promptSessions.replay(promptTicket, taskReplay.last_sequence);
+  assert.ok(renderReplay);
+  const renderBind = renderReplay.events.find((event) => event.type === "live.bind");
+  assert.equal(renderBind?.type, "live.bind");
+  if (renderBind?.type === "live.bind") {
+    assert.equal(renderBind.payload.live.targetType, "task");
+    assert.equal(renderBind.payload.live.targetId, "task-1");
+    assert.equal(renderBind.payload.live.ticket.includes("server-only-token"), false);
+  }
 
   await client.close();
   await server.close();

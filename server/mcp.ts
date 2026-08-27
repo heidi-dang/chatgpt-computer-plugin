@@ -1,10 +1,11 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ComputerClient } from "./client/computer-client.js";
 import { LiveTicketStore, type LiveTarget } from "./live-tickets.js";
+import { PromptTerminalStore } from "./prompt-terminal.js";
 import { WORKBENCH_RESOURCE_URI, createWorkbenchResource } from "./ui/workbench-resource.js";
 import { z } from "zod";
-export const MCP_CONTRACT_VERSION = "0.5.0";
-export const MCP_CONTRACT_TOOL_COUNT = 36;
+export const MCP_CONTRACT_VERSION = "0.7.0";
+export const MCP_CONTRACT_TOOL_COUNT = 37;
 
 import {
   approveAutonomousSchema,
@@ -19,6 +20,7 @@ import {
   codingReadSchema,
   codingSearchSchema,
   codingWriteSchema,
+  chromeBrowserSchema,
   executeTaskSchema,
   messageSchema,
   monitorAutonomousSchema,
@@ -127,19 +129,69 @@ const autonomousSummaryOutputSchema = {
 
 export function createMcpServer(
   client: ComputerClient,
-  options: { tickets?: LiveTicketStore; widgetBundle?: string; widgetStyles?: string; connectDomain?: string } = {},
+  options: {
+    tickets?: LiveTicketStore;
+    promptSessions?: PromptTerminalStore;
+    widgetBundle?: string;
+    widgetStyles?: string;
+    widgetAssets?: () => { bundle: string; styles: string };
+    connectDomain?: string;
+  } = {},
 ): McpServer {
   const server = new McpServer({ name: "chatgpt-computer-plugin", version: MCP_CONTRACT_VERSION });
   const tickets = options.tickets ?? new LiveTicketStore();
+  const promptSessions = options.promptSessions ?? new PromptTerminalStore();
+  let activePromptTicket: string | null = null;
+
+  const publishActivity = (toolName: string, summary?: string, status = "COMPLETE") => {
+    const activity = mcpActivity(toolName, summary ?? `ChatGPT completed ${toolName}.`, status);
+    promptSessions.append(activePromptTicket, {
+      type: "mcp.tool",
+      payload: activity.payload,
+    });
+    return activity;
+  };
+
+  const activityResult = <T extends Record<string, unknown>>(value: T, toolName: string, summary?: string) => {
+    publishActivity(toolName, summary);
+    return result(value);
+  };
+
+  const initialWorkbenchResult = <T extends Record<string, unknown>>(value: T, toolName: string) =>
+    activityResult(
+      value,
+      toolName,
+      "CPTR Workbench context is ready; all later CPTR activity is attached to the current prompt terminal.",
+    );
+
+  const workbenchResult = <T extends Record<string, unknown>>(
+    value: T,
+    target: LiveTarget,
+    toolName = "cptr_render_live_terminal",
+  ) => {
+    const live = tickets.issue(target);
+    promptSessions.append(activePromptTicket, {
+      type: "live.bind",
+      payload: { live },
+    });
+    publishActivity(toolName, `ChatGPT called ${toolName}; the current prompt terminal was bound to live CPTR activity.`);
+    return result(value);
+  };
   server.registerResource(
     "cptr-live-workbench",
     WORKBENCH_RESOURCE_URI,
     {},
-    async () => createWorkbenchResource(
-      options.widgetBundle ?? "document.body.textContent = 'CPTR Live Workbench';",
-      options.connectDomain,
-      options.widgetStyles,
-    ),
+    async () => {
+      const assets = options.widgetAssets?.() ?? {
+        bundle: options.widgetBundle ?? "document.body.textContent = 'CPTR Live Workbench';",
+        styles: options.widgetStyles ?? "",
+      };
+      return createWorkbenchResource(
+        assets.bundle,
+        options.connectDomain,
+        assets.styles,
+      );
+    },
   );
 
   server.registerTool(
@@ -153,14 +205,26 @@ export function createMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: openWorkbenchToolMetadata,
     },
-    async () => initialWorkbenchResult(
-      {
+    async () => {
+      const prompt = promptSessions.open();
+      activePromptTicket = prompt.ticket;
+      const value = {
         status: "READY",
         title: "CPTR computer activity",
-        initial_summary: "CPTR Workbench context is ready. Create a task, monitor, or command, then render exactly one Live Terminal for that target.",
-      },
-      "cptr_open_live_workbench",
-    ),
+        initial_summary: "CPTR Workbench is attached to this prompt. Later CPTR tool calls update this same terminal without creating another widget.",
+      };
+      const activity = publishActivity(
+        "cptr_open_live_workbench",
+        "CPTR Live Terminal opened once for the current prompt.",
+      );
+      return {
+        ...result(value),
+        _meta: {
+          "cptr/prompt": prompt,
+          "cptr/activity": activity,
+        },
+      };
+    },
   );
 
   server.registerTool(
@@ -351,7 +415,6 @@ export function createMcpServer(
       return workbenchResult(
         { ...command, workspace_id: input.workspace_id },
         { targetType: "command", targetId: command.command_id, workspaceId: input.workspace_id },
-        tickets,
         "cptr_code_run_command",
       );
     },
@@ -380,7 +443,6 @@ export function createMcpServer(
       return workbenchResult(
         { ...command, workspace_id: input.workspace_id },
         { targetType: "command", targetId: input.command_id, workspaceId: input.workspace_id },
-        tickets,
         "cptr_code_get_command",
       );
     },
@@ -409,7 +471,6 @@ export function createMcpServer(
       return workbenchResult(
         { ...command, workspace_id: input.workspace_id },
         { targetType: "command", targetId: input.command_id, workspaceId: input.workspace_id },
-        tickets,
         "cptr_code_cancel_command",
       );
     },
@@ -456,7 +517,6 @@ export function createMcpServer(
       return workbenchResult(
         command,
         { targetType: "command", targetId: command.command_id, workspaceId: input.workspace_id },
-        tickets,
         "cptr_ssh_run_command",
       );
     },
@@ -486,7 +546,6 @@ export function createMcpServer(
       return workbenchResult(
         command,
         { targetType: "command", targetId: input.command_id, workspaceId: input.workspace_id },
-        tickets,
         "cptr_ssh_get_command",
       );
     },
@@ -516,10 +575,42 @@ export function createMcpServer(
       return workbenchResult(
         command,
         { targetType: "command", targetId: input.command_id, workspaceId: input.workspace_id },
-        tickets,
         "cptr_ssh_cancel_command",
       );
     },
+  );
+
+  server.registerTool(
+    "cptr_chrome_browser",
+    {
+      title: "Control CPTR managed Chrome",
+      description:
+        "Control CPTR's isolated managed Chrome browser through one action-based tool. Use status to check availability; navigate for an explicit http/https URL; snapshot to obtain bounded accessibility refs; click/type with refs from the latest snapshot; press_key or scroll for interaction; screenshot to save a workspace-confined PNG; and close to end the scoped browser session. External navigation requires allow_network=true and CPTR's command:external scope. This tool never attaches to the user's normal Chrome profile by default and never returns cookies, auth headers, browser storage, or typed secret values.",
+      inputSchema: chromeBrowserSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        action: z.string(),
+        status: z.string(),
+        managed: z.boolean().optional(),
+        available: z.boolean().optional(),
+        active: z.boolean().optional(),
+        browser: z.string().optional(),
+        url: z.string().optional(),
+        title: z.string().optional(),
+        snapshot: z.string().optional(),
+        truncated: z.boolean().optional(),
+        screenshot_path: z.string().optional(),
+        bytes: z.number().int().optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) =>
+      activityResult(
+        await client.controlChromeBrowser(input),
+        "cptr_chrome_browser",
+        `ChatGPT used managed Chrome action: ${input.action}.`,
+      ),
   );
 
   server.registerTool(
@@ -540,7 +631,6 @@ export function createMcpServer(
       return workbenchResult(
         task,
         { targetType: "task", targetId: task.id },
-        tickets,
         "cptr_start_task",
       );
     },
@@ -574,7 +664,6 @@ export function createMcpServer(
       return workbenchResult(
         task,
         { targetType: "task", targetId: task.task_id },
-        tickets,
         "cptr_execute_task",
       );
     },
@@ -597,7 +686,6 @@ export function createMcpServer(
       return workbenchResult(
         monitor,
         { targetType: "monitor", targetId: monitorId },
-        tickets,
         "cptr_monitor_autonomous",
       );
     },
@@ -640,7 +728,6 @@ export function createMcpServer(
             initial_summary: `Task ${target_id} is ${task.status}.`,
           },
           { targetType: target_type, targetId: target_id },
-          tickets,
           "cptr_render_live_terminal",
         );
       }
@@ -662,7 +749,6 @@ export function createMcpServer(
             initial_summary: `Command ${target_id} is ${command.status}.`,
           },
           { targetType: "command", targetId: target_id, workspaceId: workspace_id },
-          tickets,
           "cptr_render_live_terminal",
         );
       }
@@ -677,7 +763,6 @@ export function createMcpServer(
           initial_summary: `Monitor ${target_id} is ${status}.`,
         },
         { targetType: target_type, targetId: target_id },
-        tickets,
         "cptr_render_live_terminal",
       );
     },
