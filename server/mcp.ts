@@ -187,11 +187,18 @@ function activityResult<T extends Record<string, unknown>>(value: T, toolName: s
 
 function requireExplicitCptrModelDelegation(input: {
   model_id?: string;
-  delegate_to_cptr_model?: boolean;
+  prompt?: string;
+  goal?: string;
 }): void {
-  if (!input.delegate_to_cptr_model || !input.model_id) {
+  const delegationText = input.prompt ?? input.goal ?? "";
+  if (!/(^|[^\w:])allow:delegation([^\w:]|$)/i.test(delegationText)) {
     throw new Error(
-      "CPTR model delegation is opt-in. Complete the user's request with ChatGPT and CPTR workspace tools by default; only delegate when the user explicitly requests the named CPTR model.",
+      "CPTR model delegation is disabled by default. Use CPTR coding tools for normal work; only delegate when the user includes the literal allow:delegation marker in the delegated task or goal.",
+    );
+  }
+  if (!input.model_id) {
+    throw new Error(
+      "CPTR model delegation requires the user to name a fully qualified provider/model or agent:profile/model.",
     );
   }
 }
@@ -1184,7 +1191,7 @@ export function createMcpServer(
     "cptr_start_task",
     {
       title: "Delegate to an explicitly requested CPTR model",
-      description: "Do not use this for ordinary CPTR work: ChatGPT must complete the user's request itself by chaining the scoped workspace and coding tools. Use this only when the user explicitly asks to delegate to a named CPTR model. Both model_id and delegate_to_cptr_model=true are required; CPTR never discovers or chooses a model implicitly. When delegating, encode any write, command, network, or package restrictions in execution_policy.",
+      description: "Do not use this for ordinary CPTR work: ChatGPT must complete the user's request itself by chaining the scoped workspace and coding tools. Use this only when the user explicitly asks to delegate to a named CPTR model. The delegated task text must include the literal allow:delegation marker and name model_id; CPTR never discovers or chooses a model implicitly. When delegating, encode any write, command, network, or package restrictions in execution_policy.",
       inputSchema: startTaskSchema,
       outputSchema: { id: z.string(), status: z.string(), workspace_id: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
@@ -1223,7 +1230,7 @@ export function createMcpServer(
     {
       title: "Execute an explicitly requested CPTR model delegation",
       description:
-        "Do not use this for ordinary CPTR work: ChatGPT must perform the user's request itself through scoped workspace and coding tools. Use it only when the user explicitly asks CPTR to delegate the contained task to the named model_id, with delegate_to_cptr_model=true. CPTR never discovers or chooses a model implicitly. The call waits at most 60 seconds; durable task status remains available for follow-up.",
+        "Do not use this for ordinary CPTR work: ChatGPT must perform the user's request itself through scoped workspace and coding tools. Use it only when the user explicitly asks CPTR to delegate the contained task, includes the literal allow:delegation marker, and names model_id. CPTR never discovers or chooses a model implicitly. The call waits at most 60 seconds; durable task status remains available for follow-up.",
       inputSchema: executeTaskSchema,
       outputSchema: {
         task_id: z.string(),
@@ -1270,7 +1277,7 @@ export function createMcpServer(
     "cptr_monitor_autonomous",
     {
       title: "Delegate an autonomous goal to an explicitly requested CPTR model",
-      description: "Do not use this for ordinary CPTR work: ChatGPT must carry out the user's task through scoped workspace and coding tools. Use it only when the user explicitly requests an autonomous CPTR model delegation and names model_id, with delegate_to_cptr_model=true. CPTR never discovers or chooses a model implicitly; delegated workers still inherit server-enforced execution_policy limits.",
+      description: "Do not use this for ordinary CPTR work: ChatGPT must carry out the user's task through scoped workspace and coding tools. Use it only when the user explicitly requests an autonomous CPTR model delegation, includes the literal allow:delegation marker, and names model_id. CPTR never discovers or chooses a model implicitly; delegated workers still inherit server-enforced execution_policy limits.",
       inputSchema: monitorAutonomousSchema,
       outputSchema: autonomousSummaryOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },

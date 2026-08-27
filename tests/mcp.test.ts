@@ -453,9 +453,8 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
     name: "cptr_start_task",
     arguments: {
       workspace_id: "ws-1",
-      prompt: "Run the bounded fixture test using Bearer top-secret-value",
+      prompt: "Run the bounded fixture test allow:delegation using Bearer top-secret-value",
       model_id: "provider/model-1",
-      delegate_to_cptr_model: true,
     },
   });
   const taskMeta = taskResponse._meta as {
@@ -474,7 +473,7 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
   assert.equal(completedEvent?.type, "mcp.tool");
   if (startedEvent?.type === "mcp.tool") {
     assert.match(startedEvent.payload.arguments_json ?? "", /\"workspace_id\": \"ws-1\"/);
-    assert.match(startedEvent.payload.arguments_json ?? "", /\"model_id\": \"model-1\"/);
+    assert.match(startedEvent.payload.arguments_json ?? "", /\"model_id\": \"provider\/model-1\"/);
     assert.match(startedEvent.payload.arguments_json ?? "", /Bearer \[REDACTED\]/);
     assert.equal((startedEvent.payload.arguments_json ?? "").includes("top-secret-value"), false);
   }
@@ -537,9 +536,8 @@ test("applies byte-equivalent workspace scope to normal MCP task-creation entry 
 
   const input = {
     workspace_id: "ws-1",
-    prompt: "Create CHATGPT_LIVE_WORKBENCH_OK.txt with the requested marker, then wait for steering.",
+    prompt: "Create CHATGPT_LIVE_WORKBENCH_OK.txt with the requested marker, then wait for steering. allow:delegation",
     model_id: "provider/heidi-antigravity",
-    delegate_to_cptr_model: true,
   };
   await client.callTool({ name: "cptr_start_task", arguments: input });
   await client.callTool({ name: "cptr_execute_task", arguments: { ...input, wait_seconds: 1 } });
@@ -582,10 +580,10 @@ test("preserves an explicitly requested narrow assignment scope", async () => {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
-  const prompt = "inspection_scope=assignment. Only inspect fixture.txt.";
+  const prompt = "inspection_scope=assignment. Only inspect fixture.txt. allow:delegation";
   await client.callTool({
     name: "cptr_start_task",
-    arguments: { workspace_id: "ws-1", prompt, model_id: "provider/heidi-antigravity", delegate_to_cptr_model: true },
+    arguments: { workspace_id: "ws-1", prompt, model_id: "provider/heidi-antigravity" },
   });
 
   assert.equal(requestBodies.length, 1);
@@ -616,7 +614,7 @@ test("does not delegate ChatGPT work to a CPTR model without explicit opt-in", a
   });
 
   assert.equal(response.isError, true);
-  assert.match(JSON.stringify(response.content), /model delegation is opt-in/i);
+  assert.match(JSON.stringify(response.content), /allow:delegation/i);
   assert.equal(requestCount, 0);
 
   await client.close();

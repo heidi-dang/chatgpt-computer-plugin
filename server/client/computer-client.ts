@@ -194,7 +194,6 @@ export class ComputerClient {
     workspace_id: string;
     prompt: string;
     model_id?: string;
-    delegate_to_cptr_model?: boolean;
     idempotency_key?: string;
     execution_policy?: {
       allow_file_writes: boolean;
@@ -230,7 +229,6 @@ export class ComputerClient {
       workspace_id: input.workspace_id,
       prompt: input.prompt,
       ...(input.model_id ? { model_id: input.model_id } : {}),
-      ...(input.delegate_to_cptr_model ? { delegate_to_cptr_model: true } : {}),
       idempotency_key: input.idempotency_key,
       execution_policy: input.execution_policy,
     });
@@ -597,7 +595,6 @@ export class ComputerClient {
     goal: string;
     acceptance_criteria: string[];
     model_id?: string;
-    delegate_to_cptr_model?: boolean;
     idempotency_key?: string;
     execution_policy?: {
       allow_file_writes: boolean;
