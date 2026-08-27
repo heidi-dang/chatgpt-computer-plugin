@@ -38,7 +38,10 @@ test("serves update status and emits best-effort MCP tool-list change notificati
   assert.match(serverSource, /CPTR_NOTIFY_TOOL_LIST_CHANGED/);
 });
 
-test("Workbench exposes refresh instructions, release notes, and post-refresh verification", () => {
+test("Workbench resolves update status through the MCP action before the plugin-origin HTTP fallback", () => {
+  assert.match(widgetSource, /callTool\("cptr_plugin_update", \{ action: "status" \}\)/);
+  assert.match(widgetSource, /if \(!manifestUrl\) throw toolError/);
+  assert.match(widgetSource, /return fetchManifest\(manifestUrl, signal\)/);
   assert.match(widgetSource, /Update available/);
   assert.match(widgetSource, /Verify update/);
   assert.match(widgetSource, /What’s new/);

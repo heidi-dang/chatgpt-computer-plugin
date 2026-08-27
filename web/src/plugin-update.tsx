@@ -20,16 +20,51 @@ export type PluginUpdateManifest = {
 };
 
 type UpdatePhase = "checking" | "current" | "update_available" | "error";
-
 type CallTool = (name: string, args: Record<string, unknown>) => Promise<unknown>;
 
 export type PluginUpdateCenterProps = {
   callTool: CallTool;
+  manifestUrl?: string;
   onStatus?: (message: string) => void;
 };
 
-async function fetchManifest(signal?: AbortSignal): Promise<PluginUpdateManifest> {
-  const response = await fetch(new URL("/plugin/update", window.location.href), {
+function findManifest(value: unknown): PluginUpdateManifest | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.product === "string" &&
+    typeof record.version === "string" &&
+    typeof record.schema_revision === "string" &&
+    typeof record.contract_version === "string" &&
+    typeof record.tool_count === "number" &&
+    Array.isArray(record.changes) &&
+    Array.isArray(record.refresh_path) &&
+    record.verification && typeof record.verification === "object"
+  ) {
+    return record as unknown as PluginUpdateManifest;
+  }
+  for (const key of ["structuredContent", "result", "toolResult", "data", "value"]) {
+    const found = findManifest(record[key]);
+    if (found) return found;
+  }
+  if (Array.isArray(record.content)) {
+    for (const item of record.content) {
+      if (!item || typeof item !== "object") continue;
+      const text = (item as Record<string, unknown>).text;
+      if (typeof text !== "string") continue;
+      try {
+        const found = findManifest(JSON.parse(text));
+        if (found) return found;
+      } catch {
+        // Ignore non-JSON text content.
+      }
+    }
+  }
+  return null;
+}
+
+async function fetchManifest(url: string, signal?: AbortSignal): Promise<PluginUpdateManifest> {
+  const response = await fetch(url, {
     method: "GET",
     headers: { Accept: "application/json" },
     cache: "no-store",
@@ -39,7 +74,7 @@ async function fetchManifest(signal?: AbortSignal): Promise<PluginUpdateManifest
   return response.json() as Promise<PluginUpdateManifest>;
 }
 
-export function PluginUpdateCenter({ callTool, onStatus }: PluginUpdateCenterProps) {
+export function PluginUpdateCenter({ callTool, manifestUrl, onStatus }: PluginUpdateCenterProps) {
   const [manifest, setManifest] = useState<PluginUpdateManifest | null>(null);
   const [phase, setPhase] = useState<UpdatePhase>("checking");
   const [showNotes, setShowNotes] = useState(false);
@@ -62,13 +97,25 @@ export function PluginUpdateCenter({ callTool, onStatus }: PluginUpdateCenterPro
     }
   }, [callTool, onStatus]);
 
+  const loadManifest = useCallback(async (signal?: AbortSignal): Promise<PluginUpdateManifest> => {
+    try {
+      const toolResult = await callTool("cptr_plugin_update", { action: "status" });
+      const fromTool = findManifest(toolResult);
+      if (fromTool) return fromTool;
+      throw new Error("plugin update tool returned no manifest");
+    } catch (toolError) {
+      if (!manifestUrl) throw toolError;
+      return fetchManifest(manifestUrl, signal);
+    }
+  }, [callTool, manifestUrl]);
+
   useEffect(() => {
     const controller = new AbortController();
     let disposed = false;
 
     const refresh = async () => {
       try {
-        const next = await fetchManifest(controller.signal);
+        const next = await loadManifest(controller.signal);
         if (disposed) return;
         setManifest(next);
         if (lastRevision.current !== next.schema_revision) {
@@ -88,7 +135,7 @@ export function PluginUpdateCenter({ callTool, onStatus }: PluginUpdateCenterPro
       controller.abort();
       window.clearInterval(timer);
     };
-  }, [verify]);
+  }, [loadManifest, verify]);
 
   const copySteps = async () => {
     if (!manifest) return;
@@ -105,7 +152,7 @@ export function PluginUpdateCenter({ callTool, onStatus }: PluginUpdateCenterPro
     return <aside className="plugin-update plugin-update-error" role="status">
       <div>
         <strong>Update status unavailable</strong>
-        <span>CPTR could not read the current release manifest.</span>
+        <span>CPTR could not read the release manifest through the update action or same-origin fallback.</span>
       </div>
     </aside>;
   }

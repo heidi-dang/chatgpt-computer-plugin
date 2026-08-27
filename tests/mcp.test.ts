@@ -420,12 +420,16 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
   assert.equal(taskMeta?.["cptr/live"], undefined);
   const taskReplay = promptSessions.replay(promptTicket, 0);
   assert.ok(taskReplay);
+  const taskEvents = taskReplay.events.filter((event) => event.type === "mcp.tool" && event.payload.tool_name === "cptr_start_task");
+  assert.deepEqual(taskEvents.map((event) => event.type === "mcp.tool" ? event.payload.status : ""), ["STARTED", "COMPLETE"]);
   const taskBind = taskReplay.events.find((event) => event.type === "live.bind");
   assert.equal(taskBind?.type, "live.bind");
   if (taskBind?.type === "live.bind") {
     assert.equal(taskBind.payload.live.targetType, "task");
     assert.equal(taskBind.payload.live.targetId, "task-1");
   }
+  assert.ok(taskEvents[0]!.sequence < taskBind!.sequence, "tool start must stream before target binding");
+  assert.ok(taskBind!.sequence < taskEvents[1]!.sequence, "tool completion must stream after target binding");
 
   const response = await client.callTool({
     name: "cptr_render_live_terminal",

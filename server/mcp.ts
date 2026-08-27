@@ -157,29 +157,53 @@ export function createMcpServer(
     return activity;
   };
 
-  const activityResult = <T extends Record<string, unknown>>(value: T, toolName: string, summary?: string) => {
-    publishActivity(toolName, summary);
-    return result(value);
-  };
+  // Instrument every registered MCP action at the registration boundary. This
+  // produces real-time STARTED/COMPLETE/FAILED rows without exposing private
+  // chain-of-thought. Task/monitor/command targets still provide their richer
+  // worker/tool/shell streams through the existing live.bind pipeline.
+  const rawRegisterTool = server.registerTool.bind(server);
+  (server as unknown as { registerTool: typeof server.registerTool }).registerTool = ((
+    name: string,
+    config: { title?: string },
+    handler: (...args: unknown[]) => unknown,
+  ) => rawRegisterTool(
+    name as never,
+    config as never,
+    (async (...args: unknown[]) => {
+      const label = config.title?.trim() || name;
+      publishActivity(name, `ChatGPT started: ${label}.`, "STARTED");
+      try {
+        const value = await handler(...args);
+        publishActivity(name, `ChatGPT completed: ${label}.`, "COMPLETE");
+        return value as never;
+      } catch (error) {
+        publishActivity(name, `ChatGPT failed: ${label}.`, "FAILED");
+        throw error;
+      }
+    }) as never,
+  )) as typeof server.registerTool;
 
-  const initialWorkbenchResult = <T extends Record<string, unknown>>(value: T, toolName: string) =>
-    activityResult(
-      value,
-      toolName,
-      "CPTR Workbench context is ready; all later CPTR activity is attached to the current prompt terminal.",
-    );
+  const activityResult = <T extends Record<string, unknown>>(
+    value: T,
+    _toolName?: string,
+    _summary?: string,
+  ) => result(value);
+
+  const initialWorkbenchResult = <T extends Record<string, unknown>>(
+    value: T,
+    _toolName?: string,
+  ) => result(value);
 
   const workbenchResult = <T extends Record<string, unknown>>(
     value: T,
     target: LiveTarget,
-    toolName = "cptr_render_live_terminal",
+    _toolName?: string,
   ) => {
     const live = tickets.issue(target);
     promptSessions.append(activePromptTicket, {
       type: "live.bind",
       payload: { live },
     });
-    publishActivity(toolName, `ChatGPT called ${toolName}; the current prompt terminal was bound to live CPTR activity.`);
     return result(value);
   };
   server.registerResource(

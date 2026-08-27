@@ -45,238 +45,150 @@ type HostBridge = DisplayModeBridge & {
   notifyIntrinsicHeight?: (height: number) => void;
 };
 
-const TERMINAL_COORDINATION_CHANNEL = "cptr-live-terminal:v1";
-const TERMINAL_OWNER_KEY = "cptr-live-terminal-owner:v1";
-const TERMINAL_OWNER_TTL_MS = 5_000;
-const TERMINAL_OWNER_REFRESH_MS = 1_500;
+type PromptMetadata = {
+  ticket?: string;
+  streamUrl?: string;
+  snapshotUrl?: string;
+  expiresAt?: number;
+};
 
-type TerminalOwnerLease = { instanceId: string; expiresAt: number };
-type TerminalCoordinationMessage =
-  | { type: "live"; sender: string; value: LiveMetadata }
-  | { type: "activity"; sender: string; value: McpToolActivity };
+type PromptEvent = {
+  event_id: string;
+  sequence: number;
+  timestamp: string;
+  type: "mcp.tool" | "live.bind";
+  payload?: {
+    tool_name?: unknown;
+    summary?: unknown;
+    status?: unknown;
+    live?: LiveMetadata;
+  };
+};
 
 function hostBridge(): HostBridge | undefined {
   return (window as Window & { openai?: HostBridge }).openai;
 }
 
-function createTerminalChannel(): BroadcastChannel | null {
-  try {
-    return typeof BroadcastChannel === "function" ? new BroadcastChannel(TERMINAL_COORDINATION_CHANNEL) : null;
-  } catch {
-    return null;
+function findPromptMetadata(value: unknown): PromptMetadata | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const direct = record["cptr/prompt"];
+  if (direct && typeof direct === "object" && "ticket" in direct) return direct as PromptMetadata;
+  for (const key of ["_meta", "params", "result", "toolResult"]) {
+    const found = findPromptMetadata(record[key]);
+    if (found) return found;
   }
+  return null;
 }
 
-function readOwnerLease(): TerminalOwnerLease | null {
-  try {
-    const raw = window.localStorage.getItem(TERMINAL_OWNER_KEY);
-    if (!raw) return null;
-    const lease = JSON.parse(raw) as Partial<TerminalOwnerLease>;
-    if (typeof lease.instanceId !== "string" || typeof lease.expiresAt !== "number" || lease.expiresAt <= Date.now()) {
-      window.localStorage.removeItem(TERMINAL_OWNER_KEY);
-      return null;
-    }
-    return lease as TerminalOwnerLease;
-  } catch {
-    return null;
-  }
-}
-
-function writeOwnerLease(instanceId: string): boolean {
-  try {
-    window.localStorage.setItem(TERMINAL_OWNER_KEY, JSON.stringify({
-      instanceId,
-      expiresAt: Date.now() + TERMINAL_OWNER_TTL_MS,
-    } satisfies TerminalOwnerLease));
-    return readOwnerLease()?.instanceId === instanceId;
-  } catch {
-    return false;
-  }
-}
-
-function terminalStorageAvailable(): boolean {
-  try {
-    const probe = `${TERMINAL_OWNER_KEY}:probe`;
-    window.localStorage.setItem(probe, "1");
-    window.localStorage.removeItem(probe);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function tryClaimTerminal(instanceId: string): boolean {
-  if (!terminalStorageAvailable()) return true;
-  const current = readOwnerLease();
-  if (current && current.instanceId !== instanceId) return false;
-  return writeOwnerLease(instanceId);
-}
-
-function useTerminalOwnership(): boolean {
-  const instanceId = useRef(crypto.randomUUID()).current;
-  const [owner, setOwner] = useState(false);
+function usePromptActivity(
+  setMeta: React.Dispatch<React.SetStateAction<LiveMetadata | null>>,
+  setState: React.Dispatch<React.SetStateAction<WorkbenchState>>,
+) {
+  const prompt = useRef<PromptMetadata | null>(findPromptMetadata(hostBridge()?.toolResponseMetadata));
+  const cursor = useRef(0);
+  const [connection, setConnection] = useState("connecting prompt activity");
 
   useEffect(() => {
-    let disposed = false;
+    const meta = prompt.current;
+    if (!meta?.ticket || !meta.streamUrl || !meta.snapshotUrl) {
+      setConnection("prompt activity unavailable");
+      return;
+    }
+    const controller = new AbortController();
+    let stopped = false;
     let retryTimer: number | undefined;
-    let releaseWebLock: (() => void) | undefined;
-    const locks = navigator.locks;
+    let retryAttempts = 0;
 
-    if (locks?.request) {
-      const claimWebLock = async (): Promise<void> => {
-        if (disposed) return;
-        const acquired = await locks.request(
-          TERMINAL_OWNER_KEY,
-          { mode: "exclusive", ifAvailable: true },
-          async (lock) => {
-            if (!lock || disposed) return false;
-            setOwner(true);
-            await new Promise<void>((resolve) => { releaseWebLock = resolve; });
-            return true;
+    const applyEvent = (event: PromptEvent) => {
+      if (event.sequence <= cursor.current) return;
+      cursor.current = event.sequence;
+      if (event.type === "mcp.tool") {
+        setState((current) => appendMcpToolActivity(current, {
+          event_id: event.event_id,
+          timestamp: event.timestamp,
+          type: "mcp.tool",
+          payload: {
+            tool_name: event.payload?.tool_name,
+            summary: event.payload?.summary,
+            status: event.payload?.status,
           },
-        );
-        if (!disposed && acquired === false) {
-          setOwner(false);
-          retryTimer = window.setTimeout(() => void claimWebLock(), TERMINAL_OWNER_REFRESH_MS);
+        }));
+      } else if (event.type === "live.bind" && event.payload?.live) {
+        setMeta(event.payload.live);
+      }
+    };
+
+    const applySnapshot = async () => {
+      const url = new URL(meta.snapshotUrl!, window.location.href);
+      url.searchParams.set("after", String(cursor.current));
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${meta.ticket}`, Accept: "application/json" },
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`prompt snapshot unavailable (${response.status})`);
+      const value = await response.json() as { replay?: { events?: PromptEvent[]; last_sequence?: number } };
+      for (const event of value.replay?.events ?? []) applyEvent(event);
+      if (typeof value.replay?.last_sequence === "number") cursor.current = Math.max(cursor.current, value.replay.last_sequence);
+    };
+
+    const scheduleRetry = (run: () => void) => {
+      if (retryAttempts >= 8 || stopped) {
+        setConnection("prompt reconnect limit reached");
+        return;
+      }
+      retryTimer = window.setTimeout(run, Math.min(15000, 1000 * 2 ** retryAttempts));
+      retryAttempts += 1;
+      setConnection("reconnecting prompt activity");
+    };
+
+    const consume = async () => {
+      try {
+        await applySnapshot();
+        if (stopped) return;
+        const url = new URL(meta.streamUrl!, window.location.href);
+        url.searchParams.set("after", String(cursor.current));
+        const response = await fetch(url, {
+          headers: { Authorization: `Bearer ${meta.ticket}`, Accept: "text/event-stream", "Last-Event-ID": String(cursor.current) },
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) throw new Error(`prompt stream unavailable (${response.status})`);
+        retryAttempts = 0;
+        setConnection("prompt live");
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let data: string[] = [];
+        const dispatch = () => {
+          if (!data.length) return;
+          try { applyEvent(JSON.parse(data.join("\n")) as PromptEvent); }
+          catch { setConnection("received invalid prompt event"); }
+          data = [];
+        };
+        while (!stopped) {
+          const next = await reader.read();
+          if (next.done) break;
+          buffer += decoder.decode(next.value, { stream: true });
+          const lines = buffer.split(/\r?\n/);
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (line === "") dispatch();
+            else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+          }
         }
-      };
-      void claimWebLock();
-      return () => {
-        disposed = true;
-        if (retryTimer !== undefined) window.clearTimeout(retryTimer);
-        releaseWebLock?.();
-      };
-    }
-
-    setOwner(tryClaimTerminal(instanceId));
-    const refresh = () => {
-      const current = readOwnerLease();
-      if (current?.instanceId === instanceId) {
-        if (!writeOwnerLease(instanceId)) setOwner(false);
-      } else if (current) {
-        setOwner(false);
-      } else if (tryClaimTerminal(instanceId)) {
-        setOwner(true);
+        if (!stopped && data.length) dispatch();
+        if (!stopped) scheduleRetry(consume);
+      } catch (error) {
+        if (stopped || (error instanceof DOMException && error.name === "AbortError")) return;
+        setConnection(error instanceof Error ? error.message : "prompt stream error");
+        scheduleRetry(consume);
       }
     };
-    const onStorage = (event: StorageEvent) => {
-      if (event.key !== TERMINAL_OWNER_KEY) return;
-      refresh();
-    };
-    const timer = window.setInterval(refresh, TERMINAL_OWNER_REFRESH_MS);
-    window.addEventListener("storage", onStorage);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("storage", onStorage);
-      const current = readOwnerLease();
-      if (current?.instanceId === instanceId) {
-        try { window.localStorage.removeItem(TERMINAL_OWNER_KEY); } catch { /* storage unavailable */ }
-      }
-    };
-  }, [instanceId]);
+    void consume();
+    return () => { stopped = true; controller.abort(); if (retryTimer !== undefined) window.clearTimeout(retryTimer); };
+  }, [setMeta, setState]);
 
-  return owner;
-}
-
-function useBridgeRelay() {
-  const sender = useRef(crypto.randomUUID()).current;
-  useEffect(() => {
-    const channel = createTerminalChannel();
-    if (!channel) return;
-    const publish = (value: unknown) => {
-      const live = findLiveMetadata(value);
-      if (live) channel.postMessage({ type: "live", sender, value: live } satisfies TerminalCoordinationMessage);
-      const activity = findMcpToolActivity(value);
-      if (activity) channel.postMessage({ type: "activity", sender, value: activity } satisfies TerminalCoordinationMessage);
-    };
-    publish(hostBridge()?.toolResponseMetadata);
-    const onMessage = (event: MessageEvent<BridgeMessage>) => {
-      if (event.source !== window.parent || event.data?.method !== "ui/notifications/tool-result") return;
-      publish(event.data.params);
-    };
-    window.addEventListener("message", onMessage);
-    return () => {
-      window.removeEventListener("message", onMessage);
-      channel.close();
-    };
-  }, [sender]);
-}
-
-function findLiveMetadata(value: unknown): LiveMetadata | null {
-  if (!value || typeof value !== "object") return null;
-  const record = value as Record<string, unknown>;
-  const direct = record["cptr/live"];
-  if (direct && typeof direct === "object" && "ticket" in direct) return direct as LiveMetadata;
-  for (const key of ["_meta", "params", "result", "toolResult"]) {
-    const found = findLiveMetadata(record[key]);
-    if (found) return found;
-  }
-  return null;
-}
-
-function findMcpToolActivity(value: unknown): McpToolActivity | null {
-  if (!value || typeof value !== "object") return null;
-  const record = value as Record<string, unknown>;
-  const direct = record["cptr/activity"];
-  if (direct && typeof direct === "object") {
-    const activity = direct as Record<string, unknown>;
-    if (activity.type === "mcp.tool" && typeof activity.event_id === "string" && typeof activity.timestamp === "string") {
-      return direct as McpToolActivity;
-    }
-  }
-  for (const key of ["_meta", "params", "result", "toolResult"]) {
-    const found = findMcpToolActivity(record[key]);
-    if (found) return found;
-  }
-  return null;
-}
-
-function useLiveMetadata(): [LiveMetadata | null, React.Dispatch<React.SetStateAction<LiveMetadata | null>>] {
-  const [metadata, setMetadata] = useState<LiveMetadata | null>(() => findLiveMetadata(hostBridge()?.toolResponseMetadata));
-  useEffect(() => {
-    const channel = createTerminalChannel();
-    const onCoordinationMessage = (event: MessageEvent<TerminalCoordinationMessage>) => {
-      if (event.data?.type === "live") setMetadata(event.data.value);
-    };
-    const onMessage = (event: MessageEvent<BridgeMessage>) => {
-      if (event.source !== window.parent || event.data?.method !== "ui/notifications/tool-result") return;
-      const found = findLiveMetadata(event.data.params);
-      if (found) setMetadata(found);
-    };
-    channel?.addEventListener("message", onCoordinationMessage);
-    window.addEventListener("message", onMessage);
-    return () => {
-      channel?.removeEventListener("message", onCoordinationMessage);
-      channel?.close();
-      window.removeEventListener("message", onMessage);
-    };
-  }, []);
-  return [metadata, setMetadata];
-}
-
-function useMcpToolActivity(setState: React.Dispatch<React.SetStateAction<WorkbenchState>>) {
-  useEffect(() => {
-    const channel = createTerminalChannel();
-    const applyActivity = (activity: McpToolActivity | null) => {
-      if (activity) setState((current) => appendMcpToolActivity(current, activity));
-    };
-    const apply = (value: unknown) => applyActivity(findMcpToolActivity(value));
-    const onCoordinationMessage = (event: MessageEvent<TerminalCoordinationMessage>) => {
-      if (event.data?.type === "activity") applyActivity(event.data.value);
-    };
-    apply(hostBridge()?.toolResponseMetadata);
-    const onMessage = (event: MessageEvent<BridgeMessage>) => {
-      if (event.source !== window.parent || event.data?.method !== "ui/notifications/tool-result") return;
-      apply(event.data.params);
-    };
-    channel?.addEventListener("message", onCoordinationMessage);
-    window.addEventListener("message", onMessage);
-    return () => {
-      channel?.removeEventListener("message", onCoordinationMessage);
-      channel?.close();
-      window.removeEventListener("message", onMessage);
-    };
-  }, [setState]);
+  return connection;
 }
 
 function useMcpBridge() {
@@ -542,9 +454,14 @@ function OwnedWorkbench() {
   const [state, setState] = useState(initialWorkbenchState);
   const [actionStatus, setActionStatus] = useState("");
   const callTool = useMcpBridge();
-  const [meta, setMeta] = useLiveMetadata();
-  useMcpToolActivity(setState);
-  const connection = useLiveSession(meta, setMeta, setState);
+  const promptMetadata = findPromptMetadata(hostBridge()?.toolResponseMetadata);
+  const updateManifestUrl = promptMetadata?.streamUrl
+    ? new URL("/plugin/update", promptMetadata.streamUrl).toString()
+    : undefined;
+  const [meta, setMeta] = useState<LiveMetadata | null>(null);
+  const promptConnection = usePromptActivity(setMeta, setState);
+  const targetConnection = useLiveSession(meta, setMeta, setState);
+  const connection = meta?.targetId ? targetConnection : promptConnection;
   const visibleTarget = useRef<string | null>(null);
   const autoPinAttempted = useRef(false);
   const isCommand = meta?.targetType === "command" && !!meta.targetId && !!meta.workspaceId;
@@ -628,7 +545,7 @@ function OwnedWorkbench() {
   return <main className="terminal-workbench" aria-label="CPTR live terminal">
     <TerminalView
       rows={state.transcript}
-      updateCenter={<PluginUpdateCenter callTool={callTool} onStatus={setActionStatus} />}
+      updateCenter={<PluginUpdateCenter callTool={callTool} manifestUrl={updateManifestUrl} onStatus={setActionStatus} />}
       status={displayStatus}
       connection={connection}
       targetLabel={targetLabel(meta)}
@@ -643,14 +560,7 @@ function OwnedWorkbench() {
 }
 
 function Workbench() {
-  useBridgeRelay();
-  const owner = useTerminalOwnership();
-
-  useEffect(() => {
-    if (!owner) hostBridge()?.notifyIntrinsicHeight?.(1);
-  }, [owner]);
-
-  return owner ? <OwnedWorkbench /> : null;
+  return <OwnedWorkbench />;
 }
 
 const root = document.getElementById("root");
