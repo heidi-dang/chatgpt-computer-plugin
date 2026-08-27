@@ -69,6 +69,7 @@ export type DirectTaskExecution = {
   output_truncated: boolean;
   error?: string | null;
   completion_integrity?: CompletionIntegrity;
+  review_summary?: Record<string, unknown> | null;
   completed: boolean;
   wait_seconds: number;
 };
@@ -83,6 +84,7 @@ export type DirectFileRead = {
   end_line: number;
   total_lines: number;
   size: number;
+  content_sha256: string;
 };
 
 export type DirectCommand = {
@@ -91,6 +93,9 @@ export type DirectCommand = {
   exit_code: number | null;
   output: string;
   next_offset: number;
+  duration_ms?: number;
+  output_truncated?: boolean;
+  timed_out?: boolean;
 };
 
 export type DirectSshCommand = DirectCommand & {

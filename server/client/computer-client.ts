@@ -117,12 +117,31 @@ function publicErrorMessage(value: string): string {
 export class ComputerApiError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly retriable: boolean;
+  readonly field?: string;
 
-  constructor(status: number, message: string, code = "computer_api_error") {
+  constructor(
+    status: number,
+    message: string,
+    code = "computer_api_error",
+    retriable = status >= 500,
+    field?: string,
+  ) {
     super(message);
     this.name = "ComputerApiError";
     this.status = status;
     this.code = code;
+    this.retriable = retriable;
+    this.field = field;
+  }
+
+  toEnvelope(): { code: string; message: string; retriable: boolean; field?: string } {
+    return {
+      code: this.code,
+      message: this.message,
+      retriable: this.retriable,
+      ...(this.field ? { field: this.field } : {}),
+    };
   }
 }
 
@@ -167,6 +186,11 @@ export class ComputerClient {
   private readonly token: string;
   private readonly fetchImpl: FetchLike;
   private readonly timeoutMs: number;
+  private readonly workspaceCache = new Map<boolean, { expiresAt: number; value: { workspaces: Workspace[] } }>();
+  private modelCache: {
+    expiresAt: number;
+    value: { models: Array<{ model_id: string; name: string; default: boolean }> };
+  } | null = null;
 
   constructor(options: {
     baseUrl: string;
@@ -182,9 +206,43 @@ export class ComputerClient {
     this.timeoutMs = options.timeoutMs ?? 30_000;
   }
 
-  async listWorkspaces(): Promise<{ workspaces: Workspace[] }> {
-    return this.request("/workspaces");
+  async listWorkspaces(includeUnavailable = false): Promise<{ workspaces: Workspace[] }> {
+    const now = Date.now();
+    const cached = this.workspaceCache.get(includeUnavailable);
+    if (cached && cached.expiresAt > now) return cached.value;
+    const value = await this.request<{ workspaces: Workspace[] }>(
+      `/workspaces?include_unavailable=${includeUnavailable ? "true" : "false"}`,
+    );
+    this.workspaceCache.set(includeUnavailable, { expiresAt: now + 10_000, value });
+    return value;
   }
+
+  async listModels(): Promise<{ models: Array<{ model_id: string; name: string; default: boolean }> }> {
+    const now = Date.now();
+    if (this.modelCache && this.modelCache.expiresAt > now) return this.modelCache.value;
+    const value = await this.request<{ models: Array<{ model_id: string; name: string; default: boolean }> }>("/models");
+    this.modelCache = { expiresAt: now + 60_000, value };
+    return value;
+  }
+  async listTasks(input: { workspace_id?: string; status?: string; limit?: number }): Promise<Record<string, unknown>> {
+    const query = new URLSearchParams();
+    if (input.workspace_id) query.set("workspace_id", input.workspace_id);
+    if (input.status) query.set("status", input.status);
+    query.set("limit", String(input.limit ?? 20));
+    return this.request(`/tasks?${query}`);
+  }
+  async listAutonomous(input: { workspace_id?: string; status?: string; limit?: number }): Promise<Record<string, unknown>> {
+    const query = new URLSearchParams();
+    if (input.workspace_id) query.set("workspace_id", input.workspace_id);
+    if (input.status) query.set("status", input.status);
+    query.set("limit", String(input.limit ?? 20));
+    return this.request(`/autonomous?${query}`);
+  }
+  async getTaskEvents(input: { task_id: string; after_sequence?: number; max_events?: number }): Promise<Record<string, unknown>> {
+    return this.request(`/tasks/${encodeURIComponent(input.task_id)}/events?after_sequence=${input.after_sequence ?? 0}&max_events=${input.max_events ?? 50}`);
+  }
+  async readManyFiles(input: { workspace_id: string; [key: string]: unknown }): Promise<Record<string, unknown>> { return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/read-many`, { method: "POST", body: input }); }
+  async applyEdits(input: { workspace_id: string; [key: string]: unknown }): Promise<Record<string, unknown>> { return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/apply-edits`, { method: "POST", body: input }); }
 
   async getWorkspace(workspaceId: string): Promise<Workspace> {
     return this.request(`/workspaces/${encodeURIComponent(workspaceId)}`);
@@ -214,7 +272,6 @@ export class ComputerClient {
     workspace_id: string;
     prompt: string;
     model_id?: string;
-    delegate_to_cptr_model?: boolean;
     wait_seconds?: number;
     idempotency_key?: string;
     execution_policy?: {
@@ -235,9 +292,16 @@ export class ComputerClient {
     const deadline = Date.now() + waitSeconds * 1_000;
     let current = task;
 
-    while (!TERMINAL_TASK_STATUSES.has(current.status) && Date.now() < deadline) {
-      await wait(Math.min(1_000, Math.max(1, deadline - Date.now())));
+    if (!TERMINAL_TASK_STATUSES.has(current.status) && waitSeconds > 0) {
+      await this.waitForTaskTerminalEvent(task.id, Math.max(1, deadline - Date.now()));
       current = await this.getTask(task.id);
+    }
+
+    let pollDelayMs = 125;
+    while (!TERMINAL_TASK_STATUSES.has(current.status) && Date.now() < deadline) {
+      await wait(Math.min(pollDelayMs, Math.max(1, deadline - Date.now())));
+      current = await this.getTask(task.id);
+      pollDelayMs = Math.min(1_000, pollDelayMs * 2);
     }
 
     const output = boundedOutput(current.output ?? "");
@@ -248,19 +312,107 @@ export class ComputerClient {
       ...output,
       error: current.error,
       ...(current.completion_integrity ? { completion_integrity: current.completion_integrity } : {}),
+      ...(current.status === "REVIEW_REQUIRED"
+        ? { review_summary: current.review?.summary ?? null }
+        : {}),
       completed: TERMINAL_TASK_STATUSES.has(current.status),
       wait_seconds: waitSeconds,
     };
+  }
+
+  private async waitForTaskTerminalEvent(taskId: string, maxWaitMs: number): Promise<boolean> {
+    let response: Response;
+    try {
+      response = await this.streamLive("task", taskId, 0);
+    } catch {
+      return false;
+    }
+    if (!response.ok || !response.body) return false;
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    const deadline = Date.now() + Math.max(1, maxWaitMs);
+    let buffer = "";
+    try {
+      while (Date.now() < deadline) {
+        const remaining = Math.max(1, deadline - Date.now());
+        const next = await new Promise<ReadableStreamReadResult<Uint8Array> | null>((resolve, reject) => {
+          const timer = setTimeout(() => resolve(null), remaining);
+          reader.read().then(
+            (value) => {
+              clearTimeout(timer);
+              resolve(value);
+            },
+            (error) => {
+              clearTimeout(timer);
+              reject(error);
+            },
+          );
+        }).catch(() => null);
+        if (!next) {
+          await reader.cancel().catch(() => undefined);
+          return false;
+        }
+        if (next.done) return false;
+        buffer += decoder.decode(next.value, { stream: true });
+
+        let boundary = buffer.indexOf("\n\n");
+        while (boundary >= 0) {
+          const block = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = block
+            .split(/\r?\n/)
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trimStart())
+            .join("\n");
+          if (data) {
+            try {
+              const event = JSON.parse(data) as Record<string, unknown>;
+              const payload = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
+                ? event.payload as Record<string, unknown>
+                : {};
+              const status = String(payload.status ?? event.status ?? "").toUpperCase();
+              const eventType = String(event.event_type ?? event.type ?? "").toLowerCase();
+              if (TERMINAL_TASK_STATUSES.has(status) || eventType === "task.terminal") {
+                await reader.cancel().catch(() => undefined);
+                return true;
+              }
+            } catch {
+              // Ignore heartbeat or malformed frames and keep reading.
+            }
+          }
+          boundary = buffer.indexOf("\n\n");
+        }
+      }
+      return false;
+    } finally {
+      reader.releaseLock();
+    }
   }
 
   async listCodingFiles(input: {
     workspace_id: string;
     path?: string;
     recursive?: boolean;
-  }): Promise<{ workspace_id: string; path: string; entries: string }> {
+    max_entries?: number;
+    cursor?: string;
+  }): Promise<{
+    workspace_id: string;
+    path: string;
+    entries: Array<{ path: string; type: string; size: number }>;
+    total: number;
+    truncated: boolean;
+    max_entries: number;
+    cursor: string | null;
+  }> {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/list`, {
       method: "POST",
-      body: { path: input.path ?? ".", recursive: input.recursive ?? false },
+      body: {
+        path: input.path ?? ".",
+        recursive: input.recursive ?? false,
+        max_entries: input.max_entries ?? 500,
+        ...(input.cursor ? { cursor: input.cursor } : {}),
+      },
     });
   }
 
@@ -288,7 +440,15 @@ export class ComputerClient {
     case_insensitive?: boolean;
     include?: string;
     filenames_only?: boolean;
-  }): Promise<{ workspace_id: string; path: string; matches: string }> {
+    max_results?: number;
+    context_lines?: number;
+  }): Promise<{
+    workspace_id: string;
+    path: string;
+    matches: Array<{ path: string; line: number; text: string; context?: string[] }>;
+    max_results: number;
+    truncated: boolean;
+  }> {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/search`, {
       method: "POST",
       body: {
@@ -298,6 +458,8 @@ export class ComputerClient {
         case_insensitive: input.case_insensitive ?? false,
         include: input.include ?? "",
         filenames_only: input.filenames_only ?? false,
+        max_results: input.max_results ?? 100,
+        context_lines: input.context_lines ?? 0,
       },
     });
   }
@@ -306,10 +468,17 @@ export class ComputerClient {
     workspace_id: string;
     path: string;
     content: string;
-  }): Promise<{ workspace_id: string; path: string; bytes_written: number }> {
+    expected_sha256?: string;
+    overwrite?: boolean;
+  }): Promise<{ workspace_id: string; path: string; bytes_written: number; sha256: string }> {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/write`, {
       method: "POST",
-      body: { path: input.path, content: input.content },
+      body: {
+        path: input.path,
+        content: input.content,
+        ...(input.expected_sha256 ? { expected_sha256: input.expected_sha256 } : {}),
+        overwrite: input.overwrite ?? false,
+      },
     });
   }
 
@@ -320,11 +489,15 @@ export class ComputerClient {
     replacement: string;
     start_line?: number;
     end_line?: number;
+    expected_sha256?: string;
+    replace_all?: boolean;
   }): Promise<{
     workspace_id: string;
     path: string;
     replaced_characters: number;
     inserted_characters: number;
+    sha256: string;
+    diff: string;
   }> {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/edit`, {
       method: "POST",
@@ -334,6 +507,8 @@ export class ComputerClient {
         replacement: input.replacement,
         start_line: input.start_line ?? 0,
         end_line: input.end_line ?? 0,
+        ...(input.expected_sha256 ? { expected_sha256: input.expected_sha256 } : {}),
+        replace_all: input.replace_all ?? false,
       },
     });
   }
@@ -341,7 +516,7 @@ export class ComputerClient {
   async createCodingDirectory(input: {
     workspace_id: string;
     path: string;
-  }): Promise<{ workspace_id: string; path: string; type: string }> {
+  }): Promise<{ workspace_id: string; path: string; type: string; created: boolean }> {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/directories`, {
       method: "POST",
       body: { path: input.path },
@@ -352,17 +527,18 @@ export class ComputerClient {
     workspace_id: string;
     source: string;
     destination: string;
-  }): Promise<{ workspace_id: string; source: string; destination: string }> {
+    overwrite?: boolean;
+  }): Promise<{ workspace_id: string; source: string; destination: string; sha256: string }> {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/move`, {
       method: "POST",
-      body: { source: input.source, destination: input.destination },
+      body: { source: input.source, destination: input.destination, overwrite: input.overwrite ?? false },
     });
   }
 
   async deleteCodingFile(input: {
     workspace_id: string;
     path: string;
-  }): Promise<{ workspace_id: string; path: string; deleted: boolean }> {
+  }): Promise<{ workspace_id: string; path: string; deleted: boolean; existed: boolean }> {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/delete`, {
       method: "POST",
       body: { path: input.path },
@@ -487,6 +663,7 @@ export class ComputerClient {
     cwd?: string;
     wait_seconds?: number;
     allow_network?: boolean;
+    idempotency_key?: string;
   }): Promise<DirectCommand> {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/commands`, {
       method: "POST",
@@ -495,6 +672,7 @@ export class ComputerClient {
         cwd: input.cwd ?? ".",
         wait_seconds: input.wait_seconds ?? 0,
         allow_network: input.allow_network ?? false,
+        ...(input.idempotency_key ? { idempotency_key: input.idempotency_key } : {}),
       },
     });
   }
@@ -504,11 +682,13 @@ export class ComputerClient {
     command_id: string;
     offset?: number;
     wait_seconds?: number;
+    tail_bytes?: number;
   }): Promise<DirectCommand> {
     const query = new URLSearchParams({
       offset: String(input.offset ?? 0),
       wait_seconds: String(input.wait_seconds ?? 0),
     });
+    if (input.tail_bytes !== undefined) query.set("tail_bytes", String(input.tail_bytes));
     return this.request(
       `/workspaces/${encodeURIComponent(input.workspace_id)}/coding/commands/${encodeURIComponent(input.command_id)}?${query}`,
     );
@@ -610,12 +790,24 @@ export class ComputerClient {
     return this.request(`/autonomous/${encodeURIComponent(monitorId)}`);
   }
 
-  async getAutonomousEvents(monitorId: string): Promise<Record<string, unknown>> {
-    return this.request(`/autonomous/${encodeURIComponent(monitorId)}/events`);
+  async getAutonomousEvents(
+    input: string | { monitor_id: string; after_sequence?: number; max_events?: number },
+  ): Promise<Record<string, unknown>> {
+    const request = typeof input === "string" ? { monitor_id: input } : input;
+    const query = new URLSearchParams({
+      after_sequence: String(request.after_sequence ?? 0),
+      max_events: String(request.max_events ?? 100),
+    });
+    return this.request(`/autonomous/${encodeURIComponent(request.monitor_id)}/events?${query}`);
   }
 
-  async getAutonomousEvidence(monitorId: string): Promise<Record<string, unknown>> {
-    return this.request(`/autonomous/${encodeURIComponent(monitorId)}/evidence`);
+  async getAutonomousEvidence(
+    input: string | { monitor_id: string; scope_id?: string },
+  ): Promise<Record<string, unknown>> {
+    const request = typeof input === "string" ? { monitor_id: input } : input;
+    const query = new URLSearchParams();
+    if (request.scope_id) query.set("scope", request.scope_id);
+    return this.request(`/autonomous/${encodeURIComponent(request.monitor_id)}/evidence${query.size ? `?${query}` : ""}`);
   }
 
   async steerAutonomous(
@@ -637,10 +829,11 @@ export class ComputerClient {
     monitorId: string,
     approvalId: string,
     approved: boolean,
+    note?: string,
   ): Promise<Record<string, unknown>> {
     return this.request(`/autonomous/${encodeURIComponent(monitorId)}/approve`, {
       method: "POST",
-      body: { approval_id: approvalId, approved },
+      body: { approval_id: approvalId, approved, ...(note ? { note } : {}) },
     });
   }
 
@@ -648,14 +841,25 @@ export class ComputerClient {
     return normalizeTaskCompletion(await this.request<Task>(`/tasks/${encodeURIComponent(taskId)}`));
   }
 
-  async getTaskOutput(taskId: string): Promise<TaskOutput> {
+  async getTaskOutput(
+    input: string | { task_id: string; offset?: number; max_chars?: number },
+  ): Promise<TaskOutput> {
+    const request = typeof input === "string" ? { task_id: input } : input;
+    const query = new URLSearchParams({
+      offset: String(request.offset ?? 0),
+      max_chars: String(request.max_chars ?? 20_000),
+    });
     return normalizeTaskOutputCompletion(
-      await this.request<TaskOutput>(`/tasks/${encodeURIComponent(taskId)}/output`),
+      await this.request<TaskOutput>(`/tasks/${encodeURIComponent(request.task_id)}/output?${query}`),
     );
   }
 
-  async getTaskReview(taskId: string): Promise<Record<string, unknown>> {
-    return this.request(`/tasks/${encodeURIComponent(taskId)}/review`);
+  async getTaskReview(
+    input: string | { task_id: string; max_diff_bytes?: number },
+  ): Promise<Record<string, unknown>> {
+    const request = typeof input === "string" ? { task_id: input } : input;
+    const query = new URLSearchParams({ max_diff_bytes: String(request.max_diff_bytes ?? 100_000) });
+    return this.request(`/tasks/${encodeURIComponent(request.task_id)}/review?${query}`);
   }
 
   async decideTaskReview(
@@ -683,8 +887,13 @@ export class ComputerClient {
     return this.request(`/tasks/${encodeURIComponent(taskId)}/cancel`, { method: "POST" });
   }
 
-  async getDiff(workspaceId: string): Promise<GitDiff> {
-    return this.request(`/workspaces/${encodeURIComponent(workspaceId)}/git/diff`);
+  async getDiff(
+    input: string | { workspace_id: string; paths?: string[]; max_bytes?: number },
+  ): Promise<GitDiff> {
+    const request = typeof input === "string" ? { workspace_id: input } : input;
+    const query = new URLSearchParams({ max_bytes: String(request.max_bytes ?? 100_000) });
+    for (const path of request.paths ?? []) query.append("paths", path);
+    return this.request(`/workspaces/${encodeURIComponent(request.workspace_id)}/git/diff?${query}`);
   }
 
   async getLiveSnapshot(
@@ -755,7 +964,18 @@ export class ComputerClient {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const detail = typeof payload?.detail === "string" ? payload.detail : "request failed";
+        const rawDetail = payload?.detail;
+        if (rawDetail && typeof rawDetail === "object" && !Array.isArray(rawDetail)) {
+          const detail = rawDetail as Record<string, unknown>;
+          throw new ComputerApiError(
+            response.status,
+            publicErrorMessage(String(detail.message ?? "request failed")),
+            String(detail.code ?? "computer_api_error"),
+            Boolean(detail.retriable ?? response.status >= 500),
+            typeof detail.field === "string" ? detail.field : undefined,
+          );
+        }
+        const detail = typeof rawDetail === "string" ? rawDetail : "request failed";
         throw new ComputerApiError(response.status, publicErrorMessage(detail));
       }
       return payload as T;

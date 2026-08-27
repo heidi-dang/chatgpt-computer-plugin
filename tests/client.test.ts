@@ -13,6 +13,34 @@ test("forwards the scoped token and returns JSON", async () => {
   assert.equal((seenRequest?.headers as Record<string, string>).Authorization, "Bearer secret");
 });
 
+test("caches workspace discovery for 10 seconds and model discovery for 60 seconds", async () => {
+  const calls: string[] = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith("/models")) {
+        return new Response(JSON.stringify({ models: [{ model_id: "provider/model", name: "model", default: true }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ workspaces: [{ workspace_id: "ws-1", name: "Workspace", available: true, last_used_at: 1 }] }), { status: 200 });
+    },
+  });
+
+  await client.listWorkspaces(false);
+  await client.listWorkspaces(false);
+  await client.listWorkspaces(true);
+  await client.listWorkspaces(true);
+  await client.listModels();
+  await client.listModels();
+
+  assert.equal(calls.filter((url) => url.includes("/workspaces?")).length, 2);
+  assert.equal(calls.filter((url) => url.endsWith("/models")).length, 1);
+  assert.ok(calls.some((url) => url.endsWith("/workspaces?include_unavailable=false")));
+  assert.ok(calls.some((url) => url.endsWith("/workspaces?include_unavailable=true")));
+});
+
 test("routes managed Chrome control through the existing scoped Control API", async () => {
   let seenUrl = "";
   let seenBody: Record<string, unknown> = {};
@@ -132,7 +160,7 @@ test("routes dedicated autonomous operations to the scoped Control API", async (
   assert.deepEqual(seen.map((request) => request.url), [
     "http://cptr.test/api/control/v1/autonomous",
     "http://cptr.test/api/control/v1/autonomous/mon-1",
-    "http://cptr.test/api/control/v1/autonomous/mon-1/events",
+    "http://cptr.test/api/control/v1/autonomous/mon-1/events?after_sequence=0&max_events=100",
     "http://cptr.test/api/control/v1/autonomous/mon-1/evidence",
     "http://cptr.test/api/control/v1/autonomous/mon-1/messages",
     "http://cptr.test/api/control/v1/autonomous/mon-1/cancel",
@@ -365,14 +393,22 @@ test("bounds direct-execution output before returning it to ChatGPT", async () =
 });
 
 
-test("polls a running direct task until it reaches a terminal status", async () => {
-  let calls = 0;
+test("uses SSE first for a running direct task, then reads the terminal task state", async () => {
+  let apiCalls = 0;
+  let streamCalls = 0;
   const client = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "secret-token",
-    fetchImpl: async () => {
-      calls += 1;
-      const status = calls === 1 ? "RUNNING" : "COMPLETE";
+    fetchImpl: async (url) => {
+      if (String(url).includes("/stream?")) {
+        streamCalls += 1;
+        return new Response(
+          'data: {"event_type":"task.terminal","payload":{"status":"COMPLETE"}}\n\n',
+          { status: 200, headers: { "content-type": "text/event-stream" } },
+        );
+      }
+      apiCalls += 1;
+      const status = apiCalls === 1 ? "RUNNING" : "COMPLETE";
       return new Response(
         JSON.stringify({
           id: "task-1",
@@ -397,7 +433,8 @@ test("polls a running direct task until it reaches a terminal status", async () 
     wait_seconds: 1,
   });
 
-  assert.equal(calls, 2);
+  assert.equal(apiCalls, 2);
+  assert.equal(streamCalls, 1);
   assert.equal(result.completed, true);
   assert.equal(result.status, "COMPLETE");
 });

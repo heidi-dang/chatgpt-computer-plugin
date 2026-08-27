@@ -46,6 +46,7 @@ type PromptSession = {
   lastSequence: number;
   events: PromptTerminalEvent[];
   listeners: Set<(event: PromptTerminalEvent) => void>;
+  allowDelegate: boolean;
 };
 
 type PromptStoreOptions = {
@@ -80,7 +81,7 @@ export class PromptTerminalStore {
     return this.sessions.size;
   }
 
-  open(): PromptTerminalMetadata {
+  open(options: { allowDelegate?: boolean } = {}): PromptTerminalMetadata {
     this.prune();
     while (this.sessions.size >= this.maxSessions) {
       const oldest = this.sessions.keys().next().value;
@@ -95,8 +96,14 @@ export class PromptTerminalStore {
       lastSequence: 0,
       events: [],
       listeners: new Set(),
+      allowDelegate: options.allowDelegate === true,
     });
     return { ticket, expiresAt, streamUrl: this.streamUrl, snapshotUrl: this.snapshotUrl };
+  }
+
+  allowsDelegation(ticket: string | null | undefined): boolean {
+    if (!ticket) return false;
+    return this.getSession(ticket)?.allowDelegate === true;
   }
 
   append(ticket: string | null | undefined, event: PendingPromptEvent): PromptTerminalEvent | null {

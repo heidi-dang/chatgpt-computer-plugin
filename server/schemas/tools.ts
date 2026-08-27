@@ -12,6 +12,7 @@ export const approveAutonomousSchema = {
   monitor_id: z.string().min(1).max(200),
   approval_id: z.string().min(1).max(200),
   approved: z.boolean(),
+  note: z.string().max(50_000).optional(),
 };
 
 export const taskExecutionPolicySchema = z.object({
@@ -32,6 +33,9 @@ export const openWorkbenchSessionSchema = {
   session_name: z.string().min(1).max(160).optional(),
   workspace_id: z.string().min(1).max(200).optional(),
   resume_session_id: workbenchSessionId.optional(),
+  delegation_authorization: z.literal("allow:delegate").optional().describe(
+    "Pass this literal only when the current user prompt contains allow:delegate. It enables Delegated Agent tools for this prompt session only.",
+  ),
 };
 
 export const workbenchSessionIdSchema = { workbench_session_id: workbenchSessionId };
@@ -102,10 +106,16 @@ export const reviewDecisionSchema = {
 };
 
 
+export const listWorkspacesSchema = {
+  include_unavailable: z.boolean().default(false),
+};
+
 export const codingListSchema = {
   workspace_id: z.string().min(1).max(200),
   path: z.string().min(1).max(1_000).default("."),
   recursive: z.boolean().default(false),
+  max_entries: z.number().int().min(1).max(5000).default(500),
+  cursor: z.string().optional(),
 };
 
 export const codingReadSchema = {
@@ -123,12 +133,16 @@ export const codingSearchSchema = {
   case_insensitive: z.boolean().default(false),
   include: z.string().max(1_000).default(""),
   filenames_only: z.boolean().default(false),
+  max_results: z.number().int().min(1).max(1000).default(100),
+  context_lines: z.number().int().min(0).max(10).default(0),
 };
 
 export const codingWriteSchema = {
   workspace_id: z.string().min(1).max(200),
   path: z.string().min(1).max(1_000),
   content: z.string().max(1_000_000),
+  expected_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  overwrite: z.boolean().default(false),
 };
 
 export const codingEditSchema = {
@@ -138,6 +152,8 @@ export const codingEditSchema = {
   replacement: z.string().max(1_000_000),
   start_line: z.number().int().min(0).max(1_000_000).default(0),
   end_line: z.number().int().min(0).max(1_000_000).default(0),
+  expected_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  replace_all: z.boolean().default(false),
 };
 
 export const codingDirectorySchema = {
@@ -149,6 +165,7 @@ export const codingMoveSchema = {
   workspace_id: z.string().min(1).max(200),
   source: z.string().min(1).max(1_000),
   destination: z.string().min(1).max(1_000),
+  overwrite: z.boolean().default(false),
 };
 
 export const codingDeleteSchema = {
@@ -199,6 +216,7 @@ export const codingCommandSchema = {
   wait_seconds: z.number().int().min(0).max(60).default(0),
   allow_network: z.boolean().default(false),
   workbench_session_id: workbenchSessionId.optional(),
+  idempotency_key: z.string().min(1).max(200).optional(),
 };
 
 export const codingCommandStatusSchema = {
@@ -206,7 +224,19 @@ export const codingCommandStatusSchema = {
   command_id: z.string().min(1).max(200),
   offset: z.number().int().min(0).max(100_000_000).default(0),
   wait_seconds: z.number().int().min(0).max(60).default(0),
+  tail_bytes: z.number().int().min(0).max(10_000_000).optional(),
 };
+
+export const listTasksSchema = { workspace_id: z.string().optional(), status: z.string().optional(), limit: z.number().int().min(1).max(100).default(20) };
+export const taskEventsSchema = { task_id: z.string().min(1), after_sequence: z.number().int().min(0).default(0), max_events: z.number().int().min(1).max(500).default(50) };
+export const autonomousEventsSchema = { monitor_id: z.string().min(1), after_sequence: z.number().int().min(0).default(0), max_events: z.number().int().min(1).max(500).default(100) };
+export const autonomousEvidenceSchema = { monitor_id: z.string().min(1), scope_id: z.string().optional() };
+export const listAutonomousSchema = { workspace_id: z.string().optional(), status: z.string().optional(), limit: z.number().int().min(1).max(100).default(20) };
+export const taskOutputSchema = { task_id: z.string().min(1).max(200), offset: z.number().int().min(0).default(0), max_chars: z.number().int().min(1).max(200_000).default(20_000) };
+export const taskReviewSchema = { task_id: z.string().min(1).max(200), max_diff_bytes: z.number().int().min(1).max(2_000_000).default(100_000) };
+export const gitDiffSchema = { workspace_id: z.string().min(1).max(200), paths: z.array(z.string().min(1).max(1_000)).max(100).optional(), max_bytes: z.number().int().min(1).max(2_000_000).default(100_000) };
+export const readManyFilesSchema = { workspace_id: z.string().min(1), files: z.array(z.object({ path: z.string().min(1), start_line: z.number().int().min(0).optional(), end_line: z.number().int().min(0).optional() })).min(1).max(10), max_chars: z.number().int().min(1).max(200000).default(20000) };
+export const applyEditsSchema = { workspace_id: z.string().min(1), path: z.string().min(1), edits: z.array(z.object({ target: z.string().min(1), replacement: z.string() })).min(1).max(20), expected_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional() };
 
 export const codingCommandCancelSchema = {
   workspace_id: z.string().min(1).max(200),

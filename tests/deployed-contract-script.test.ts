@@ -5,11 +5,11 @@ import test from "node:test";
 const source = readFileSync(new URL("../scripts/check-deployed-contract.mjs", import.meta.url), "utf8");
 const packageMetadata = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: string };
 
-test("deployed contract verifier tracks the current 56-tool update-center contract", () => {
+test("deployed contract verifier tracks the current 62-action update-center contract", () => {
   const toolsBlock = source.match(/const expectedTools = \[(.*?)\];/s)?.[1] ?? "";
   const tools = [...toolsBlock.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
 
-  assert.equal(tools.length, 56);
+  assert.equal(tools.length, 62);
   assert.equal(tools.includes("cptr_chrome_browser"), true);
   assert.equal(tools.includes("cptr_plugin_update"), true);
   assert.equal(tools.includes("cptr_list_workbench_sessions"), true);

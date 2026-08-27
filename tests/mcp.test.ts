@@ -7,6 +7,13 @@ import { MCP_CONTRACT_TOOL_COUNT, MCP_CONTRACT_VERSION, createMcpServer } from "
 import { PromptTerminalStore } from "../server/prompt-terminal.js";
 import { CPTR_APP_VERSION } from "../server/version.js";
 
+async function authorizeDelegation(client: Client) {
+  return client.callTool({
+    name: "cptr_open_live_workbench",
+    arguments: { delegation_authorization: "allow:delegate" },
+  });
+}
+
 test("advertises dedicated autonomous tools with accurate annotations", async () => {
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
@@ -43,6 +50,12 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_workspace_package_scripts",
       "cptr_workspace_release_readiness",
       "cptr_workspace_run_test_target",
+      "cptr_list_models",
+      "cptr_list_tasks",
+      "cptr_list_autonomous",
+      "cptr_get_task_events",
+      "cptr_code_read_many_files",
+      "cptr_code_apply_edits",
       "cptr_code_list_files",
       "cptr_code_read_file",
       "cptr_code_search_files",
@@ -99,6 +112,12 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_workspace_run_test_target")?.annotations?.openWorldHint, false);
   assert.equal(tools.get("cptr_workspace_run_test_target")?.inputSchema.properties?.command, undefined);
   assert.notEqual(tools.get("cptr_workspace_run_test_target")?.inputSchema.properties?.target, undefined);
+  assert.match(tools.get("cptr_code_run_command")?.title ?? "", /^\[ChatGPT Direct Coding\]/);
+  assert.match(tools.get("cptr_code_run_command")?.description ?? "", /ChatGPT itself must inspect, edit, run, verify/);
+  assert.match(tools.get("cptr_start_task")?.title ?? "", /^\[Delegated Agent\]/);
+  assert.match(tools.get("cptr_start_task")?.description ?? "", /allow:delegate/);
+  assert.match(tools.get("cptr_start_task")?.description ?? "", /Codex or Hermes/);
+  assert.notEqual(tools.get("cptr_open_live_workbench")?.inputSchema.properties?.delegation_authorization, undefined);
   assert.equal(tools.get("cptr_ssh_list_hosts")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_ssh_run_command")?.annotations?.openWorldHint, true);
   assert.equal(tools.get("cptr_ssh_get_command")?.annotations?.readOnlyHint, true);
@@ -116,7 +135,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.notEqual(tools.get("cptr_start_task")?.inputSchema.properties?.execution_policy, undefined);
   assert.notEqual(tools.get("cptr_execute_task")?.inputSchema.properties?.execution_policy, undefined);
   assert.notEqual(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.execution_policy, undefined);
-  assert.equal(tools.get("cptr_render_live_terminal")?.inputSchema.properties?.presentation, undefined);
+  assert.notEqual(tools.get("cptr_render_live_terminal")?.inputSchema.properties?.presentation, undefined);
   assert.equal(tools.get("cptr_monitor_autonomous")?.annotations?.readOnlyHint, false);
   assert.equal(tools.get("cptr_monitor_autonomous")?.annotations?.destructiveHint, false);
   assert.equal(tools.get("cptr_get_autonomous")?.annotations?.readOnlyHint, true);
@@ -140,10 +159,118 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.match(CPTR_APP_VERSION, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
   assert.equal(MCP_CONTRACT_VERSION, CPTR_APP_VERSION);
   assert.equal(MCP_CONTRACT_TOOL_COUNT, 56);
-  assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT);
+  assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT + 6);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
   }
+
+  await client.close();
+  await server.close();
+});
+
+test("requires prompt-session allow:delegate authorization for delegated agent tools", async () => {
+  let modelRequests = 0;
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async (url) => {
+      const requestUrl = String(url);
+      if (requestUrl.endsWith("/models")) modelRequests += 1;
+      if (requestUrl.endsWith("/workbench-sessions")) {
+        return new Response(JSON.stringify({
+          session_id: "wbs_session_00000001",
+          name: "Delegation fixture",
+          status: "OPEN",
+          workspace_id: null,
+          active_target_type: null,
+          active_target_id: null,
+          active_workspace_id: null,
+          event_count: 0,
+          created_at: 1,
+          updated_at: 1,
+          last_event_at: null,
+          archived_at: null,
+        }), { status: 200 });
+      }
+      if (requestUrl.includes("/workspaces?")) {
+        return new Response(JSON.stringify({ workspaces: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ models: [] }), { status: 200 });
+    },
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const beforeOpen = await client.callTool({ name: "cptr_list_models", arguments: {} });
+  assert.equal(beforeOpen.isError, true);
+  assert.match(JSON.stringify(beforeOpen.content), /allow:delegate/);
+  assert.equal(modelRequests, 0, "delegation must fail before the backend is contacted");
+
+  const directOnly = await client.callTool({ name: "cptr_open_live_workbench", arguments: {} });
+  assert.equal((directOnly.structuredContent as { delegation_allowed?: boolean } | undefined)?.delegation_allowed, false);
+  const blocked = await client.callTool({ name: "cptr_list_models", arguments: {} });
+  assert.equal(blocked.isError, true);
+  assert.match(JSON.stringify(blocked.content), /allow:delegate/);
+  assert.equal(modelRequests, 0);
+
+  const delegated = await client.callTool({
+    name: "cptr_open_live_workbench",
+    arguments: { delegation_authorization: "allow:delegate" },
+  });
+  assert.equal((delegated.structuredContent as { delegation_allowed?: boolean } | undefined)?.delegation_allowed, true);
+  const models = await client.callTool({ name: "cptr_list_models", arguments: {} });
+  assert.equal(models.isError, undefined);
+  assert.equal(modelRequests, 1);
+
+  await client.close();
+  await server.close();
+});
+
+test("returns typed MCP error envelopes for structured CPTR API failures", async () => {
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async () => new Response(
+      JSON.stringify({
+        detail: {
+          code: "STALE_HASH",
+          message: "file changed since it was read",
+          retriable: true,
+          field: "expected_sha256",
+        },
+      }),
+      { status: 409 },
+    ),
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const response = await client.callTool({
+    name: "cptr_code_write_file",
+    arguments: {
+      workspace_id: "ws-1",
+      path: "src/app.ts",
+      content: "export {};\n",
+      overwrite: true,
+      expected_sha256: "a".repeat(64),
+    },
+  });
+
+  assert.equal(response.isError, true);
+  assert.equal(response.structuredContent, undefined);
+  const content = response.content as Array<{ type: string; text?: string }>;
+  const first = content[0];
+  assert.equal(first?.type, "text");
+  assert.deepEqual(JSON.parse(first?.type === "text" ? first.text ?? "{}" : "{}"), {
+    code: "STALE_HASH",
+    message: "file changed since it was read",
+    retriable: true,
+    field: "expected_sha256",
+  });
 
   await client.close();
   await server.close();
@@ -235,6 +362,7 @@ test("invokes managed Chrome control through the ChatGPT-visible MCP tool", asyn
 
 test("invokes every direct-coding tool through MCP without a CPTR model input", async () => {
   const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const sha = "a".repeat(64);
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "test-token",
@@ -242,15 +370,29 @@ test("invokes every direct-coding tool through MCP without a CPTR model input", 
       const url = String(input);
       seen.push({ url, init });
       const payload = url.includes("/coding/list")
-        ? { workspace_id: "ws-1", path: ".", entries: "src/app.ts" }
+        ? {
+            workspace_id: "ws-1",
+            path: ".",
+            entries: [{ path: "src/app.ts", type: "file", size: 11 }],
+            total: 1,
+            truncated: false,
+            max_entries: 500,
+            cursor: null,
+          }
         : url.includes("/coding/directories")
-          ? { workspace_id: "ws-1", path: "src/generated", type: "directory" }
+          ? { workspace_id: "ws-1", path: "src/generated", type: "directory", created: true }
           : url.includes("/coding/move")
-            ? { workspace_id: "ws-1", source: "src/app.ts", destination: "src/main.ts" }
+            ? { workspace_id: "ws-1", source: "src/app.ts", destination: "src/main.ts", sha256: sha }
             : url.includes("/coding/delete")
-              ? { workspace_id: "ws-1", path: "src/obsolete.ts", deleted: true }
+              ? { workspace_id: "ws-1", path: "src/obsolete.ts", deleted: true, existed: true }
               : url.includes("/git/status")
-                ? { is_repo: true, files: [{ path: "src/app.ts", status: "modified" }] }
+                ? {
+                    is_repo: true,
+                    branch: "main",
+                    ahead: 0,
+                    behind: 0,
+                    files: [{ path: "src/app.ts", status: "modified", staged: false, unstaged: true }],
+                  }
         : url.includes("/coding/read")
           ? {
               workspace_id: "ws-1",
@@ -260,17 +402,26 @@ test("invokes every direct-coding tool through MCP without a CPTR model input", 
               end_line: 1,
               total_lines: 1,
               size: 11,
+              content_sha256: sha,
             }
           : url.includes("/coding/search")
-            ? { workspace_id: "ws-1", path: "src", matches: "src/app.ts:1:export {}" }
+            ? {
+                workspace_id: "ws-1",
+                path: "src",
+                matches: [{ path: "src/app.ts", line: 1, text: "export {}" }],
+                max_results: 100,
+                truncated: false,
+              }
             : url.includes("/coding/write")
-              ? { workspace_id: "ws-1", path: "src/app.ts", bytes_written: 11 }
+              ? { workspace_id: "ws-1", path: "src/app.ts", bytes_written: 11, sha256: sha }
               : url.includes("/coding/edit")
                 ? {
                     workspace_id: "ws-1",
                     path: "src/app.ts",
                     replaced_characters: 2,
                     inserted_characters: 12,
+                    sha256: sha,
+                    diff: "@@ -1 +1 @@",
                   }
                 : {
                     command_id: "command-1",
@@ -278,6 +429,9 @@ test("invokes every direct-coding tool through MCP without a CPTR model input", 
                     exit_code: 0,
                     output: "ok",
                     next_offset: 2,
+                    duration_ms: 1,
+                    output_truncated: false,
+                    timed_out: false,
                   };
       return new Response(JSON.stringify(payload), { status: 200 });
     },
@@ -404,27 +558,51 @@ test("routes dedicated SSH tools through the SSH control API and live command ta
 });
 
 test("mounts exactly one prompt terminal through open and keeps later target binding data-only", async () => {
+  const liveEvents = Array.from({ length: 25 }, (_, index) => ({
+    version: 1,
+    event_id: `event-${index + 1}`,
+    sequence: index + 1,
+    timestamp: "2026-08-27T10:00:00Z",
+    target: { type: "task", id: "task-1" },
+    task_id: "task-1",
+    monitor_id: null,
+    worker_task_id: null,
+    type: "terminal.chunk",
+    payload: { text: `safe-${index + 1}` },
+    redaction_applied: true,
+  }));
+  let workspaceRequests = 0;
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "server-only-token",
     fetchImpl: async (url) => {
-      const payload = String(url).endsWith("/workbench-sessions")
-        ? {
-            session_id: "wbs_session_00000001",
-            name: "CPTR plugin session",
-            status: "OPEN",
-            workspace_id: null,
-            active_target_type: null,
-            active_target_id: null,
-            active_workspace_id: null,
-            event_count: 0,
-            created_at: 1,
-            updated_at: 1,
-            last_event_at: null,
-            archived_at: null,
-          }
-        : { id: "task-1", status: "RUNNING", workspace_id: "ws-1" };
-      return new Response(JSON.stringify(payload), { status: 200 });
+      const requestUrl = String(url);
+      if (requestUrl.endsWith("/workbench-sessions")) {
+        return new Response(JSON.stringify({
+          session_id: "wbs_session_00000001",
+          name: "CPTR plugin session",
+          status: "OPEN",
+          workspace_id: null,
+          active_target_type: null,
+          active_target_id: null,
+          active_workspace_id: null,
+          event_count: 0,
+          created_at: 1,
+          updated_at: 1,
+          last_event_at: null,
+          archived_at: null,
+        }), { status: 200 });
+      }
+      if (requestUrl.includes("/workspaces?")) {
+        workspaceRequests += 1;
+        return new Response(JSON.stringify({
+          workspaces: [{ workspace_id: "ws-1", name: "Fixture", available: true, last_used_at: 1 }],
+        }), { status: 200 });
+      }
+      if (requestUrl.includes("/stream/snapshot?")) {
+        return new Response(JSON.stringify({ events: liveEvents, last_sequence: 25 }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ id: "task-1", status: "RUNNING", workspace_id: "ws-1" }), { status: 200 });
     },
   });
   const promptSessions = new PromptTerminalStore();
@@ -436,16 +614,22 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
-  const initialResponse = await client.callTool({ name: "cptr_open_live_workbench", arguments: {} });
+  const initialResponse = await authorizeDelegation(client);
   const initialMeta = initialResponse._meta as {
     ui?: { resourceUri?: string };
     "cptr/live"?: unknown;
     "cptr/activity"?: { type?: string };
     "cptr/prompt"?: { ticket?: string };
+    "cptr/workspaces"?: Array<Record<string, unknown>>;
   } | undefined;
   assert.equal(initialMeta?.ui, undefined);
   assert.equal(initialMeta?.["cptr/live"], undefined);
   assert.equal(initialMeta?.["cptr/activity"]?.type, "mcp.tool");
+  assert.equal(workspaceRequests, 1);
+  assert.deepEqual(initialMeta?.["cptr/workspaces"], [
+    { workspace_id: "ws-1", name: "Fixture", available: true, last_used_at: 1 },
+  ]);
+  assert.equal("path" in (initialMeta?.["cptr/workspaces"]?.[0] ?? {}), false);
   const promptTicket = initialMeta?.["cptr/prompt"]?.ticket;
   assert.ok(promptTicket);
 
@@ -453,7 +637,7 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
     name: "cptr_start_task",
     arguments: {
       workspace_id: "ws-1",
-      prompt: "Run the bounded fixture test allow:delegation using Bearer top-secret-value",
+      prompt: "Run the bounded fixture test allow:delegate using Bearer top-secret-value",
       model_id: "provider/model-1",
     },
   });
@@ -492,13 +676,26 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
 
   const response = await client.callTool({
     name: "cptr_render_live_terminal",
-    arguments: { target_type: "task", target_id: "task-1" },
+    arguments: {
+      target_type: "task",
+      target_id: "task-1",
+      presentation: { mode: "inline" },
+    },
   });
   const text = JSON.stringify(response.content);
   assert.match(text, /task-1/);
   assert.equal(text.includes("server-only-token"), false);
-  const meta = response._meta as { ui?: unknown; "cptr/live"?: unknown } | undefined;
-  assert.equal(meta?.ui, undefined);
+  const structured = response.structuredContent as {
+    recent_events?: Array<{ sequence?: number }>;
+  } | undefined;
+  assert.equal(structured?.recent_events?.length, 20);
+  assert.equal(structured?.recent_events?.[0]?.sequence, 6);
+  assert.equal(structured?.recent_events?.at(-1)?.sequence, 25);
+  const meta = response._meta as {
+    ui?: { presentation?: Record<string, unknown> };
+    "cptr/live"?: unknown;
+  } | undefined;
+  assert.deepEqual(meta?.ui?.presentation, { mode: "inline" });
   assert.equal(meta?.["cptr/live"], undefined);
   const renderReplay = promptSessions.replay(promptTicket, taskReplay.last_sequence);
   assert.ok(renderReplay);
@@ -519,24 +716,48 @@ test("applies byte-equivalent workspace scope to normal MCP task-creation entry 
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "server-only-token",
-    fetchImpl: async (_url, init) => {
-      requestBodies.push(JSON.parse(String(init?.body)));
-      return new Response(JSON.stringify({
-        id: `task-scoped-${requestBodies.length}`,
-        status: "COMPLETE",
-        workspace_id: "ws-1",
-        output: "Scoped fixture complete.",
-      }), { status: 200 });
+    fetchImpl: async (url, init) => {
+      const requestUrl = String(url);
+      if (requestUrl.endsWith("/workbench-sessions")) {
+        return new Response(JSON.stringify({
+          session_id: "wbs_session_00000002",
+          name: "Scope fixture",
+          status: "OPEN",
+          workspace_id: null,
+          active_target_type: null,
+          active_target_id: null,
+          active_workspace_id: null,
+          event_count: 0,
+          created_at: 1,
+          updated_at: 1,
+          last_event_at: null,
+          archived_at: null,
+        }), { status: 200 });
+      }
+      if (requestUrl.includes("/workspaces?")) {
+        return new Response(JSON.stringify({ workspaces: [] }), { status: 200 });
+      }
+      if (requestUrl.endsWith("/tasks")) {
+        requestBodies.push(JSON.parse(String(init?.body)));
+        return new Response(JSON.stringify({
+          id: `task-scoped-${requestBodies.length}`,
+          status: "COMPLETE",
+          workspace_id: "ws-1",
+          output: "Scoped fixture complete.",
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ id: "task-scoped-1", status: "COMPLETE", workspace_id: "ws-1" }), { status: 200 });
     },
   });
   const server = createMcpServer(computer);
   const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  await authorizeDelegation(client);
 
   const input = {
     workspace_id: "ws-1",
-    prompt: "Create CHATGPT_LIVE_WORKBENCH_OK.txt with the requested marker, then wait for steering. allow:delegation",
+    prompt: "Create CHATGPT_LIVE_WORKBENCH_OK.txt with the requested marker, then wait for steering. allow:delegate",
     model_id: "provider/heidi-antigravity",
   };
   await client.callTool({ name: "cptr_start_task", arguments: input });
@@ -565,8 +786,30 @@ test("preserves an explicitly requested narrow assignment scope", async () => {
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "server-only-token",
-    fetchImpl: async (_url, init) => {
-      requestBodies.push(JSON.parse(String(init?.body)));
+    fetchImpl: async (url, init) => {
+      const requestUrl = String(url);
+      if (requestUrl.endsWith("/workbench-sessions")) {
+        return new Response(JSON.stringify({
+          session_id: "wbs_session_00000003",
+          name: "Narrow scope fixture",
+          status: "OPEN",
+          workspace_id: null,
+          active_target_type: null,
+          active_target_id: null,
+          active_workspace_id: null,
+          event_count: 0,
+          created_at: 1,
+          updated_at: 1,
+          last_event_at: null,
+          archived_at: null,
+        }), { status: 200 });
+      }
+      if (requestUrl.includes("/workspaces?")) {
+        return new Response(JSON.stringify({ workspaces: [] }), { status: 200 });
+      }
+      if (requestUrl.endsWith("/tasks")) {
+        requestBodies.push(JSON.parse(String(init?.body)));
+      }
       return new Response(JSON.stringify({
         id: "task-narrow",
         status: "COMPLETE",
@@ -579,8 +822,9 @@ test("preserves an explicitly requested narrow assignment scope", async () => {
   const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  await authorizeDelegation(client);
 
-  const prompt = "inspection_scope=assignment. Only inspect fixture.txt. allow:delegation";
+  const prompt = "inspection_scope=assignment. Only inspect fixture.txt. allow:delegate";
   await client.callTool({
     name: "cptr_start_task",
     arguments: { workspace_id: "ws-1", prompt, model_id: "provider/heidi-antigravity" },
@@ -614,7 +858,7 @@ test("does not delegate ChatGPT work to a CPTR model without explicit opt-in", a
   });
 
   assert.equal(response.isError, true);
-  assert.match(JSON.stringify(response.content), /allow:delegation/i);
+  assert.match(JSON.stringify(response.content), /allow:delegate/i);
   assert.equal(requestCount, 0);
 
   await client.close();
@@ -641,6 +885,7 @@ test("forwards an explicit task review decision to the scoped control endpoint",
   const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  await authorizeDelegation(client);
 
   const response = await client.callTool({
     name: "cptr_decide_task_review",
@@ -668,7 +913,13 @@ test("retrieves a task-bound review checkpoint and diff", async () => {
         workspace_id: "ws-1",
         status: "REVIEW_REQUIRED",
         review: { status: "REQUIRED", summary: { file_count: 1 } },
-        diff: { files: [{ path: "src/app.ts", hunks: [] }] },
+        diff: {
+          files: [{ path: "src/app.ts", hunks: [] }],
+          max_bytes: 100_000,
+          bytes_returned: 42,
+          truncated: false,
+          omitted_paths: [],
+        },
         review_available: true,
       }), { status: 200 });
     },
@@ -677,6 +928,7 @@ test("retrieves a task-bound review checkpoint and diff", async () => {
   const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+  await authorizeDelegation(client);
 
   const response = await client.callTool({
     name: "cptr_get_task_review",
@@ -684,13 +936,19 @@ test("retrieves a task-bound review checkpoint and diff", async () => {
   });
 
   assert.equal(response.isError, undefined);
-  assert.equal(requestUrl.endsWith("/tasks/task-review/review"), true);
+  assert.equal(requestUrl.endsWith("/tasks/task-review/review?max_diff_bytes=100000"), true);
   assert.deepEqual(response.structuredContent, {
     task_id: "task-review",
     workspace_id: "ws-1",
     status: "REVIEW_REQUIRED",
     review: { status: "REQUIRED", summary: { file_count: 1 } },
-    diff: { files: [{ path: "src/app.ts", hunks: [] }] },
+    diff: {
+      files: [{ path: "src/app.ts", hunks: [] }],
+      max_bytes: 100_000,
+      bytes_returned: 42,
+      truncated: false,
+      omitted_paths: [],
+    },
     review_available: true,
   });
 

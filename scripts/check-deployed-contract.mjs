@@ -15,6 +15,7 @@ const expectedTools = [
   "cptr_cancel_autonomous",
   "cptr_cancel_task",
   "cptr_chrome_browser",
+  "cptr_code_apply_edits",
   "cptr_code_cancel_command",
   "cptr_code_create_directory",
   "cptr_code_delete_file",
@@ -24,6 +25,7 @@ const expectedTools = [
   "cptr_code_list_files",
   "cptr_code_move_file",
   "cptr_code_read_file",
+  "cptr_code_read_many_files",
   "cptr_code_run_command",
   "cptr_code_search_files",
   "cptr_code_write_file",
@@ -35,11 +37,15 @@ const expectedTools = [
   "cptr_get_autonomous_evidence",
   "cptr_get_diff",
   "cptr_get_task",
+  "cptr_get_task_events",
   "cptr_get_task_output",
   "cptr_get_task_review",
   "cptr_get_workbench_session",
   "cptr_get_workbench_session_events",
   "cptr_get_workspace",
+  "cptr_list_autonomous",
+  "cptr_list_models",
+  "cptr_list_tasks",
   "cptr_list_workbench_sessions",
   "cptr_list_workspaces",
   "cptr_monitor_autonomous",
@@ -66,6 +72,12 @@ const expectedTools = [
   "cptr_workspace_search_symbols",
   "cptr_workspace_tree",
 ];
+const auxiliaryTools = new Set([
+  "cptr_plugin_update", "cptr_chrome_browser",
+  "cptr_ssh_list_hosts", "cptr_ssh_run_command", "cptr_ssh_get_command", "cptr_ssh_cancel_command",
+]);
+const expectedPlannedTools = expectedTools.filter((name) => !auxiliaryTools.has(name));
+const expectedRegisteredToolCount = 62;
 const expectedResource = "ui://cptr/live-workbench.html";
 
 if (!endpoint || !token) {
@@ -114,8 +126,8 @@ if (typeof health?.workbench?.build_id !== "string" || health.workbench.build_id
 if (health?.mcp_contract?.version !== expectedContractVersion) {
   throw new Error(`MCP contract version drift: expected ${expectedContractVersion}, got ${health?.mcp_contract?.version ?? "missing"}`);
 }
-if (health?.mcp_contract?.tool_count !== expectedTools.length) {
-  throw new Error(`MCP health tool-count drift: expected ${expectedTools.length}, got ${health?.mcp_contract?.tool_count ?? "missing"}`);
+if (health?.mcp_contract?.tool_count !== expectedPlannedTools.length) {
+  throw new Error(`MCP health planned-tool-count drift: expected ${expectedPlannedTools.length}, got ${health?.mcp_contract?.tool_count ?? "missing"}`);
 }
 
 await rpc("initialize", {
@@ -125,6 +137,9 @@ await rpc("initialize", {
 });
 const tools = await rpc("tools/list", {});
 exactSet((tools.tools ?? []).map((tool) => tool.name), expectedTools, "tool contract");
+if ((tools.tools ?? []).length !== expectedRegisteredToolCount) {
+  throw new Error(`MCP registered-tool-count drift: expected ${expectedRegisteredToolCount}, got ${(tools.tools ?? []).length}`);
+}
 const uiTools = (tools.tools ?? [])
   .filter((tool) => tool?._meta?.ui?.resourceUri === expectedResource)
   .map((tool) => tool.name);
@@ -155,4 +170,4 @@ const expectedResourceDomains = health.workbench.hot_reload ? [expectedWidgetDom
 if (!Array.isArray(resourceDomains) || JSON.stringify(resourceDomains) !== JSON.stringify(expectedResourceDomains)) {
   throw new Error(`resource domain policy drift: expected [${expectedResourceDomains.join(", ")}]`);
 }
-console.log(`CPTR deployed MCP contract verified: ${expectedTools.length} tools, ${expectedResource}, and widget domain ${expectedWidgetDomain}`);
+console.log(`CPTR deployed MCP contract verified: ${expectedPlannedTools.length} planned tools, ${expectedRegisteredToolCount} registered actions, ${expectedResource}, and widget domain ${expectedWidgetDomain}`);

@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ComputerClient } from "./client/computer-client.js";
+import { ComputerApiError, ComputerClient } from "./client/computer-client.js";
 import { LiveTicketStore, type LiveTarget } from "./live-tickets.js";
 import { PromptTerminalStore } from "./prompt-terminal.js";
 import { WORKBENCH_RESOURCE_URI, createWorkbenchResource } from "./ui/workbench-resource.js";
@@ -57,6 +57,17 @@ import {
   workspaceTestDiscoverySchema,
   workspaceTestTargetSchema,
   workspaceTreeSchema,
+  listWorkspacesSchema,
+  listTasksSchema,
+  listAutonomousSchema,
+  taskEventsSchema,
+  autonomousEventsSchema,
+  autonomousEvidenceSchema,
+  taskOutputSchema,
+  taskReviewSchema,
+  gitDiffSchema,
+  readManyFilesSchema,
+  applyEditsSchema,
 } from "./schemas/tools.js";
 
 function result<T extends Record<string, unknown>>(value: T) {
@@ -77,6 +88,12 @@ function workspaceScopedPrompt(prompt: string): string {
     return value;
   }
   return `${DIRECT_TASK_SCOPE_PREFIX}\n\nAssignment:\n${value}`;
+}
+
+function delegatedPrompt(prompt: string): string {
+  const value = prompt.trim();
+  if (/(^|\s)allow:delegate(?=\s|$)/i.test(value)) return value;
+  return `${value}\n\nDelegation authorization: allow:delegate`;
 }
 
 const TERMINAL_JSON_LIMIT = 12_000;
@@ -185,24 +202,6 @@ function activityResult<T extends Record<string, unknown>>(value: T, toolName: s
   };
 }
 
-function requireExplicitCptrModelDelegation(input: {
-  model_id?: string;
-  prompt?: string;
-  goal?: string;
-}): void {
-  const delegationText = input.prompt ?? input.goal ?? "";
-  if (!/(^|[^\w:])allow:delegation([^\w:]|$)/i.test(delegationText)) {
-    throw new Error(
-      "CPTR model delegation is disabled by default. Use CPTR coding tools for normal work; only delegate when the user includes the literal allow:delegation marker in the delegated task or goal.",
-    );
-  }
-  if (!input.model_id) {
-    throw new Error(
-      "CPTR model delegation requires the user to name a fully qualified provider/model or agent:profile/model.",
-    );
-  }
-}
-
 function recordWorkbenchActivity(
   client: ComputerClient,
   sessionId: string | undefined,
@@ -261,20 +260,119 @@ const openWorkbenchToolMetadata = {
   ui: { resourceUri: WORKBENCH_RESOURCE_URI },
 };
 
-const autonomousSummaryOutputSchema = {
-  monitor_id: z.string().optional(),
-  goal_id: z.string().optional(),
-  workspace_id: z.string().optional(),
-  status: z.string().optional(),
-  scope_count: z.number().optional(),
-  verified_count: z.number().optional(),
-  current_scope: z.string().nullable().optional(),
-  original_goal: z.string().optional(),
-  acceptance_criteria: z.array(z.string()).optional(),
-  approval_id: z.string().nullable().optional(),
-  approval: z.record(z.string(), z.unknown()).optional(),
-  scopes: z.array(z.record(z.string(), z.unknown())).optional(),
+const liveEventOutputSchema = z.object({
+  version: z.number().int(),
+  event_id: z.string(),
+  sequence: z.number().int().nonnegative(),
+  timestamp: z.string(),
+  target: z.object({ type: z.string(), id: z.string() }),
+  task_id: z.string().nullable(),
+  monitor_id: z.string().nullable(),
+  worker_task_id: z.string().nullable(),
+  type: z.string(),
+  payload: z.record(z.string(), z.unknown()),
+  redaction_applied: z.boolean(),
+});
+
+const taskListItemOutputSchema = z.object({
+  id: z.string(),
+  task_id: z.string(),
+  workspace_id: z.string(),
+  status: z.string(),
+  review_status: z.string(),
+  error: z.string().nullable(),
+  created_at: z.number().int(),
+  updated_at: z.number().int(),
+});
+
+const directCommandOutputSchema = {
+  workspace_id: z.string(),
+  command_id: z.string(),
+  status: z.string(),
+  exit_code: z.number().int().nullable(),
+  output: z.string(),
+  next_offset: z.number().int().nonnegative(),
+  duration_ms: z.number().int().nonnegative(),
+  output_truncated: z.boolean(),
+  timed_out: z.boolean(),
 };
+
+const autonomousSummaryOutputSchema = {
+  monitor_id: z.string(),
+  goal_id: z.string(),
+  workspace_id: z.string(),
+  status: z.string(),
+  scope_count: z.number().int(),
+  verified_count: z.number().int(),
+  current_scope: z.string().nullable(),
+  original_goal: z.string(),
+  acceptance_criteria: z.array(z.string()),
+  approval_id: z.string().nullable(),
+  approval: z.object({
+    approval_id: z.string(),
+    operation: z.string(),
+    reason: z.string(),
+    status: z.string(),
+    requested_at: z.number().int(),
+  }).optional(),
+  created_at: z.number().int(),
+  updated_at: z.number().int(),
+  quiesced: z.boolean().optional(),
+  scopes: z.array(z.object({
+    scope_id: z.string(),
+    title: z.string(),
+    status: z.string(),
+    verified: z.boolean(),
+  }).passthrough()),
+};
+
+const DELEGATED_AGENT_TOOL_NAMES = new Set([
+  "cptr_list_models",
+  "cptr_list_tasks",
+  "cptr_list_autonomous",
+  "cptr_get_task_events",
+  "cptr_start_task",
+  "cptr_execute_task",
+  "cptr_monitor_autonomous",
+  "cptr_get_autonomous",
+  "cptr_get_autonomous_events",
+  "cptr_get_autonomous_evidence",
+  "cptr_steer_autonomous",
+  "cptr_cancel_autonomous",
+  "cptr_approve_autonomous",
+  "cptr_get_task",
+  "cptr_get_task_output",
+  "cptr_get_task_review",
+  "cptr_decide_task_review",
+  "cptr_send_message",
+  "cptr_cancel_task",
+]);
+
+const DIRECT_GROUP_DESCRIPTION =
+  "Tool group: ChatGPT Direct Coding. This is the default execution path. ChatGPT itself must inspect, edit, run, verify, browse, or operate the selected workspace through these bounded CPTR primitives; do not delegate the work to a CPTR model, agent profile, Codex, Hermes, or another autonomous coding agent.";
+const DELEGATE_GROUP_DESCRIPTION =
+  "Tool group: Delegated Agent. This tool is model/agent-backed CPTR orchestration or lifecycle control. It is blocked unless the current user prompt contains the exact opt-in token `allow:delegate` and the prompt Workbench session was opened with delegation_authorization=`allow:delegate`. The opt-in applies to CPTR native agents/models and other agent profiles such as Codex or Hermes.";
+
+function groupedToolConfig<T extends { title?: string; description?: string }>(name: string, config: T): T {
+  const delegated = DELEGATED_AGENT_TOOL_NAMES.has(name);
+  const groupName = delegated ? "Delegated Agent" : "ChatGPT Direct Coding";
+  const policy = delegated ? DELEGATE_GROUP_DESCRIPTION : DIRECT_GROUP_DESCRIPTION;
+  const conditional = name === "cptr_render_live_terminal"
+    ? " Command-target binding is direct; task/monitor binding is delegated-agent lifecycle access and therefore also requires the prompt-session `allow:delegate` capability."
+    : "";
+  return {
+    ...config,
+    title: `[${groupName}] ${config.title?.trim() || name}`,
+    description: `${policy}${conditional}${config.description ? ` ${config.description}` : ""}`,
+  };
+}
+
+function requiresDelegationAuthorization(name: string, input: unknown): boolean {
+  if (DELEGATED_AGENT_TOOL_NAMES.has(name)) return true;
+  if (name !== "cptr_render_live_terminal" || !input || typeof input !== "object") return false;
+  const targetType = (input as { target_type?: unknown }).target_type;
+  return targetType === "task" || targetType === "monitor";
+}
 
 export function createMcpServer(
   client: ComputerClient,
@@ -318,41 +416,65 @@ export function createMcpServer(
   const rawRegisterTool = server.registerTool.bind(server);
   (server as unknown as { registerTool: typeof server.registerTool }).registerTool = ((
     name: string,
-    config: { title?: string },
+    config: { title?: string; description?: string },
     handler: (...args: unknown[]) => unknown,
-  ) => rawRegisterTool(
-    name as never,
-    config as never,
-    (async (...args: unknown[]) => {
-      const label = config.title?.trim() || name;
-      const input = args.length ? args[0] : {};
-      publishActivity(
-        name,
-        `Working: ${label}.`,
-        "STARTED",
-        { argumentsJson: terminalJson(input) },
-      );
-      try {
-        const value = await handler(...args);
+  ) => {
+    const groupedConfig = groupedToolConfig(name, config);
+    return rawRegisterTool(
+      name as never,
+      groupedConfig as never,
+      (async (...args: unknown[]) => {
+        const label = groupedConfig.title?.trim() || name;
+        const input = args.length ? args[0] : {};
         publishActivity(
           name,
-          `Completed: ${label}.`,
-          "COMPLETE",
-          { resultJson: terminalJson(terminalToolResult(value)) },
+          `Working: ${label}.`,
+          "STARTED",
+          { argumentsJson: terminalJson(input) },
         );
-        return value as never;
-      } catch (error) {
-        const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-        publishActivity(
-          name,
-          `Failed: ${label}.`,
-          "FAILED",
-          { error: redactTerminalString(message) },
-        );
-        throw error;
-      }
-    }) as never,
-  )) as typeof server.registerTool;
+        try {
+          if (
+            requiresDelegationAuthorization(name, input) &&
+            !promptSessions.allowsDelegation(activePromptTicket)
+          ) {
+            throw new ComputerApiError(
+              403,
+              "delegated-agent tools are disabled for this prompt; the user must include the exact token allow:delegate and cptr_open_live_workbench must record that authorization for the current prompt session",
+              "delegation_not_allowed",
+              false,
+              "allow:delegate",
+            );
+          }
+          const value = await handler(...args);
+          publishActivity(
+            name,
+            `Completed: ${label}.`,
+            "COMPLETE",
+            { resultJson: terminalJson(terminalToolResult(value)) },
+          );
+          return value as never;
+        } catch (error) {
+          const envelope = error instanceof ComputerApiError
+            ? error.toEnvelope()
+            : {
+                code: "mcp_tool_error",
+                message: redactTerminalString(error instanceof Error ? error.message : String(error)),
+                retriable: false,
+              };
+          publishActivity(
+            name,
+            `Failed: ${label}.`,
+            "FAILED",
+            { error: terminalJson(envelope) },
+          );
+          return {
+            isError: true,
+            content: [{ type: "text" as const, text: JSON.stringify(envelope) }],
+          } as never;
+        }
+      }) as never,
+    );
+  }) as typeof server.registerTool;
 
   const activityResult = <T extends Record<string, unknown>>(
     value: T,
@@ -369,13 +491,29 @@ export function createMcpServer(
     value: T,
     target: LiveTarget,
     _toolName?: string,
+    presentation?: Record<string, unknown>,
   ) => {
     const live = tickets.issue(target);
     promptSessions.append(activePromptTicket, {
       type: "live.bind",
       payload: { live },
     });
-    return result(value);
+    return {
+      ...result(value),
+      ...(presentation ? { _meta: { ui: { presentation } } } : {}),
+    };
+  };
+
+  const recentLiveEvents = async (
+    targetType: "task" | "monitor" | "command",
+    targetId: string,
+    workspaceId?: string,
+  ): Promise<Array<Record<string, unknown>>> => {
+    const snapshot = await client.getLiveSnapshot(targetType, targetId, 0, workspaceId);
+    const events = Array.isArray(snapshot.events) ? snapshot.events : [];
+    return events
+      .filter((event): event is Record<string, unknown> => Boolean(event) && typeof event === "object" && !Array.isArray(event))
+      .slice(-20);
   };
   server.registerResource(
     "cptr-live-workbench",
@@ -408,12 +546,18 @@ export function createMcpServer(
         workspace_id: z.string().nullable(),
         title: z.string(),
         initial_summary: z.string(),
+        delegation_allowed: z.boolean(),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: openWorkbenchToolMetadata,
     },
     async (input) => {
-      const prompt = promptSessions.open();
+      const delegationAllowed = input.delegation_authorization === "allow:delegate";
+      const preloadedWorkspaces = await client
+        .listWorkspaces(false)
+        .then((value) => Array.isArray(value.workspaces) ? value.workspaces : [])
+        .catch(() => []);
+      const prompt = promptSessions.open({ allowDelegate: delegationAllowed });
       activePromptTicket = prompt.ticket;
       const session = input.resume_session_id
         ? await client.getWorkbenchSession(input.resume_session_id)
@@ -427,7 +571,10 @@ export function createMcpServer(
         status: session.status,
         workspace_id: session.workspace_id,
         title: "CPTR computer activity",
-        initial_summary: `Workbench Session ${session.session_id} is ready. Later CPTR calls update this same terminal without creating another widget.`,
+        initial_summary: delegationAllowed
+          ? `Workbench Session ${session.session_id} is ready. ChatGPT Direct Coding remains available and the user explicitly enabled Delegated Agent tools for this prompt.`
+          : `Workbench Session ${session.session_id} is ready. ChatGPT Direct Coding is enabled; Delegated Agent tools are blocked unless the user prompt includes allow:delegate.`,
+        delegation_allowed: delegationAllowed,
       };
       const activity = publishActivity(
         "cptr_open_live_workbench",
@@ -438,10 +585,67 @@ export function createMcpServer(
         _meta: {
           "cptr/prompt": prompt,
           "cptr/activity": activity,
+          "cptr/workspaces": preloadedWorkspaces,
         },
       };
     },
   );
+
+  server.registerTool("cptr_list_models", {
+    title: "List CPTR models",
+    description: "Discover configured model IDs before starting a task; use the returned default when no model is specified.",
+    inputSchema: {}, outputSchema: { models: z.array(z.object({ model_id: z.string(), name: z.string(), default: z.boolean() })) },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, _meta: oauthToolMetadata,
+  }, async () => activityResult(await client.listModels(), "cptr_list_models"));
+  server.registerTool("cptr_list_tasks", {
+    title: "List CPTR tasks", description: "Recover or rebind recent durable delegated tasks by workspace and status. Returns the newest tasks first, bounded by limit.",
+    inputSchema: listTasksSchema,
+    outputSchema: { tasks: z.array(taskListItemOutputSchema) },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, _meta: oauthToolMetadata,
+  }, async (input) => activityResult(await client.listTasks(input), "cptr_list_tasks"));
+  server.registerTool("cptr_list_autonomous", {
+    title: "List CPTR monitors", description: "Recover active or recent delegated autonomous monitors by workspace/status, including per-scope verification state.",
+    inputSchema: listAutonomousSchema,
+    outputSchema: { monitors: z.array(z.object(autonomousSummaryOutputSchema)) },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, _meta: oauthToolMetadata,
+  }, async (input) => activityResult(await client.listAutonomous(input), "cptr_list_autonomous"));
+  server.registerTool("cptr_get_task_events", {
+    title: "Get task events", description: "Read the same paginated, redacted durable event stream used by the live gateway for delegated task recovery.",
+    inputSchema: taskEventsSchema,
+    outputSchema: {
+      task_id: z.string(),
+      after_sequence: z.number().int().nonnegative(),
+      last_sequence: z.number().int().nonnegative(),
+      max_events: z.number().int().positive(),
+      truncated: z.boolean(),
+      events: z.array(liveEventOutputSchema),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, _meta: oauthToolMetadata,
+  }, async (input) => activityResult(await client.getTaskEvents(input), "cptr_get_task_events"));
+  server.registerTool("cptr_code_read_many_files", {
+    title: "Read multiple CPTR files", description: "Read up to ten workspace files in one direct ChatGPT request with a shared character budget; each file includes its full-content SHA-256 for safe follow-up writes.",
+    inputSchema: readManyFilesSchema,
+    outputSchema: {
+      workspace_id: z.string(),
+      files: z.array(z.object({
+        path: z.string(),
+        content: z.string(),
+        content_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+        truncated: z.boolean(),
+        start_line: z.number().int().nonnegative(),
+        end_line: z.number().int().nonnegative(),
+        total_lines: z.number().int().nonnegative(),
+      })),
+      total_chars: z.number().int().nonnegative(),
+      truncated: z.boolean(),
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, _meta: oauthToolMetadata,
+  }, async (input) => activityResult(await client.readManyFiles(input), "cptr_code_read_many_files"));
+  server.registerTool("cptr_code_apply_edits", {
+    title: "Apply atomic CPTR edits", description: "Apply up to twenty unambiguous edits atomically with optional stale-file protection.",
+    inputSchema: applyEditsSchema, outputSchema: { workspace_id: z.string(), path: z.string(), sha256: z.string(), diff: z.string() },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }, _meta: oauthToolMetadata,
+  }, async (input) => activityResult(await client.applyEdits(input), "cptr_code_apply_edits"));
 
   server.registerTool(
     "cptr_plugin_update",
@@ -625,12 +829,20 @@ export function createMcpServer(
     {
       title: "List CPTR workspaces",
       description: "Use this when the user wants to discover the CPTR workspaces they can control.",
-      inputSchema: {},
-      outputSchema: { workspaces: z.array(z.record(z.string(), z.unknown())) },
+      inputSchema: listWorkspacesSchema,
+      outputSchema: {
+        workspaces: z.array(z.object({
+          workspace_id: z.string(),
+          name: z.string(),
+          available: z.boolean(),
+          last_used_at: z.number().int(),
+        })),
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
-    async () => initialWorkbenchResult(await client.listWorkspaces(), "cptr_list_workspaces"),
+    async ({ include_unavailable }) =>
+      initialWorkbenchResult(await client.listWorkspaces(include_unavailable), "cptr_list_workspaces"),
   );
 
   server.registerTool(
@@ -639,7 +851,14 @@ export function createMcpServer(
       title: "Get a CPTR workspace",
       description: "Use this when the user wants details about one CPTR workspace by workspace ID.",
       inputSchema: workspaceIdSchema,
-      outputSchema: { workspace_id: z.string(), name: z.string() },
+      outputSchema: {
+        workspace_id: z.string(),
+        name: z.string(),
+        available: z.boolean(),
+        is_git_repo: z.boolean(),
+        dirty_file_count: z.number().int(),
+        last_used_at: z.number().int(),
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -816,7 +1035,19 @@ export function createMcpServer(
       description:
         "Use this to inspect the selected CPTR workspace before ChatGPT directly edits code. It cannot access paths outside that workspace.",
       inputSchema: codingListSchema,
-      outputSchema: { workspace_id: z.string(), path: z.string(), entries: z.string() },
+      outputSchema: {
+        workspace_id: z.string(),
+        path: z.string(),
+        entries: z.array(z.object({
+          path: z.string(),
+          type: z.enum(["file", "directory"]),
+          size: z.number().int().nonnegative(),
+        })),
+        total: z.number().int().nonnegative(),
+        truncated: z.boolean(),
+        max_entries: z.number().int().positive(),
+        cursor: z.string().nullable(),
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -838,6 +1069,7 @@ export function createMcpServer(
         end_line: z.number().int(),
         total_lines: z.number().int(),
         size: z.number().int(),
+        content_sha256: z.string().regex(/^[a-f0-9]{64}$/),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
@@ -852,7 +1084,18 @@ export function createMcpServer(
       description:
         "Use this to locate symbols, text, or files in the selected CPTR workspace before ChatGPT edits code.",
       inputSchema: codingSearchSchema,
-      outputSchema: { workspace_id: z.string(), path: z.string(), matches: z.string() },
+      outputSchema: {
+        workspace_id: z.string(),
+        path: z.string(),
+        matches: z.array(z.object({
+          path: z.string(),
+          line: z.number().int().nonnegative(),
+          text: z.string(),
+          context: z.array(z.string()).optional(),
+        })),
+        max_results: z.number().int().positive(),
+        truncated: z.boolean(),
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -866,7 +1109,12 @@ export function createMcpServer(
       description:
         "Use this only when the user explicitly asks ChatGPT to create or replace code in the selected CPTR workspace. Read the existing file first when modifying it. CPTR rejects paths outside the workspace and environment files.",
       inputSchema: codingWriteSchema,
-      outputSchema: { workspace_id: z.string(), path: z.string(), bytes_written: z.number().int() },
+      outputSchema: {
+        workspace_id: z.string(),
+        path: z.string(),
+        bytes_written: z.number().int().nonnegative(),
+        sha256: z.string().regex(/^[a-f0-9]{64}$/),
+      },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -883,8 +1131,10 @@ export function createMcpServer(
       outputSchema: {
         workspace_id: z.string(),
         path: z.string(),
-        replaced_characters: z.number().int(),
-        inserted_characters: z.number().int(),
+        replaced_characters: z.number().int().nonnegative(),
+        inserted_characters: z.number().int().nonnegative(),
+        sha256: z.string().regex(/^[a-f0-9]{64}$/),
+        diff: z.string(),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
@@ -899,7 +1149,12 @@ export function createMcpServer(
       description:
         "Use this only when the user explicitly asks ChatGPT to create a source directory in the selected CPTR workspace. Paths remain confined to the workspace.",
       inputSchema: codingDirectorySchema,
-      outputSchema: { workspace_id: z.string(), path: z.string(), type: z.string() },
+      outputSchema: {
+        workspace_id: z.string(),
+        path: z.string(),
+        type: z.literal("directory"),
+        created: z.boolean(),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -913,7 +1168,12 @@ export function createMcpServer(
       description:
         "Use this only when the user explicitly asks ChatGPT to rename or move a file. CPTR confines both paths to the selected workspace, refuses directory moves, and refuses overwriting an existing destination.",
       inputSchema: codingMoveSchema,
-      outputSchema: { workspace_id: z.string(), source: z.string(), destination: z.string() },
+      outputSchema: {
+        workspace_id: z.string(),
+        source: z.string(),
+        destination: z.string(),
+        sha256: z.string().regex(/^[a-f0-9]{64}$/),
+      },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -927,7 +1187,12 @@ export function createMcpServer(
       description:
         "Use this only when the user explicitly asks ChatGPT to delete a file. CPTR confines the path to the selected workspace and refuses directory deletion.",
       inputSchema: codingDeleteSchema,
-      outputSchema: { workspace_id: z.string(), path: z.string(), deleted: z.boolean() },
+      outputSchema: {
+        workspace_id: z.string(),
+        path: z.string(),
+        deleted: z.boolean(),
+        existed: z.boolean(),
+      },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -941,7 +1206,23 @@ export function createMcpServer(
       description:
         "Use this to inspect changed, staged, and untracked files in the selected CPTR workspace before or after direct coding edits.",
       inputSchema: workspaceIdSchema,
-      outputSchema: { is_repo: z.boolean(), files: z.array(z.record(z.string(), z.unknown())) },
+      outputSchema: {
+        is_repo: z.boolean(),
+        branch: z.string().optional(),
+        ahead: z.number().int().nonnegative().optional(),
+        behind: z.number().int().nonnegative().optional(),
+        files: z.array(z.object({
+          path: z.string(),
+          status: z.string(),
+          staged: z.boolean(),
+          unstaged: z.boolean().optional(),
+          staged_status: z.string().optional(),
+          unstaged_status: z.string().optional(),
+          additions: z.number().int().nonnegative().optional(),
+          deletions: z.number().int().nonnegative().optional(),
+          binary: z.boolean().optional(),
+        })),
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -955,14 +1236,7 @@ export function createMcpServer(
       description:
         "Use this only when the user explicitly asks ChatGPT to run a development or validation command in the selected CPTR workspace. CPTR rejects destructive commands. Commands that might contact external services require explicit user approval through allow_network=true.",
       inputSchema: codingCommandSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        command_id: z.string(),
-        status: z.string(),
-        exit_code: z.number().int().nullable(),
-        output: z.string(),
-        next_offset: z.number().int(),
-      },
+      outputSchema: directCommandOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
       _meta: workbenchToolMetadata,
     },
@@ -1001,14 +1275,7 @@ export function createMcpServer(
       description:
         "Use this to retrieve completion status and incremental output from a command previously started through direct coding.",
       inputSchema: codingCommandStatusSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        command_id: z.string(),
-        status: z.string(),
-        exit_code: z.number().int().nullable(),
-        output: z.string(),
-        next_offset: z.number().int(),
-      },
+      outputSchema: directCommandOutputSchema,
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
@@ -1029,14 +1296,7 @@ export function createMcpServer(
       description:
         "Use this only when the user explicitly asks ChatGPT to stop a running direct-coding command.",
       inputSchema: codingCommandCancelSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        command_id: z.string(),
-        status: z.string(),
-        exit_code: z.number().int().nullable(),
-        output: z.string(),
-        next_offset: z.number().int(),
-      },
+      outputSchema: directCommandOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
@@ -1190,19 +1450,18 @@ export function createMcpServer(
   server.registerTool(
     "cptr_start_task",
     {
-      title: "Delegate to an explicitly requested CPTR model",
-      description: "Do not use this for ordinary CPTR work: ChatGPT must complete the user's request itself by chaining the scoped workspace and coding tools. Use this only when the user explicitly asks to delegate to a named CPTR model. The delegated task text must include the literal allow:delegation marker and name model_id; CPTR never discovers or chooses a model implicitly. When delegating, encode any write, command, network, or package restrictions in execution_policy.",
+      title: "Start an authorized delegated CPTR task",
+      description: "Do not use this for ordinary CPTR work: ChatGPT must complete the user's request itself through the ChatGPT Direct Coding tools. This Delegated Agent tool is available only when the current prompt session was explicitly authorized with allow:delegate. model_id may name provider/model or agent:profile/model; when omitted, CPTR may use its configured qualified default only after delegation authorization. Encode write, command, network, and package restrictions in execution_policy.",
       inputSchema: startTaskSchema,
       outputSchema: { id: z.string(), status: z.string(), workspace_id: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
     async (input) => {
-      requireExplicitCptrModelDelegation(input);
       const { workbench_session_id, ...taskInput } = input;
       const task = await client.startTask({
         ...taskInput,
-        prompt: workspaceScopedPrompt(input.prompt),
+        prompt: delegatedPrompt(workspaceScopedPrompt(input.prompt)),
       });
       if (workbench_session_id) {
         await client.bindWorkbenchSession({
@@ -1228,9 +1487,9 @@ export function createMcpServer(
   server.registerTool(
     "cptr_execute_task",
     {
-      title: "Execute an explicitly requested CPTR model delegation",
+      title: "Execute an authorized delegated CPTR task",
       description:
-        "Do not use this for ordinary CPTR work: ChatGPT must perform the user's request itself through scoped workspace and coding tools. Use it only when the user explicitly asks CPTR to delegate the contained task, includes the literal allow:delegation marker, and names model_id. CPTR never discovers or chooses a model implicitly. The call waits at most 60 seconds; durable task status remains available for follow-up.",
+        "Do not use this for ordinary CPTR work: ChatGPT must perform the user's request itself through the ChatGPT Direct Coding tools. This Delegated Agent tool is available only when the current prompt session was explicitly authorized with allow:delegate. model_id may name provider/model or agent:profile/model; when omitted, CPTR may use its configured qualified default only after authorization. The call waits at most 60 seconds and uses durable status for follow-up.",
       inputSchema: executeTaskSchema,
       outputSchema: {
         task_id: z.string(),
@@ -1239,6 +1498,8 @@ export function createMcpServer(
         output: z.string(),
         output_truncated: z.boolean(),
         error: z.string().nullable().optional(),
+        completion_integrity: z.record(z.string(), z.unknown()).optional(),
+        review_summary: z.record(z.string(), z.unknown()).nullable().optional(),
         completed: z.boolean(),
         wait_seconds: z.number().int(),
       },
@@ -1246,11 +1507,10 @@ export function createMcpServer(
       _meta: workbenchToolMetadata,
     },
     async (input) => {
-      requireExplicitCptrModelDelegation(input);
       const { workbench_session_id, ...taskInput } = input;
       const task = await client.executeTask({
         ...taskInput,
-        prompt: workspaceScopedPrompt(input.prompt),
+        prompt: delegatedPrompt(workspaceScopedPrompt(input.prompt)),
       });
       if (workbench_session_id) {
         await client.bindWorkbenchSession({
@@ -1276,19 +1536,30 @@ export function createMcpServer(
   server.registerTool(
     "cptr_monitor_autonomous",
     {
-      title: "Delegate an autonomous goal to an explicitly requested CPTR model",
-      description: "Do not use this for ordinary CPTR work: ChatGPT must carry out the user's task through scoped workspace and coding tools. Use it only when the user explicitly requests an autonomous CPTR model delegation, includes the literal allow:delegation marker, and names model_id. CPTR never discovers or chooses a model implicitly; delegated workers still inherit server-enforced execution_policy limits.",
+      title: "Start an authorized autonomous CPTR delegation",
+      description: "Do not use this for ordinary CPTR work: ChatGPT must carry out the user's task through the ChatGPT Direct Coding tools. This Delegated Agent tool is available only when the current prompt session was explicitly authorized with allow:delegate and requires the selected qualified model/profile. Delegated workers inherit the server-enforced execution_policy limits.",
       inputSchema: monitorAutonomousSchema,
       outputSchema: autonomousSummaryOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
     async (input) => {
-      requireExplicitCptrModelDelegation(input);
       const { workbench_session_id, ...monitorInput } = input;
-      const monitor = await client.createAutonomous(monitorInput);
+      const monitor = await client.createAutonomous({
+        ...monitorInput,
+        goal: delegatedPrompt(input.goal),
+      });
       const monitorId = String(monitor.monitor_id ?? monitor.goal_id ?? "");
-      if (!monitorId) return activityResult(monitor, "cptr_monitor_autonomous");
+      if (!monitorId) {
+        throw new ComputerApiError(
+          502,
+          "CPTR autonomous creation returned no monitor identity",
+          "monitor_identity_missing",
+          true,
+          "monitor_id",
+        );
+      }
+      const normalizedMonitor = { ...monitor, monitor_id: monitorId };
       if (workbench_session_id) {
         await client.bindWorkbenchSession({
           session_id: workbench_session_id,
@@ -1306,7 +1577,11 @@ export function createMcpServer(
           summary: "ChatGPT started a CPTR autonomous monitor.",
         });
       }
-      return workbenchResult(monitor, { targetType: "monitor", targetId: monitorId }, "cptr_monitor_autonomous");
+      return workbenchResult(
+        normalizedMonitor,
+        { targetType: "monitor", targetId: monitorId },
+        "cptr_monitor_autonomous",
+      );
     },
   );
 
@@ -1321,6 +1596,9 @@ export function createMcpServer(
         target_id: z.string().min(1),
         workspace_id: z.string().min(1).max(200).optional(),
         workbench_session_id: z.string().regex(/^wbs_[A-Za-z0-9_-]{16,80}$/).optional(),
+        presentation: z.record(z.string(), z.unknown()).optional().describe(
+          "Optional Apps SDK presentation preferences. They do not change CPTR permissions and are forwarded only in result _meta.ui.presentation.",
+        ),
       }),
       outputSchema: {
         target_type: z.enum(["task", "monitor", "command"]),
@@ -1330,11 +1608,12 @@ export function createMcpServer(
         review_status: z.string().optional(),
         title: z.string(),
         initial_summary: z.string(),
+        recent_events: z.array(z.record(z.string(), z.unknown())),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
-    async ({ target_type, target_id, workspace_id, workbench_session_id }) => {
+    async ({ target_type, target_id, workspace_id, workbench_session_id, presentation }) => {
       const bindSession = async (resolvedWorkspaceId?: string) => {
         if (!workbench_session_id) return;
         if (target_type === "command" && !resolvedWorkspaceId) {
@@ -1356,7 +1635,10 @@ export function createMcpServer(
         });
       };
       if (target_type === "task") {
-        const task = await client.getTask(target_id);
+        const [task, recent_events] = await Promise.all([
+          client.getTask(target_id),
+          recentLiveEvents("task", target_id),
+        ]);
         await bindSession(task.workspace_id);
         return workbenchResult(
           {
@@ -1367,19 +1649,24 @@ export function createMcpServer(
             review_status: task.review?.status,
             title: "CPTR task activity",
             initial_summary: `Task ${target_id} is ${task.status}.`,
+            recent_events,
           },
           { targetType: target_type, targetId: target_id },
           "cptr_render_live_terminal",
+          presentation,
         );
       }
       if (target_type === "command") {
         if (!workspace_id) throw new Error("workspace_id is required for a command live terminal");
-        const command = await client.getCodingCommand({
-          workspace_id,
-          command_id: target_id,
-          offset: 0,
-          wait_seconds: 0,
-        });
+        const [command, recent_events] = await Promise.all([
+          client.getCodingCommand({
+            workspace_id,
+            command_id: target_id,
+            offset: 0,
+            wait_seconds: 0,
+          }),
+          recentLiveEvents("command", target_id, workspace_id),
+        ]);
         await bindSession(workspace_id);
         return workbenchResult(
           {
@@ -1389,12 +1676,17 @@ export function createMcpServer(
             workspace_id,
             title: "CPTR command activity",
             initial_summary: `Command ${target_id} is ${command.status}.`,
+            recent_events,
           },
           { targetType: "command", targetId: target_id, workspaceId: workspace_id },
           "cptr_render_live_terminal",
+          presentation,
         );
       }
-      const monitor = await client.getAutonomous(target_id);
+      const [monitor, recent_events] = await Promise.all([
+        client.getAutonomous(target_id),
+        recentLiveEvents("monitor", target_id),
+      ]);
       const status = String(monitor.status ?? "UNKNOWN");
       await bindSession(workspace_id);
       return workbenchResult(
@@ -1404,9 +1696,11 @@ export function createMcpServer(
           status,
           title: "CPTR autonomous monitor",
           initial_summary: `Monitor ${target_id} is ${status}.`,
+          recent_events,
         },
         { targetType: target_type, targetId: target_id },
         "cptr_render_live_terminal",
+        presentation,
       );
     },
   );
@@ -1428,44 +1722,56 @@ export function createMcpServer(
     "cptr_get_autonomous_events",
     {
       title: "Get CPTR autonomous events",
-      description: "Use this to inspect durable lifecycle events for a CPTR autonomous monitor.",
-      inputSchema: monitorIdSchema,
+      description: "Read a paginated, redacted durable event stream for one autonomous monitor. Use after_sequence and max_events to resume without replaying the full history.",
+      inputSchema: autonomousEventsSchema,
       outputSchema: {
-        monitor_id: z.string().optional(),
-        events: z.array(z.record(z.string(), z.unknown())).optional(),
+        monitor_id: z.string(),
+        after_sequence: z.number().int().nonnegative(),
+        last_sequence: z.number().int().nonnegative(),
+        max_events: z.number().int().positive(),
+        truncated: z.boolean(),
+        events: z.array(liveEventOutputSchema),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async ({ monitor_id }) => activityResult(await client.getAutonomousEvents(monitor_id), "cptr_get_autonomous_events"),
+    async (input) => activityResult(await client.getAutonomousEvents(input), "cptr_get_autonomous_events"),
   );
 
   server.registerTool(
     "cptr_get_autonomous_evidence",
     {
       title: "Get CPTR autonomous evidence",
-      description: "Use this to inspect persisted worker and independent verification evidence for a CPTR autonomous monitor.",
-      inputSchema: monitorIdSchema,
+      description: "Read persisted worker and independent verification evidence for one autonomous monitor, optionally filtered to a single scope_id.",
+      inputSchema: autonomousEvidenceSchema,
       outputSchema: {
-        monitor_id: z.string().optional(),
-        evidence: z.array(z.record(z.string(), z.unknown())).optional(),
+        monitor_id: z.string(),
+        evidence: z.array(z.object({
+          evidence_id: z.string(),
+          scope_id: z.string().nullable(),
+          kind: z.string(),
+          payload: z.record(z.string(), z.unknown()),
+          created_at: z.number().int(),
+        })),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async ({ monitor_id }) => activityResult(await client.getAutonomousEvidence(monitor_id), "cptr_get_autonomous_evidence"),
+    async (input) => activityResult(await client.getAutonomousEvidence(input), "cptr_get_autonomous_evidence"),
   );
 
   server.registerTool(
     "cptr_steer_autonomous",
     {
       title: "Steer a CPTR autonomous monitor",
-      description: "Use this to send a scoped follow-up message to a running CPTR autonomous monitor.",
+      description: "Send a scoped follow-up message to a running autonomous monitor. The response confirms whether the durable steering request was accepted and reports its current delivery status.",
       inputSchema: steerAutonomousSchema,
       outputSchema: {
+        message_id: z.string(),
+        status: z.string(),
+        accepted: z.boolean(),
         task_id: z.string().optional(),
-        message_id: z.string().optional(),
-        status: z.string().optional(),
+        control_message_id: z.string().optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
@@ -1480,7 +1786,7 @@ export function createMcpServer(
       title: "Cancel a CPTR autonomous monitor",
       description: "Use this when the user explicitly wants to stop a running CPTR autonomous monitor.",
       inputSchema: monitorIdSchema,
-      outputSchema: autonomousSummaryOutputSchema,
+      outputSchema: { ...autonomousSummaryOutputSchema, quiesced: z.boolean() },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -1497,17 +1803,31 @@ export function createMcpServer(
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
       _meta: oauthToolMetadata,
     },
-    async ({ monitor_id, approval_id, approved }) =>
-      activityResult(await client.approveAutonomous(monitor_id, approval_id, approved), "cptr_approve_autonomous"),
+    async ({ monitor_id, approval_id, approved, note }) =>
+      activityResult(await client.approveAutonomous(monitor_id, approval_id, approved, note), "cptr_approve_autonomous"),
   );
 
   server.registerTool(
     "cptr_get_task",
     {
       title: "Get CPTR task status",
-      description: "Use this when the user wants the current durable status of a CPTR task by task ID.",
+      description: "Read the durable task state, timestamps, review status, and terminal error for one delegated CPTR task.",
       inputSchema: taskIdSchema,
-      outputSchema: { id: z.string(), status: z.string() },
+      outputSchema: {
+        id: z.string(),
+        workspace_id: z.string(),
+        chat_id: z.string(),
+        message_id: z.string(),
+        status: z.string(),
+        prompt: z.string(),
+        model_id: z.string(),
+        output: z.string(),
+        error: z.string().nullable(),
+        review_status: z.string(),
+        review: z.record(z.string(), z.unknown()),
+        created_at: z.number().int(),
+        updated_at: z.number().int(),
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -1518,13 +1838,23 @@ export function createMcpServer(
     "cptr_get_task_output",
     {
       title: "Get CPTR task output",
-      description: "Use this when the user wants durable output from a CPTR task by task ID.",
-      inputSchema: taskIdSchema,
-      outputSchema: { task_id: z.string(), status: z.string(), content: z.string() },
+      description: "Read a bounded page of durable task output. Use offset/max_chars to resume without returning unbounded content.",
+      inputSchema: taskOutputSchema,
+      outputSchema: {
+        task_id: z.string(),
+        status: z.string(),
+        content: z.string(),
+        offset: z.number().int(),
+        max_chars: z.number().int(),
+        total_chars: z.number().int(),
+        truncated: z.boolean(),
+        completion_integrity: z.record(z.string(), z.unknown()).nullable().optional(),
+        review: z.record(z.string(), z.unknown()).nullable().optional(),
+      },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async ({ task_id }) => activityResult(await client.getTaskOutput(task_id), "cptr_get_task_output"),
+    async (input) => activityResult(await client.getTaskOutput(input), "cptr_get_task_output"),
   );
 
   server.registerTool(
@@ -1532,20 +1862,26 @@ export function createMcpServer(
     {
       title: "Get a CPTR task review",
       description:
-        "Use this to retrieve the durable review state and authorized workspace diff for one CPTR task. The diff is task-bound and must be shown before asking the user for a decision.",
-      inputSchema: taskIdSchema,
+        "Retrieve the durable review state and a bounded authorized workspace diff for one delegated task. max_diff_bytes prevents an oversized review payload; omitted files are marked in the diff result.",
+      inputSchema: taskReviewSchema,
       outputSchema: {
         task_id: z.string(),
         workspace_id: z.string(),
         status: z.string(),
         review: z.record(z.string(), z.unknown()),
-        diff: z.record(z.string(), z.unknown()),
+        diff: z.object({
+          files: z.array(z.record(z.string(), z.unknown())),
+          max_bytes: z.number().int(),
+          bytes_returned: z.number().int(),
+          truncated: z.boolean(),
+          omitted_paths: z.array(z.string()),
+        }).passthrough(),
         review_available: z.boolean(),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async ({ task_id }) => activityResult(await client.getTaskReview(task_id), "cptr_get_task_review"),
+    async (input) => activityResult(await client.getTaskReview(input), "cptr_get_task_review"),
   );
 
   server.registerTool(
@@ -1559,6 +1895,7 @@ export function createMcpServer(
         id: z.string(),
         status: z.string(),
         review: z.record(z.string(), z.unknown()).optional(),
+        follow_up_task_id: z.string().optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
@@ -1573,7 +1910,14 @@ export function createMcpServer(
       title: "Send a message to CPTR",
       description: "Use this when the user explicitly wants to steer an existing CPTR task with a follow-up message.",
       inputSchema: messageSchema,
-      outputSchema: { task_id: z.string(), message_id: z.string(), status: z.string() },
+      outputSchema: {
+        task_id: z.string(),
+        message_id: z.string(),
+        status: z.string(),
+        accepted: z.boolean(),
+        control_message_id: z.string().optional(),
+        delivery_status: z.string().optional(),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -1587,7 +1931,7 @@ export function createMcpServer(
       title: "Cancel a CPTR task",
       description: "Use this when the user explicitly wants to stop a running CPTR task by task ID.",
       inputSchema: taskIdSchema,
-      outputSchema: { id: z.string(), status: z.string() },
+      outputSchema: { id: z.string(), status: z.string(), quiesced: z.boolean() },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -1599,16 +1943,21 @@ export function createMcpServer(
     {
       title: "Get a CPTR workspace diff",
       description: "Use this when the user wants to inspect the current Git diff for a CPTR workspace.",
-      inputSchema: workspaceIdSchema,
+      inputSchema: gitDiffSchema,
       outputSchema: {
         is_repo: z.boolean(),
         files: z.array(z.record(z.string(), z.unknown())),
+        max_bytes: z.number().int(),
+        bytes_returned: z.number().int(),
+        truncated: z.boolean(),
+        omitted_paths: z.array(z.string()),
+        diagnostic: z.string().optional(),
         error: z.string().optional(),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async ({ workspace_id }) => activityResult(await client.getDiff(workspace_id), "cptr_get_diff"),
+    async (input) => activityResult(await client.getDiff(input), "cptr_get_diff"),
   );
 
   return server;
