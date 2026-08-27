@@ -26,12 +26,46 @@ export const taskExecutionPolicySchema = z.object({
   allow_package_install: false,
 });
 
+const workbenchSessionId = z.string().regex(/^wbs_[A-Za-z0-9_-]{16,80}$/);
+
+export const openWorkbenchSessionSchema = {
+  session_name: z.string().min(1).max(160).optional(),
+  workspace_id: z.string().min(1).max(200).optional(),
+  resume_session_id: workbenchSessionId.optional(),
+};
+
+export const workbenchSessionIdSchema = { workbench_session_id: workbenchSessionId };
+export const workbenchSessionListSchema = {
+  include_archived: z.boolean().default(false),
+  limit: z.number().int().min(1).max(100).default(50),
+};
+export const workbenchSessionEventsSchema = {
+  workbench_session_id: workbenchSessionId,
+  after_sequence: z.number().int().min(0).max(100_000_000).default(0),
+  limit: z.number().int().min(1).max(200).default(100),
+};
+export const workbenchSessionBindSchema = {
+  workbench_session_id: workbenchSessionId,
+  target_type: z.enum(["task", "monitor", "command"]),
+  target_id: z.string().min(1).max(200),
+  workspace_id: z.string().min(1).max(200).optional(),
+};
+export const workbenchSessionRenameSchema = {
+  workbench_session_id: workbenchSessionId,
+  name: z.string().min(1).max(160),
+};
+export const workbenchSessionDeleteRequestSchema = { workbench_session_id: workbenchSessionId };
+export const workbenchSessionDeleteConfirmSchema = {
+  confirmation_id: z.string().min(1).max(200),
+};
+
 export const startTaskSchema = {
   workspace_id: z.string().min(1).max(200),
   prompt: z.string().min(1).max(100_000),
   model_id: z.string().min(1).max(500),
   idempotency_key: z.string().min(1).max(200).optional(),
   execution_policy: taskExecutionPolicySchema,
+  workbench_session_id: workbenchSessionId.optional(),
 };
 
 export const executeTaskSchema = {
@@ -41,6 +75,7 @@ export const executeTaskSchema = {
   wait_seconds: z.number().int().min(1).max(60).default(30),
   idempotency_key: z.string().min(1).max(200).optional(),
   execution_policy: taskExecutionPolicySchema,
+  workbench_session_id: workbenchSessionId.optional(),
 };
 
 export const monitorAutonomousSchema = {
@@ -50,6 +85,7 @@ export const monitorAutonomousSchema = {
   model_id: z.string().min(1).max(500),
   idempotency_key: z.string().min(1).max(200).optional(),
   execution_policy: taskExecutionPolicySchema,
+  workbench_session_id: workbenchSessionId.optional(),
 };
 
 export const messageSchema = {
@@ -120,12 +156,49 @@ export const codingDeleteSchema = {
   path: z.string().min(1).max(1_000),
 };
 
+export const workspaceProjectSchema = { workspace_id: z.string().min(1).max(200) };
+export const workspaceTreeSchema = {
+  workspace_id: z.string().min(1).max(200),
+  path: z.string().min(1).max(1_000).default("."),
+  depth: z.number().int().min(1).max(4).default(2),
+};
+export const workspaceMetadataSchema = {
+  workspace_id: z.string().min(1).max(200),
+  path: z.string().min(1).max(1_000),
+};
+export const workspaceReadManySchema = {
+  workspace_id: z.string().min(1).max(200),
+  paths: z.array(z.string().min(1).max(1_000)).min(1).max(20),
+};
+export const workspaceSymbolSearchSchema = {
+  workspace_id: z.string().min(1).max(200),
+  query: z.string().min(1).max(200),
+  path: z.string().min(1).max(1_000).default("."),
+};
+export const workspaceTestDiscoverySchema = {
+  workspace_id: z.string().min(1).max(200),
+  path: z.string().min(1).max(1_000).default("."),
+  depth: z.number().int().min(1).max(4).default(3),
+};
+export const workspaceDependencySchema = { workspace_id: z.string().min(1).max(200) };
+export const workspaceScriptsSchema = { workspace_id: z.string().min(1).max(200) };
+export const workspaceReleaseReadinessSchema = { workspace_id: z.string().min(1).max(200) };
+export const workspaceTestTargetSchema = {
+  workspace_id: z.string().min(1).max(200),
+  target: z.enum(["python_pytest", "node_test", "node_vitest", "node_build"]),
+  path: z.string().min(1).max(1_000).default("."),
+  test_path: z.string().min(1).max(1_000).optional(),
+  wait_seconds: z.number().int().min(0).max(60).default(0),
+  workbench_session_id: workbenchSessionId.optional(),
+};
+
 export const codingCommandSchema = {
   workspace_id: z.string().min(1).max(200),
   command: z.string().min(1).max(20_000),
   cwd: z.string().min(1).max(1_000).default("."),
   wait_seconds: z.number().int().min(0).max(60).default(0),
   allow_network: z.boolean().default(false),
+  workbench_session_id: workbenchSessionId.optional(),
 };
 
 export const codingCommandStatusSchema = {

@@ -25,6 +25,24 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.deepEqual(
     [
       "cptr_open_live_workbench",
+      "cptr_list_workbench_sessions",
+      "cptr_get_workbench_session",
+      "cptr_get_workbench_session_events",
+      "cptr_bind_live_workbench_session",
+      "cptr_rename_workbench_session",
+      "cptr_archive_workbench_session",
+      "cptr_request_delete_workbench_session",
+      "cptr_confirm_delete_workbench_session",
+      "cptr_workspace_detect_project",
+      "cptr_workspace_tree",
+      "cptr_workspace_file_metadata",
+      "cptr_workspace_read_many",
+      "cptr_workspace_search_symbols",
+      "cptr_workspace_discover_tests",
+      "cptr_workspace_dependency_summary",
+      "cptr_workspace_package_scripts",
+      "cptr_workspace_release_readiness",
+      "cptr_workspace_run_test_target",
       "cptr_code_list_files",
       "cptr_code_read_file",
       "cptr_code_search_files",
@@ -76,6 +94,11 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_code_get_git_status")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_code_run_command")?.annotations?.openWorldHint, true);
   assert.equal(tools.get("cptr_code_run_command")?.inputSchema.properties?.model_id, undefined);
+  assert.equal(tools.get("cptr_workspace_detect_project")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_workspace_read_many")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_workspace_run_test_target")?.annotations?.openWorldHint, false);
+  assert.equal(tools.get("cptr_workspace_run_test_target")?.inputSchema.properties?.command, undefined);
+  assert.notEqual(tools.get("cptr_workspace_run_test_target")?.inputSchema.properties?.target, undefined);
   assert.equal(tools.get("cptr_ssh_list_hosts")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_ssh_run_command")?.annotations?.openWorldHint, true);
   assert.equal(tools.get("cptr_ssh_get_command")?.annotations?.readOnlyHint, true);
@@ -116,7 +139,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_plugin_update")?.annotations?.openWorldHint, false);
   assert.match(CPTR_APP_VERSION, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
   assert.equal(MCP_CONTRACT_VERSION, CPTR_APP_VERSION);
-  assert.equal(MCP_CONTRACT_TOOL_COUNT, 38);
+  assert.equal(MCP_CONTRACT_TOOL_COUNT, 56);
   assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
@@ -142,13 +165,13 @@ test("reports plugin release status through the stable update action", async () 
     arguments: {
       action: "verify_server",
       expected_contract_version: CPTR_APP_VERSION,
-      expected_tool_count: 38,
+      expected_tool_count: 56,
     },
   });
   const value = response.structuredContent as Record<string, unknown> | undefined;
   assert.equal(response.isError, undefined);
   assert.equal(value?.version, CPTR_APP_VERSION);
-  assert.equal(value?.tool_count, 38);
+  assert.equal(value?.tool_count, 56);
   assert.equal(value?.contract_matches, true);
   assert.equal(value?.tool_count_matches, true);
   assert.deepEqual((value?.verification as { tool?: string } | undefined)?.tool, "cptr_plugin_update");
@@ -384,7 +407,25 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "server-only-token",
-    fetchImpl: async () => new Response(JSON.stringify({ id: "task-1", status: "RUNNING", workspace_id: "ws-1" }), { status: 200 }),
+    fetchImpl: async (url) => {
+      const payload = String(url).endsWith("/workbench-sessions")
+        ? {
+            session_id: "wbs_session_00000001",
+            name: "CPTR plugin session",
+            status: "OPEN",
+            workspace_id: null,
+            active_target_type: null,
+            active_target_id: null,
+            active_workspace_id: null,
+            event_count: 0,
+            created_at: 1,
+            updated_at: 1,
+            last_event_at: null,
+            archived_at: null,
+          }
+        : { id: "task-1", status: "RUNNING", workspace_id: "ws-1" };
+      return new Response(JSON.stringify(payload), { status: 200 });
+    },
   });
   const promptSessions = new PromptTerminalStore();
   const server = createMcpServer(computer, {
