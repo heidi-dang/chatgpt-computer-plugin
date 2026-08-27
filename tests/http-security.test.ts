@@ -3,8 +3,10 @@ import test from "node:test";
 import {
   corsHeaders,
   isAllowedBrowserOrigin,
+  isAllowedWorkbenchBrowserOrigin,
   resolveAllowedOrigins,
   resolvePublicOrigin,
+  workbenchCorsHeaders,
 } from "../server/http-security.js";
 
 test("requires explicit public and browser origins in production", () => {
@@ -32,6 +34,21 @@ test("normalizes configured HTTP origins and allows only listed browser origins"
     Vary: "Origin",
   });
   assert.deepEqual(corsHeaders("https://evil.example", allowed), {});
+});
+
+test("allows the ChatGPT Apps SDK sandbox only for Workbench browser traffic", () => {
+  const allowed = resolveAllowedOrigins({ MCP_ALLOWED_ORIGINS: "https://chatgpt.com" });
+  const widgetOrigin = "https://mcp-example-com.web-sandbox.oaiusercontent.com";
+
+  assert.equal(isAllowedBrowserOrigin(widgetOrigin, allowed), false);
+  assert.equal(isAllowedWorkbenchBrowserOrigin(widgetOrigin, allowed), true);
+  assert.equal(isAllowedWorkbenchBrowserOrigin("https://web-sandbox.oaiusercontent.com", allowed), true);
+  assert.equal(isAllowedWorkbenchBrowserOrigin("https://evil-web-sandbox.oaiusercontent.com.example", allowed), false);
+  assert.equal(isAllowedWorkbenchBrowserOrigin("http://mcp-example-com.web-sandbox.oaiusercontent.com", allowed), false);
+  assert.deepEqual(workbenchCorsHeaders(widgetOrigin, allowed), {
+    "Access-Control-Allow-Origin": widgetOrigin,
+    Vary: "Origin",
+  });
 });
 
 test("permits a localhost public origin only outside production", () => {

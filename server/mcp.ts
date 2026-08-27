@@ -76,6 +76,21 @@ function workbenchResult<T extends Record<string, unknown>>(
     _meta: {
       "cptr/live": { ...stream, ...(workspaceId ? { workspaceId } : {}) },
       "cptr/activity": mcpActivity(toolName, `ChatGPT called ${toolName}; live CPTR activity is attached.`),
+    },
+  };
+}
+
+function renderWorkbenchResult<T extends Record<string, unknown>>(
+  value: T,
+  target: LiveTarget,
+  tickets: LiveTicketStore,
+  toolName = "cptr_render_live_terminal",
+) {
+  const response = workbenchResult(value, target, tickets, toolName);
+  return {
+    ...response,
+    _meta: {
+      ...response._meta,
       ui: { resourceUri: WORKBENCH_RESOURCE_URI },
     },
   };
@@ -86,7 +101,6 @@ function activityResult<T extends Record<string, unknown>>(value: T, toolName: s
     ...result(value),
     _meta: {
       "cptr/activity": mcpActivity(toolName, summary ?? `ChatGPT completed ${toolName}.`),
-      ui: { resourceUri: WORKBENCH_RESOURCE_URI },
     },
   };
 }
@@ -95,7 +109,7 @@ function initialWorkbenchResult<T extends Record<string, unknown>>(value: T, too
   return activityResult(
     value,
     toolName,
-    "CPTR Live Workbench is ready; waiting for ChatGPT to select a workspace or start a task.",
+    "CPTR Workbench context is ready; render the Live Terminal once a task, monitor, or command target exists.",
   );
 }
 
@@ -103,7 +117,9 @@ const oauthToolMetadata = {
   securitySchemes: [{ type: "oauth2", scopes: [] }],
 };
 
-const workbenchToolMetadata = {
+const workbenchToolMetadata = oauthToolMetadata;
+
+const renderToolMetadata = {
   ...oauthToolMetadata,
   ui: { resourceUri: WORKBENCH_RESOURCE_URI },
 };
@@ -143,9 +159,9 @@ export function createMcpServer(
   server.registerTool(
     "cptr_open_live_workbench",
     {
-      title: "Open the CPTR Live Workbench",
+      title: "Prepare CPTR Live Workbench context",
       description:
-        "Call this first whenever the user explicitly invokes @cptr computer or asks CPTR to work. It immediately opens the CPTR terminal in ChatGPT; later task-start or monitor calls bind the same terminal to the live, redacted CPTR event stream.",
+        "Optional readiness check for CPTR. This data-only tool does not render a widget and is not a prerequisite for normal CPTR work. To show the UI, call cptr_render_live_terminal exactly once after a task, monitor, or command target exists.",
       inputSchema: {},
       outputSchema: { status: z.string(), title: z.string(), initial_summary: z.string() },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
@@ -155,7 +171,7 @@ export function createMcpServer(
       {
         status: "READY",
         title: "CPTR computer activity",
-        initial_summary: "Live Workbench is ready. Select a workspace or start a CPTR task to attach the live terminal.",
+        initial_summary: "CPTR Workbench context is ready. Create a task, monitor, or command, then render exactly one Live Terminal for that target.",
       },
       "cptr_open_live_workbench",
     ),
@@ -604,9 +620,9 @@ export function createMcpServer(
   server.registerTool(
     "cptr_render_live_terminal",
     {
-      title: "Render a live CPTR terminal",
+      title: "Render the CPTR Live Terminal",
       description:
-        "Render the live terminal after a CPTR task, monitor, or workspace-owned direct command exists. This tool provides a redacted, resumable observation surface; it does not grant shell access or additional permissions.",
+        "The sole CPTR UI render tool. Call this exactly once after a task, monitor, or workspace-owned command target exists. Status, polling, cancellation, file, SSH, task, and autonomous tools are data-only and must not be used to render additional terminal widgets. The terminal is redacted and resumable and does not grant additional permissions.",
       inputSchema: z.object({
         target_type: z.enum(["task", "monitor", "command"]),
         target_id: z.string().min(1),
@@ -622,12 +638,12 @@ export function createMcpServer(
         initial_summary: z.string(),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-      _meta: workbenchToolMetadata,
+      _meta: renderToolMetadata,
     },
     async ({ target_type, target_id, workspace_id }) => {
       if (target_type === "task") {
         const task = await client.getTask(target_id);
-        return workbenchResult(
+        return renderWorkbenchResult(
           {
             target_type,
             target_id,
@@ -650,7 +666,7 @@ export function createMcpServer(
           offset: 0,
           wait_seconds: 0,
         });
-        return workbenchResult(
+        return renderWorkbenchResult(
           {
             target_type,
             target_id,
@@ -666,7 +682,7 @@ export function createMcpServer(
       }
       const monitor = await client.getAutonomous(target_id);
       const status = String(monitor.status ?? "UNKNOWN");
-      return workbenchResult(
+      return renderWorkbenchResult(
         {
           target_type,
           target_id,

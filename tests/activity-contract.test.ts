@@ -19,6 +19,7 @@ test("every registered CPTR MCP tool emits Workbench activity metadata", () => {
     .filter(({ body }) => ![
       "activityResult(",
       "workbenchResult(",
+      "renderWorkbenchResult(",
       "initialWorkbenchResult(",
     ].some((helper) => body.includes(helper)))
     .map(({ name }) => name);

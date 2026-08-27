@@ -173,6 +173,30 @@ export function appendMcpToolActivity(state: WorkbenchState, activity: McpToolAc
 function terminalRows(event: WorkbenchEvent): TerminalRow[] {
   const payload = event.payload ?? {};
   const commandId = stringValue(payload.command_id) || undefined;
+  if (event.type === "tool.started") {
+    const toolName = stringValue(payload.name, stringValue(payload.tool, "tool"));
+    return [{
+      id: `${event.event_id}:tool-start`,
+      sequence: event.sequence,
+      timestamp: event.timestamp,
+      tone: "system",
+      text: `${toolName} started`,
+      label: "tool",
+    }];
+  }
+  if (event.type === "tool.output") {
+    const toolName = stringValue(payload.tool, stringValue(payload.name, "tool"));
+    const status = stringValue(payload.status, "completed").toUpperCase();
+    const failed = ["FAILED", "ERROR", "CANCELLED", "BLOCKED"].includes(status);
+    return [{
+      id: `${event.event_id}:tool-output`,
+      sequence: event.sequence,
+      timestamp: event.timestamp,
+      tone: failed ? "error" : "system",
+      text: `${toolName} ${status.toLowerCase()}`,
+      label: "tool",
+    }];
+  }
   if (event.type === "command.started") {
     return [{
       id: `${event.event_id}:start`,

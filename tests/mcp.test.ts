@@ -95,15 +95,11 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_approve_autonomous")?.annotations?.destructiveHint, true);
   assert.equal(tools.get("cptr_approve_autonomous")?.annotations?.openWorldHint, true);
   assert.equal(tools.get("cptr_decide_task_review")?.annotations?.destructiveHint, true);
-  const openMeta = tools.get("cptr_open_live_workbench")?._meta as { ui?: { resourceUri?: string } } | undefined;
-  const listMeta = tools.get("cptr_list_workspaces")?._meta as { ui?: { resourceUri?: string } } | undefined;
-  const startMeta = tools.get("cptr_start_task")?._meta as { ui?: { resourceUri?: string } } | undefined;
-  const monitorMeta = tools.get("cptr_monitor_autonomous")?._meta as { ui?: { resourceUri?: string } } | undefined;
+  const renderedTools = [...tools.values()]
+    .filter((tool) => (tool._meta as { ui?: { resourceUri?: string } } | undefined)?.ui?.resourceUri)
+    .map((tool) => tool.name);
+  assert.deepEqual(renderedTools, ["cptr_render_live_terminal"]);
   const terminalMeta = tools.get("cptr_render_live_terminal")?._meta as { ui?: { resourceUri?: string } } | undefined;
-  assert.equal(openMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
-  assert.equal(listMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
-  assert.equal(startMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
-  assert.equal(monitorMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
   assert.equal(terminalMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
   assert.equal(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.action, undefined);
   assert.equal(MCP_CONTRACT_VERSION, "0.5.0");
@@ -205,7 +201,7 @@ test("invokes every direct-coding tool through MCP without a CPTR model input", 
       ui?: { resourceUri?: string };
       "cptr/live"?: { targetType?: string; targetId?: string; workspaceId?: string; ticket?: string };
     } | undefined;
-    assert.equal(meta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
+    assert.equal(meta?.ui, undefined, `${name} must remain data-only and must not mount another terminal widget`);
     assert.equal(meta?.["cptr/live"]?.targetType, "command");
     assert.equal(meta?.["cptr/live"]?.targetId, "command-1");
     assert.equal(meta?.["cptr/live"]?.workspaceId, "ws-1");
@@ -293,7 +289,7 @@ test("routes dedicated SSH tools through the SSH control API and live command ta
   await server.close();
 });
 
-test("opens the workbench immediately and binds it to a task with hidden target-bound stream metadata", async () => {
+test("keeps setup and execution data-only and mounts exactly one terminal through the render tool", async () => {
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "server-only-token",
@@ -310,7 +306,7 @@ test("opens the workbench immediately and binds it to a task with hidden target-
     "cptr/live"?: unknown;
     "cptr/activity"?: { type?: string };
   } | undefined;
-  assert.equal(initialMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
+  assert.equal(initialMeta?.ui, undefined);
   assert.equal(initialMeta?.["cptr/live"], undefined);
   assert.equal(initialMeta?.["cptr/activity"]?.type, "mcp.tool");
 
@@ -323,7 +319,7 @@ test("opens the workbench immediately and binds it to a task with hidden target-
     "cptr/live"?: { ticket?: string; streamUrl?: string; snapshotUrl?: string; workspaceId?: string };
     "cptr/activity"?: { type?: string };
   } | undefined;
-  assert.equal(taskMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
+  assert.equal(taskMeta?.ui, undefined);
   assert.ok(taskMeta?.["cptr/live"]?.ticket);
   assert.equal(taskMeta?.["cptr/live"]?.workspaceId, "ws-1");
   assert.equal(taskMeta?.["cptr/activity"]?.type, "mcp.tool");

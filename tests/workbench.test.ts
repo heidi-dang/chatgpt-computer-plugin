@@ -107,18 +107,29 @@ test("deduplicates replayed events by monotonic sequence", () => {
 });
 
 
-test("advances the replay cursor for non-terminal events without allocating hidden view state", () => {
-  const toolEvent = reduceWorkbenchEvent(initialWorkbenchState(), {
-    event_id: "tool-1",
+test("renders CPTR tool lifecycle events while advancing the replay cursor", () => {
+  const started = reduceWorkbenchEvent(initialWorkbenchState(), {
+    event_id: "tool-start-1",
     sequence: 1,
     timestamp: "2026-08-26T00:00:00Z",
+    type: "tool.started",
+    payload: { name: "read_file", call_id: "call-1", status: "in_progress" },
+  });
+  const completed = reduceWorkbenchEvent(started, {
+    event_id: "tool-output-1",
+    sequence: 2,
+    timestamp: "2026-08-26T00:00:01Z",
     type: "tool.output",
-    payload: { status: "completed", output: "ok" },
+    payload: { tool: "read_file", status: "completed", output: "redacted backend output" },
   });
 
-  assert.equal(toolEvent.lastSequence, 1);
-  assert.equal(toolEvent.status, "CONNECTING");
-  assert.equal(toolEvent.transcript.length, 0);
+  assert.equal(completed.lastSequence, 2);
+  assert.equal(completed.status, "CONNECTING");
+  assert.equal(completed.transcript.length, 2);
+  assert.equal(completed.transcript[0]?.label, "tool");
+  assert.equal(completed.transcript[0]?.text, "read_file started");
+  assert.equal(completed.transcript[1]?.text, "read_file completed");
+  assert.equal(completed.transcript.some((row) => row.text.includes("redacted backend output")), false);
 });
 
 

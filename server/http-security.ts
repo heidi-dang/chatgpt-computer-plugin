@@ -47,11 +47,35 @@ export function resolveAllowedOrigins(env: Environment): Set<string> {
 
 export function isAllowedBrowserOrigin(origin: string | undefined, allowedOrigins: Set<string>): boolean {
   // Requests made by non-browser MCP clients do not set Origin. Browser requests
-  // must match an explicit allowlist; an empty development allowlist denies CORS.
+  // to the MCP transport itself must match the explicit allowlist.
   return !origin || allowedOrigins.has(origin);
+}
+
+function isOpenAiWidgetOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    if (url.protocol !== "https:" || url.username || url.password || url.port) return false;
+    const hostname = url.hostname.toLowerCase();
+    return hostname === "web-sandbox.oaiusercontent.com" || hostname.endsWith(".web-sandbox.oaiusercontent.com");
+  } catch {
+    return false;
+  }
+}
+
+export function isAllowedWorkbenchBrowserOrigin(origin: string | undefined, allowedOrigins: Set<string>): boolean {
+  // Apps SDK widgets execute from a ChatGPT-owned sandbox origin rather than
+  // PUBLIC_ORIGIN. Live endpoints remain protected by opaque, target-bound
+  // bearer tickets, so permit only the explicit allowlist plus the documented
+  // OpenAI widget sandbox family here; do not widen the MCP transport policy.
+  return !origin || allowedOrigins.has(origin) || isOpenAiWidgetOrigin(origin);
 }
 
 export function corsHeaders(origin: string | undefined, allowedOrigins: Set<string>): Record<string, string> {
   if (!origin || !allowedOrigins.has(origin)) return {};
+  return { "Access-Control-Allow-Origin": origin, Vary: "Origin" };
+}
+
+export function workbenchCorsHeaders(origin: string | undefined, allowedOrigins: Set<string>): Record<string, string> {
+  if (!origin || !isAllowedWorkbenchBrowserOrigin(origin, allowedOrigins)) return {};
   return { "Access-Control-Allow-Origin": origin, Vary: "Origin" };
 }

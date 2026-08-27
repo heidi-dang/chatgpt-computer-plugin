@@ -13,8 +13,10 @@ import { loadWorkbenchAssets } from "./workbench-assets.js";
 import {
   corsHeaders,
   isAllowedBrowserOrigin,
+  isAllowedWorkbenchBrowserOrigin,
   resolveAllowedOrigins,
   resolvePublicOrigin,
+  workbenchCorsHeaders,
 } from "./http-security.js";
 
 const host = process.env.HOST ?? "127.0.0.1";
@@ -82,11 +84,20 @@ function writeMcpUnauthorized(res: import("node:http").ServerResponse, status: n
 const httpServer = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? `${host}:${port}`}`);
   const requestOrigin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
-  if (!isAllowedBrowserOrigin(requestOrigin, allowedBrowserOrigins)) {
+  const workbenchBrowserRequest =
+    url.pathname === "/live/stream" ||
+    url.pathname === "/live/snapshot" ||
+    url.pathname.startsWith("/__cptr/dev/");
+  const browserOriginAllowed = workbenchBrowserRequest
+    ? isAllowedWorkbenchBrowserOrigin(requestOrigin, allowedBrowserOrigins)
+    : isAllowedBrowserOrigin(requestOrigin, allowedBrowserOrigins);
+  if (!browserOriginAllowed) {
     res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({ error: "browser origin is not allowed" }));
     return;
   }
-  const originHeaders = corsHeaders(requestOrigin, allowedBrowserOrigins);
+  const originHeaders = workbenchBrowserRequest
+    ? workbenchCorsHeaders(requestOrigin, allowedBrowserOrigins)
+    : corsHeaders(requestOrigin, allowedBrowserOrigins);
   for (const [header, value] of Object.entries(originHeaders)) res.setHeader(header, value);
   if (hotReloadEnabled && req.method === "GET" && url.pathname === "/__cptr/dev/workbench.js") {
     res.writeHead(workbenchAssets.ready ? 200 : 503, {
