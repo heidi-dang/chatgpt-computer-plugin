@@ -5,6 +5,7 @@ const expectedTools = [
   "cptr_approve_autonomous",
   "cptr_cancel_autonomous",
   "cptr_cancel_task",
+  "cptr_chrome_browser",
   "cptr_code_cancel_command",
   "cptr_code_create_directory",
   "cptr_code_delete_file",
@@ -40,7 +41,7 @@ const expectedTools = [
   "cptr_steer_autonomous",
 ];
 const expectedResource = "ui://cptr/live-workbench.html";
-const expectedContractVersion = "0.5.0";
+const expectedContractVersion = "0.7.0";
 
 if (!endpoint || !token) {
   throw new Error("Set CPTR_DEPLOYED_MCP_URL and CPTR_DEPLOYED_MCP_TOKEN before running the deployed contract check.");
@@ -92,7 +93,7 @@ if (health?.mcp_contract?.tool_count !== expectedTools.length) {
 await rpc("initialize", {
   protocolVersion: "2026-01-26",
   capabilities: {},
-  clientInfo: { name: "cptr-deployed-contract-check", version: "0.5.0" },
+  clientInfo: { name: "cptr-deployed-contract-check", version: "0.7.0" },
 });
 const tools = await rpc("tools/list", {});
 exactSet((tools.tools ?? []).map((tool) => tool.name), expectedTools, "tool contract");
