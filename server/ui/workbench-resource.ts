@@ -1,3 +1,5 @@
+import { resolveWorkbenchHotReload, type WorkbenchHotReload } from "../workbench-assets.js";
+
 export const WORKBENCH_RESOURCE_URI = "ui://cptr/live-workbench.html";
 
 function isLoopbackHostname(hostname: string): boolean {
@@ -25,19 +27,22 @@ export function validateWorkbenchDomain(value: string | undefined, production = 
   return url.origin;
 }
 
-export async function createWorkbenchResource(bundle: string, connectDomain?: string, styles = "") {
+export async function createWorkbenchResource(
+  bundle: string,
+  connectDomain?: string,
+  styles = "",
+  hotReload: WorkbenchHotReload = resolveWorkbenchHotReload({ bundle, styles }),
+) {
   const widgetDomain = validateWorkbenchDomain(connectDomain);
-  const hotReload = process.env.NODE_ENV !== "production" && process.env.CPTR_HOT_RELOAD === "1";
-  const buildId = process.env.CPTR_DEV_BUILD_ID ?? "dev";
-  const devReloadScript = hotReload
-    ? `<script>(()=>{const current=${JSON.stringify(buildId)};const source=new EventSource(${JSON.stringify(`${widgetDomain}/__cptr/dev/reload`)});source.onmessage=(event)=>{if(event.data&&event.data!==current)location.reload();};})()</script>`
+  const reloadScript = hotReload.enabled
+    ? `<script>(()=>{const embedded=${JSON.stringify(hotReload.buildId)};const key="cptr-workbench-build:v1";let current=embedded;try{current=sessionStorage.getItem(key)||embedded;sessionStorage.setItem(key,current);}catch{}const css=document.createElement("link");css.rel="stylesheet";css.href=${JSON.stringify(`${widgetDomain}/__cptr/dev/workbench.css`)}+"?build="+encodeURIComponent(current);document.head.appendChild(css);const script=document.createElement("script");script.type="module";script.src=${JSON.stringify(`${widgetDomain}/__cptr/dev/workbench.js`)}+"?build="+encodeURIComponent(current);document.body.appendChild(script);const source=new EventSource(${JSON.stringify(`${widgetDomain}/__cptr/dev/reload`)});source.onmessage=(event)=>{const next=event.data;if(!next||next===current)return;current=next;try{sessionStorage.setItem(key,next);}catch{}source.close();location.reload();};})()</script>`
     : "";
-  const assetMarkup = hotReload
-    ? `<link rel="stylesheet" href="${widgetDomain}/__cptr/dev/workbench.css"><script type="module" src="${widgetDomain}/__cptr/dev/workbench.js"></script>`
+  const assetMarkup = hotReload.enabled
+    ? ""
     : `<style>${styles}</style><script type="module">${bundle}</script>`;
   const text = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CPTR Live Workbench</title>${assetMarkup}</head><body><div id="root"></div>${devReloadScript}</body></html>`;
+<title>CPTR Live Workbench</title>${assetMarkup}</head><body><div id="root"></div>${reloadScript}</body></html>`;
   return {
     contents: [{
       uri: WORKBENCH_RESOURCE_URI,
@@ -49,7 +54,7 @@ export async function createWorkbenchResource(bundle: string, connectDomain?: st
           prefersBorder: true,
           csp: {
             connectDomains: [widgetDomain],
-            resourceDomains: hotReload ? [widgetDomain] : [],
+            resourceDomains: hotReload.enabled ? [widgetDomain] : [],
           },
         },
       },

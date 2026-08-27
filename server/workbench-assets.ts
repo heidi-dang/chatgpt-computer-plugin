@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,41 @@ export type WorkbenchAssets = {
   directory: string | null;
   searchedDirectories: string[];
 };
+
+export type WorkbenchHotReload = {
+  enabled: boolean;
+  buildId: string;
+};
+
+type Environment = Record<string, string | undefined>;
+
+export function resolveWorkbenchHotReload(
+  assets: Pick<WorkbenchAssets, "bundle" | "styles">,
+  env: Environment = process.env,
+): WorkbenchHotReload {
+  const configured = env.CPTR_HOT_RELOAD?.trim().toLowerCase();
+  const enabled = configured === undefined || !["0", "false", "off", "no"].includes(configured);
+  const assetHash = createHash("sha256")
+    .update(assets.bundle)
+    .update("\0")
+    .update(assets.styles)
+    .digest("hex")
+    .slice(0, 24);
+  const release = (
+    env.CPTR_WORKBENCH_BUILD_ID ??
+    env.CPTR_DEV_BUILD_ID ??
+    env.GIT_COMMIT_SHA ??
+    env.RAILWAY_GIT_COMMIT_SHA ??
+    ""
+  )
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .slice(0, 64);
+  return {
+    enabled,
+    buildId: release ? `${release}-${assetHash}` : assetHash,
+  };
+}
 
 type AssetLoaderOptions = {
   moduleUrl?: string;

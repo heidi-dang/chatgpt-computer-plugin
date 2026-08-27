@@ -9,7 +9,7 @@ import { clientFromEnvironment } from "./client/computer-client.js";
 import { MCP_CONTRACT_TOOL_COUNT, MCP_CONTRACT_VERSION, createMcpServer } from "./mcp.js";
 import { LiveGateway } from "./live-gateway.js";
 import { LiveTicketStore } from "./live-tickets.js";
-import { loadWorkbenchAssets } from "./workbench-assets.js";
+import { loadWorkbenchAssets, resolveWorkbenchHotReload } from "./workbench-assets.js";
 import {
   corsHeaders,
   isAllowedBrowserOrigin,
@@ -25,9 +25,6 @@ const mcpPath = "/mcp";
 const mcpAccessToken = process.env.MCP_ACCESS_TOKEN;
 const publicOrigin = resolvePublicOrigin(process.env, host, port);
 const allowedBrowserOrigins = resolveAllowedOrigins(process.env);
-const hotReloadEnabled = process.env.NODE_ENV !== "production" && process.env.CPTR_HOT_RELOAD === "1";
-const devBuildId = process.env.CPTR_DEV_BUILD_ID ?? "dev";
-if (hotReloadEnabled) allowedBrowserOrigins.add(publicOrigin);
 const oauthResource = process.env.MCP_OAUTH_RESOURCE ?? `${publicOrigin}${mcpPath}`;
 const oauthIssuer = process.env.CLOUDFLARE_ACCESS_ISSUER;
 const oauthAudience = process.env.CLOUDFLARE_ACCESS_AUDIENCE;
@@ -59,6 +56,8 @@ const liveTickets = new LiveTicketStore({
 });
 const liveGateway = new LiveGateway(client, liveTickets);
 const workbenchAssets = loadWorkbenchAssets();
+const workbenchHotReload = resolveWorkbenchHotReload(workbenchAssets);
+if (workbenchHotReload.enabled) allowedBrowserOrigins.add(publicOrigin);
 if (!workbenchAssets.ready) {
   console.error(`CPTR Live Workbench bundle is unavailable; searched: ${workbenchAssets.searchedDirectories.join(", ")}`);
 } else {
@@ -99,7 +98,7 @@ const httpServer = createServer(async (req, res) => {
     ? workbenchCorsHeaders(requestOrigin, allowedBrowserOrigins)
     : corsHeaders(requestOrigin, allowedBrowserOrigins);
   for (const [header, value] of Object.entries(originHeaders)) res.setHeader(header, value);
-  if (hotReloadEnabled && req.method === "GET" && url.pathname === "/__cptr/dev/workbench.js") {
+  if (workbenchHotReload.enabled && req.method === "GET" && url.pathname === "/__cptr/dev/workbench.js") {
     res.writeHead(workbenchAssets.ready ? 200 : 503, {
       ...originHeaders,
       "content-type": "text/javascript; charset=utf-8",
@@ -107,7 +106,7 @@ const httpServer = createServer(async (req, res) => {
     }).end(workbenchAssets.bundle);
     return;
   }
-  if (hotReloadEnabled && req.method === "GET" && url.pathname === "/__cptr/dev/workbench.css") {
+  if (workbenchHotReload.enabled && req.method === "GET" && url.pathname === "/__cptr/dev/workbench.css") {
     res.writeHead(workbenchAssets.ready ? 200 : 503, {
       ...originHeaders,
       "content-type": "text/css; charset=utf-8",
@@ -115,7 +114,7 @@ const httpServer = createServer(async (req, res) => {
     }).end(workbenchAssets.styles);
     return;
   }
-  if (hotReloadEnabled && req.method === "GET" && url.pathname === "/__cptr/dev/reload") {
+  if (workbenchHotReload.enabled && req.method === "GET" && url.pathname === "/__cptr/dev/reload") {
     res.writeHead(200, {
       ...originHeaders,
       "content-type": "text/event-stream",
@@ -123,7 +122,7 @@ const httpServer = createServer(async (req, res) => {
       connection: "keep-alive",
       "x-accel-buffering": "no",
     });
-    res.write(`data: ${devBuildId}\n\n`);
+    res.write(`retry: 1000\ndata: ${workbenchHotReload.buildId}\n\n`);
     const heartbeat = setInterval(() => res.write(": hot-reload\n\n"), 15_000);
     req.once("close", () => clearInterval(heartbeat));
     return;
@@ -143,6 +142,8 @@ const httpServer = createServer(async (req, res) => {
       workbench: {
         ready: workbenchAssets.ready,
         asset_directory: workbenchAssets.directory,
+        hot_reload: workbenchHotReload.enabled,
+        build_id: workbenchHotReload.buildId,
       },
       mcp_contract: {
         version: MCP_CONTRACT_VERSION,

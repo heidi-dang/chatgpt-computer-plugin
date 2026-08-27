@@ -78,6 +78,10 @@ const healthResponse = await fetch(healthUrl);
 if (!healthResponse.ok) throw new Error(`health check failed with HTTP ${healthResponse.status}`);
 const health = await healthResponse.json();
 if (health?.workbench?.ready !== true) throw new Error("deployed workbench is not ready");
+if (health?.workbench?.hot_reload !== true) throw new Error("deployed workbench hot reload is not enabled");
+if (typeof health?.workbench?.build_id !== "string" || health.workbench.build_id.length < 12) {
+  throw new Error("deployed workbench build fingerprint is missing");
+}
 if (health?.mcp_contract?.version !== expectedContractVersion) {
   throw new Error(`MCP contract version drift: expected ${expectedContractVersion}, got ${health?.mcp_contract?.version ?? "missing"}`);
 }
@@ -112,7 +116,8 @@ if (!Array.isArray(connectDomains) || JSON.stringify(connectDomains) !== JSON.st
   throw new Error(`resource connect-domain drift: expected [${expectedWidgetDomain}]`);
 }
 const resourceDomains = ui?.csp?.resourceDomains;
-if (!Array.isArray(resourceDomains) || resourceDomains.length !== 0) {
-  throw new Error("resource domain policy drift: resourceDomains must remain empty");
+const expectedResourceDomains = health.workbench.hot_reload ? [expectedWidgetDomain] : [];
+if (!Array.isArray(resourceDomains) || JSON.stringify(resourceDomains) !== JSON.stringify(expectedResourceDomains)) {
+  throw new Error(`resource domain policy drift: expected [${expectedResourceDomains.join(", ")}]`);
 }
 console.log(`CPTR deployed MCP contract verified: ${expectedTools.length} tools, ${expectedResource}, and widget domain ${expectedWidgetDomain}`);
