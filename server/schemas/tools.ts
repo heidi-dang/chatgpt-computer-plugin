@@ -14,11 +14,24 @@ export const approveAutonomousSchema = {
   approved: z.boolean(),
 };
 
+export const taskExecutionPolicySchema = z.object({
+  allow_file_writes: z.boolean().default(true).describe("Allow CPTR file create/write/edit tools for this task."),
+  allow_commands: z.boolean().default(true).describe("Allow CPTR to start shell commands for this task."),
+  allow_network: z.boolean().default(false).describe("Allow network-capable tools, external tool servers, and known external commands."),
+  allow_package_install: z.boolean().default(false).describe("Allow package installation commands such as npm install, pip install, and uv sync."),
+}).default({
+  allow_file_writes: true,
+  allow_commands: true,
+  allow_network: false,
+  allow_package_install: false,
+});
+
 export const startTaskSchema = {
   workspace_id: z.string().min(1).max(200),
   prompt: z.string().min(1).max(100_000),
   model_id: z.string().min(1).max(500),
   idempotency_key: z.string().min(1).max(200).optional(),
+  execution_policy: taskExecutionPolicySchema,
 };
 
 export const executeTaskSchema = {
@@ -27,6 +40,7 @@ export const executeTaskSchema = {
   model_id: z.string().min(1).max(500),
   wait_seconds: z.number().int().min(1).max(60).default(30),
   idempotency_key: z.string().min(1).max(200).optional(),
+  execution_policy: taskExecutionPolicySchema,
 };
 
 export const monitorAutonomousSchema = {
@@ -35,6 +49,7 @@ export const monitorAutonomousSchema = {
   acceptance_criteria: z.array(z.string().min(1).max(10_000)).min(1).max(100),
   model_id: z.string().min(1).max(500),
   idempotency_key: z.string().min(1).max(200).optional(),
+  execution_policy: taskExecutionPolicySchema,
 };
 
 export const messageSchema = {

@@ -82,6 +82,10 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
     | { properties?: Record<string, { maximum?: number }> }
     | undefined;
   assert.equal(directInputSchema?.properties?.wait_seconds?.maximum, 60);
+  assert.notEqual(tools.get("cptr_start_task")?.inputSchema.properties?.execution_policy, undefined);
+  assert.notEqual(tools.get("cptr_execute_task")?.inputSchema.properties?.execution_policy, undefined);
+  assert.notEqual(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.execution_policy, undefined);
+  assert.equal(tools.get("cptr_render_live_terminal")?.inputSchema.properties?.presentation, undefined);
   assert.equal(tools.get("cptr_monitor_autonomous")?.annotations?.readOnlyHint, false);
   assert.equal(tools.get("cptr_monitor_autonomous")?.annotations?.destructiveHint, false);
   assert.equal(tools.get("cptr_get_autonomous")?.annotations?.readOnlyHint, true);
@@ -102,7 +106,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(monitorMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
   assert.equal(terminalMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
   assert.equal(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.action, undefined);
-  assert.equal(MCP_CONTRACT_VERSION, "0.4.0");
+  assert.equal(MCP_CONTRACT_VERSION, "0.5.0");
   assert.equal(MCP_CONTRACT_TOOL_COUNT, 36);
   assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT);
   for (const tool of tools.values()) {
@@ -375,6 +379,13 @@ test("applies byte-equivalent workspace scope to normal MCP task-creation entry 
   await client.callTool({ name: "cptr_execute_task", arguments: { ...input, wait_seconds: 1 } });
 
   assert.equal(requestBodies.length, 2);
+  assert.deepEqual(requestBodies[0]?.execution_policy, {
+    allow_file_writes: true,
+    allow_commands: true,
+    allow_network: false,
+    allow_package_install: false,
+  });
+  assert.deepEqual(requestBodies[1]?.execution_policy, requestBodies[0]?.execution_policy);
   assert.equal(requestBodies[0]?.prompt, requestBodies[1]?.prompt);
   assert.match(String(requestBodies[0]?.prompt), /inspection_scope=workspace/);
   assert.doesNotMatch(String(requestBodies[0]?.prompt), /inspection_scope=assignment/);

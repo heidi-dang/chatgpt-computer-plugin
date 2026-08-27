@@ -161,6 +161,12 @@ export class ComputerClient {
     prompt: string;
     model_id: string;
     idempotency_key?: string;
+    execution_policy?: {
+      allow_file_writes: boolean;
+      allow_commands: boolean;
+      allow_network: boolean;
+      allow_package_install: boolean;
+    };
   }): Promise<Task> {
     return normalizeTaskCompletion(await this.request<Task>("/tasks", { method: "POST", body: input }));
   }
@@ -176,6 +182,12 @@ export class ComputerClient {
     model_id: string;
     wait_seconds?: number;
     idempotency_key?: string;
+    execution_policy?: {
+      allow_file_writes: boolean;
+      allow_commands: boolean;
+      allow_network: boolean;
+      allow_package_install: boolean;
+    };
   }): Promise<DirectTaskExecution> {
     const waitSeconds = input.wait_seconds ?? DEFAULT_DIRECT_EXECUTION_WAIT_SECONDS;
     const task = await this.startTask({
@@ -183,6 +195,7 @@ export class ComputerClient {
       prompt: input.prompt,
       model_id: input.model_id,
       idempotency_key: input.idempotency_key,
+      execution_policy: input.execution_policy,
     });
     const deadline = Date.now() + waitSeconds * 1_000;
     let current = task;
@@ -419,6 +432,12 @@ export class ComputerClient {
     acceptance_criteria: string[];
     model_id: string;
     idempotency_key?: string;
+    execution_policy?: {
+      allow_file_writes: boolean;
+      allow_commands: boolean;
+      allow_network: boolean;
+      allow_package_install: boolean;
+    };
   }): Promise<Record<string, unknown>> {
     return this.request("/autonomous", { method: "POST", body: input });
   }

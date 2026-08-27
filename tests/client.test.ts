@@ -81,6 +81,12 @@ test("routes dedicated autonomous operations to the scoped Control API", async (
     goal: "Repair the fixture",
     acceptance_criteria: ["tests pass"],
     model_id: "model-1",
+    execution_policy: {
+      allow_file_writes: true,
+      allow_commands: true,
+      allow_network: false,
+      allow_package_install: false,
+    },
   });
   await client.getAutonomous("mon-1");
   await client.getAutonomousEvents("mon-1");
@@ -99,6 +105,18 @@ test("routes dedicated autonomous operations to the scoped Control API", async (
     "http://cptr.test/api/control/v1/autonomous/mon-1/approve",
   ]);
   assert.equal((seen[3].init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+  assert.deepEqual(JSON.parse(String(seen[0].init?.body)), {
+    workspace_id: "ws-1",
+    goal: "Repair the fixture",
+    acceptance_criteria: ["tests pass"],
+    model_id: "model-1",
+    execution_policy: {
+      allow_file_writes: true,
+      allow_commands: true,
+      allow_network: false,
+      allow_package_install: false,
+    },
+  });
   assert.deepEqual(JSON.parse(String(seen[4].init?.body)), {
     content: "Continue",
     idempotency_key: "steer-retry-1",
@@ -154,6 +172,12 @@ test("executes an already-complete CPTR task without exposing raw agent events",
     prompt: "Inspect the fixture",
     model_id: "model-1",
     wait_seconds: 5,
+    execution_policy: {
+      allow_file_writes: false,
+      allow_commands: true,
+      allow_network: false,
+      allow_package_install: false,
+    },
   });
 
   assert.deepEqual(result, {
@@ -168,6 +192,17 @@ test("executes an already-complete CPTR task without exposing raw agent events",
   });
   assert.deepEqual(seen.map((request) => request.url), ["http://cptr.test/api/control/v1/tasks"]);
   assert.equal((seen[0].init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+  assert.deepEqual(JSON.parse(String(seen[0].init?.body)), {
+    workspace_id: "ws-1",
+    prompt: "Inspect the fixture",
+    model_id: "model-1",
+    execution_policy: {
+      allow_file_writes: false,
+      allow_commands: true,
+      allow_network: false,
+      allow_package_install: false,
+    },
+  });
 });
 
 test("fails closed when a completed task contains failed tool evidence", async () => {

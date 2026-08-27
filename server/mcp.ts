@@ -3,7 +3,7 @@ import { ComputerClient } from "./client/computer-client.js";
 import { LiveTicketStore, type LiveTarget } from "./live-tickets.js";
 import { WORKBENCH_RESOURCE_URI, createWorkbenchResource } from "./ui/workbench-resource.js";
 import { z } from "zod";
-export const MCP_CONTRACT_VERSION = "0.4.0";
+export const MCP_CONTRACT_VERSION = "0.5.0";
 export const MCP_CONTRACT_TOOL_COUNT = 36;
 
 import {
@@ -127,7 +127,7 @@ export function createMcpServer(
   client: ComputerClient,
   options: { tickets?: LiveTicketStore; widgetBundle?: string; widgetStyles?: string; connectDomain?: string } = {},
 ): McpServer {
-  const server = new McpServer({ name: "chatgpt-computer-plugin", version: "0.3.0" });
+  const server = new McpServer({ name: "chatgpt-computer-plugin", version: MCP_CONTRACT_VERSION });
   const tickets = options.tickets ?? new LiveTicketStore();
   server.registerResource(
     "cptr-live-workbench",
@@ -524,7 +524,7 @@ export function createMcpServer(
     "cptr_start_task",
     {
       title: "Start a CPTR task",
-      description: "Use this when the user explicitly wants CPTR to start an engineering task in a selected workspace.",
+      description: "Use this when the user explicitly wants CPTR to start an engineering task in a selected workspace. When the user restricts writes, commands, network access, or package installation, encode those restrictions in execution_policy so CPTR enforces them server-side rather than relying on prompt wording.",
       inputSchema: startTaskSchema,
       outputSchema: { id: z.string(), status: z.string(), workspace_id: z.string() },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
@@ -549,7 +549,7 @@ export function createMcpServer(
     {
       title: "Execute a CPTR task now",
       description:
-        "Use this only when the user explicitly asks ChatGPT to execute a contained task in a selected CPTR workspace. It starts an authorized CPTR task and waits up to 60 seconds for a result. If it remains active, return the task ID and use task-status tools rather than retrying. This tool does not grant additional CPTR permissions; CPTR authorization and approval policy remain authoritative.",
+        "Use this only when the user explicitly asks ChatGPT to execute a contained task in a selected CPTR workspace. It starts an authorized CPTR task and waits up to 60 seconds for a result. If it remains active, return the task ID and use task-status tools rather than retrying. Encode user restrictions on writes, commands, network access, and package installation in execution_policy so CPTR enforces them server-side. This tool does not grant additional CPTR permissions; CPTR authorization and approval policy remain authoritative.",
       inputSchema: executeTaskSchema,
       outputSchema: {
         task_id: z.string(),
@@ -582,7 +582,7 @@ export function createMcpServer(
     "cptr_monitor_autonomous",
     {
       title: "Monitor a CPTR engineering goal",
-      description: "Use this to create a persistent CPTR engineering monitor. The monitor continues server-side after the MCP call ends.",
+      description: "Use this to create a persistent CPTR engineering monitor. The monitor continues server-side after the MCP call ends. Encode user restrictions on writes, commands, network access, and package installation in execution_policy; every spawned worker inherits those server-enforced limits.",
       inputSchema: monitorAutonomousSchema,
       outputSchema: autonomousSummaryOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
@@ -611,7 +611,6 @@ export function createMcpServer(
         target_type: z.enum(["task", "monitor", "command"]),
         target_id: z.string().min(1),
         workspace_id: z.string().min(1).max(200).optional(),
-        presentation: z.enum(["inline", "expanded"]).optional(),
       }),
       outputSchema: {
         target_type: z.enum(["task", "monitor", "command"]),

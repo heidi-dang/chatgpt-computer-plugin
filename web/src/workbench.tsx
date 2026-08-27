@@ -89,7 +89,7 @@ function useMcpBridge() {
       params: {
         protocolVersion: "2026-01-26",
         capabilities: {},
-        clientInfo: { name: "cptr-live-terminal", version: "0.4.0" },
+        clientInfo: { name: "cptr-live-terminal", version: "0.5.0" },
       },
     }, "*");
     return () => window.removeEventListener("message", onMessage);
