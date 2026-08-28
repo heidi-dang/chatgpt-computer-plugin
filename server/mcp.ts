@@ -13,12 +13,19 @@ export { MCP_CONTRACT_TOOL_COUNT, MCP_CONTRACT_VERSION } from "./release.js";
 
 import {
   approveAutonomousSchema,
+  directWorkerCreateSchema,
+  directWorkerListSchema,
+  directWorkerGetSchema,
+  directWorkersOverviewSchema,
+  directWorkersIntegrateSchema,
+  directWorkerCloseSchema,
   codingCommandCancelSchema,
   codingCommandSchema,
   codingCommandStatusSchema,
   codingDeleteSchema,
   codingDirectorySchema,
   codingEditSchema,
+  fdxIntelligenceSchema,
   codingListSchema,
   codingMoveSchema,
   codingReadSchema,
@@ -65,6 +72,7 @@ import {
   autonomousEvidenceSchema,
   taskOutputSchema,
   taskReviewSchema,
+  gitStatusSchema,
   gitDiffSchema,
   readManyFilesSchema,
   applyEditsSchema,
@@ -285,6 +293,25 @@ const taskListItemOutputSchema = z.object({
   updated_at: z.number().int(),
 });
 
+const directWorkerOutputSchema = {
+  worker_id: z.string(),
+  workspace_id: z.string(),
+  name: z.string(),
+  responsibility: z.string(),
+  repo_path: z.string(),
+  status: z.string(),
+  branch: z.string(),
+  base_revision: z.string(),
+  changed_file_count: z.number().int().nonnegative(),
+  changed_paths: z.array(z.string()),
+  active_command_ids: z.array(z.string()),
+  recent_command_ids: z.array(z.string()),
+  created_at: z.number(),
+  updated_at: z.number(),
+  integrated_at: z.number().nullable(),
+  closed_at: z.number().nullable(),
+};
+
 const directCommandOutputSchema = {
   workspace_id: z.string(),
   command_id: z.string(),
@@ -349,7 +376,7 @@ const DELEGATED_AGENT_TOOL_NAMES = new Set([
 ]);
 
 const DIRECT_GROUP_DESCRIPTION =
-  "Tool group: ChatGPT Direct Coding. This is the default execution path. ChatGPT itself must inspect, edit, run, verify, browse, or operate the selected workspace through these bounded CPTR primitives; do not delegate the work to a CPTR model, agent profile, Codex, Hermes, or another autonomous coding agent.";
+  "Tool group: ChatGPT Direct Coding. This is the default execution path. ChatGPT itself must inspect, edit, run, verify, browse, or operate the selected workspace through these bounded CPTR primitives; do not delegate the work to a CPTR model, agent profile, Codex, Hermes, or another autonomous coding agent. For source-code understanding, repository navigation, symbols, dependencies, architecture, change impact, affected tests, or related-file reasoning, prefer cptr_fdx_intelligence first when available; if FDX reports unavailable, degraded, unsupported, or insufficient evidence, fall back to the ordinary CPTR Direct Coding tools. Exact CPTR file reads remain required before mutation.";
 const DELEGATE_GROUP_DESCRIPTION =
   "Tool group: Delegated Agent. This tool is model/agent-backed CPTR orchestration or lifecycle control. It is blocked unless the current user prompt contains the exact opt-in token `allow:delegate` and the prompt Workbench session was opened with delegation_authorization=`allow:delegate`. The opt-in applies to CPTR native agents/models and other agent profiles such as Codex or Hermes.";
 
@@ -379,6 +406,7 @@ export function createMcpServer(
   options: {
     tickets?: LiveTicketStore;
     promptSessions?: PromptTerminalStore;
+    liveTerminalStreamingEnabled?: boolean;
     widgetBundle?: string;
     widgetStyles?: string;
     widgetAssets?: () => { bundle: string; styles: string };
@@ -388,6 +416,7 @@ export function createMcpServer(
   const server = new McpServer({ name: "chatgpt-computer-plugin", version: MCP_CONTRACT_VERSION });
   const tickets = options.tickets ?? new LiveTicketStore();
   const promptSessions = options.promptSessions ?? new PromptTerminalStore();
+  const liveTerminalStreamingEnabled = options.liveTerminalStreamingEnabled ?? true;
   let activePromptTicket: string | null = null;
 
   const publishActivity = (
@@ -409,6 +438,76 @@ export function createMcpServer(
     return activity;
   };
 
+  const publishDirectWorker = (payload: {
+    worker_id: string;
+    workspace_id?: string;
+    name?: string;
+    responsibility?: string;
+    repo_path?: string;
+    status?: string;
+    summary?: string;
+    changed_file_count?: number;
+    changed_paths?: string[];
+    active_command_ids?: string[];
+    recent_command_ids?: string[];
+  }) => promptSessions.append(activePromptTicket, { type: "direct.worker", payload });
+
+  const workerIdFrom = (value: unknown): string | undefined => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const id = (value as Record<string, unknown>).worker_id;
+    return typeof id === "string" && id ? id : undefined;
+  };
+
+  const publishWorkerResult = (input: unknown, value: unknown, summary: string) => {
+    const resultValue = terminalToolResult(value);
+    const inputRecord = input && typeof input === "object" && !Array.isArray(input)
+      ? input as Record<string, unknown>
+      : {};
+    const resultRecord = resultValue && typeof resultValue === "object" && !Array.isArray(resultValue)
+      ? resultValue as Record<string, unknown>
+      : {};
+    const workers = Array.isArray(resultRecord.workers) ? resultRecord.workers : [];
+    if (workers.length) {
+      for (const item of workers) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+        const worker = item as Record<string, unknown>;
+        const workerId = workerIdFrom(worker);
+        if (!workerId) continue;
+        publishDirectWorker({
+          worker_id: workerId,
+          workspace_id: typeof worker.workspace_id === "string" ? worker.workspace_id : undefined,
+          name: typeof worker.name === "string" ? worker.name : undefined,
+          responsibility: typeof worker.responsibility === "string" ? worker.responsibility : undefined,
+          repo_path: typeof worker.repo_path === "string" ? worker.repo_path : undefined,
+          status: typeof worker.status === "string" ? worker.status : undefined,
+          summary,
+          changed_file_count: typeof worker.changed_file_count === "number" ? worker.changed_file_count : undefined,
+          changed_paths: Array.isArray(worker.changed_paths) ? worker.changed_paths.filter((path): path is string => typeof path === "string") : undefined,
+          active_command_ids: Array.isArray(worker.active_command_ids) ? worker.active_command_ids.filter((id): id is string => typeof id === "string") : undefined,
+          recent_command_ids: Array.isArray(worker.recent_command_ids) ? worker.recent_command_ids.filter((id): id is string => typeof id === "string") : undefined,
+        });
+      }
+      return;
+    }
+    const workerId = workerIdFrom(resultRecord) ?? workerIdFrom(inputRecord);
+    if (!workerId) return;
+    publishDirectWorker({
+      worker_id: workerId,
+      workspace_id: typeof resultRecord.workspace_id === "string"
+        ? resultRecord.workspace_id
+        : typeof inputRecord.workspace_id === "string" ? inputRecord.workspace_id : undefined,
+      name: typeof resultRecord.name === "string" ? resultRecord.name : undefined,
+      responsibility: typeof resultRecord.responsibility === "string" ? resultRecord.responsibility : undefined,
+      repo_path: typeof resultRecord.repo_path === "string" ? resultRecord.repo_path : undefined,
+      status: typeof resultRecord.status === "string" ? resultRecord.status : "WORKING",
+      summary,
+      changed_file_count: typeof resultRecord.changed_file_count === "number" ? resultRecord.changed_file_count : undefined,
+      changed_paths: Array.isArray(resultRecord.changed_paths) ? resultRecord.changed_paths.filter((path): path is string => typeof path === "string") : undefined,
+      active_command_ids: Array.isArray(resultRecord.active_command_ids) ? resultRecord.active_command_ids.filter((id): id is string => typeof id === "string") : undefined,
+      recent_command_ids: Array.isArray(resultRecord.recent_command_ids) ? resultRecord.recent_command_ids.filter((id): id is string => typeof id === "string") : undefined,
+    });
+  };
+
   // Instrument every registered MCP action at the registration boundary. This
   // produces real-time WORK/TOOL CALL/ARGS and RESULT/FAILED rows without
   // exposing private chain-of-thought or transport-only metadata. Rich
@@ -426,12 +525,24 @@ export function createMcpServer(
       (async (...args: unknown[]) => {
         const label = groupedConfig.title?.trim() || name;
         const input = args.length ? args[0] : {};
-        publishActivity(
-          name,
-          `Working: ${label}.`,
-          "STARTED",
-          { argumentsJson: terminalJson(input) },
-        );
+        const inputWorkerId = workerIdFrom(input);
+        const workerScoped = Boolean(inputWorkerId) || name.startsWith("cptr_direct_worker");
+        if (inputWorkerId) {
+          const inputRecord = input as Record<string, unknown>;
+          publishDirectWorker({
+            worker_id: inputWorkerId,
+            workspace_id: typeof inputRecord.workspace_id === "string" ? inputRecord.workspace_id : undefined,
+            status: "WORKING",
+            summary: `ChatGPT is using ${label}.`,
+          });
+        } else if (!workerScoped) {
+          publishActivity(
+            name,
+            `Working: ${label}.`,
+            "STARTED",
+            { argumentsJson: terminalJson(input) },
+          );
+        }
         try {
           if (
             requiresDelegationAuthorization(name, input) &&
@@ -446,12 +557,16 @@ export function createMcpServer(
             );
           }
           const value = await handler(...args);
-          publishActivity(
-            name,
-            `Completed: ${label}.`,
-            "COMPLETE",
-            { resultJson: terminalJson(terminalToolResult(value)) },
-          );
+          if (workerScoped) {
+            publishWorkerResult(input, value, `ChatGPT completed ${label}.`);
+          } else {
+            publishActivity(
+              name,
+              `Completed: ${label}.`,
+              "COMPLETE",
+              { resultJson: terminalJson(terminalToolResult(value)) },
+            );
+          }
           return value as never;
         } catch (error) {
           const envelope = error instanceof ComputerApiError
@@ -461,12 +576,22 @@ export function createMcpServer(
                 message: redactTerminalString(error instanceof Error ? error.message : String(error)),
                 retriable: false,
               };
-          publishActivity(
-            name,
-            `Failed: ${label}.`,
-            "FAILED",
-            { error: terminalJson(envelope) },
-          );
+          if (inputWorkerId) {
+            const inputRecord = input as Record<string, unknown>;
+            publishDirectWorker({
+              worker_id: inputWorkerId,
+              workspace_id: typeof inputRecord.workspace_id === "string" ? inputRecord.workspace_id : undefined,
+              status: "FAILED",
+              summary: `Failed: ${label}.`,
+            });
+          } else {
+            publishActivity(
+              name,
+              `Failed: ${label}.`,
+              "FAILED",
+              { error: terminalJson(envelope) },
+            );
+          }
           return {
             isError: true,
             content: [{ type: "text" as const, text: JSON.stringify(envelope) }],
@@ -493,7 +618,7 @@ export function createMcpServer(
     _toolName?: string,
     presentation?: Record<string, unknown>,
   ) => {
-    if (promptSessions.streamingEnabled) {
+    if (liveTerminalStreamingEnabled) {
       const live = tickets.issue(target);
       promptSessions.append(activePromptTicket, {
         type: "live.bind",
@@ -985,6 +1110,104 @@ export function createMcpServer(
   );
 
   server.registerTool(
+    "cptr_direct_worker_create",
+    {
+      title: "Create an isolated Direct Coding Worker",
+      description:
+        "Create a model-free direct-coding execution lane backed by an isolated Git worktree. This never starts an LLM, CPTR agent, Codex, Hermes, or autonomous task. ChatGPT remains the sole reasoner. Create all required workers while the source repository is clean, before worker edits begin.",
+      inputSchema: directWorkerCreateSchema,
+      outputSchema: directWorkerOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) => activityResult(await client.createDirectWorker(input), "cptr_direct_worker_create"),
+  );
+
+  server.registerTool(
+    "cptr_direct_worker_list",
+    {
+      title: "List Direct Coding Workers",
+      description: "List model-free isolated direct-coding workers for one workspace so ChatGPT can coordinate parallel execution lanes.",
+      inputSchema: directWorkerListSchema,
+      outputSchema: { workspace_id: z.string(), workers: z.array(z.object(directWorkerOutputSchema)) },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: workbenchToolMetadata,
+    },
+    async ({ workspace_id }) => activityResult(await client.listDirectWorkers(workspace_id), "cptr_direct_worker_list"),
+  );
+
+  server.registerTool(
+    "cptr_direct_worker_get",
+    {
+      title: "Get Direct Coding Worker state",
+      description: "Read the current model-free worker state, changed files, and active/recent command IDs without streaming raw terminal output.",
+      inputSchema: directWorkerGetSchema,
+      outputSchema: directWorkerOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) => activityResult(await client.getDirectWorker(input), "cptr_direct_worker_get"),
+  );
+
+  server.registerTool(
+    "cptr_direct_workers_overview",
+    {
+      title: "Summarize Direct Coding Workers",
+      description: "Return one compact coordination snapshot for all isolated Direct Coding Workers in the selected workspace.",
+      inputSchema: directWorkersOverviewSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        workers: z.array(z.object(directWorkerOutputSchema)),
+        total: z.number().int().nonnegative(),
+        active: z.number().int().nonnegative(),
+        ready: z.number().int().nonnegative(),
+        integrated: z.number().int().nonnegative(),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: workbenchToolMetadata,
+    },
+    async ({ workspace_id }) => activityResult(await client.directWorkersOverview(workspace_id), "cptr_direct_workers_overview"),
+  );
+
+  server.registerTool(
+    "cptr_direct_workers_integrate",
+    {
+      title: "Integrate clean Direct Coding Worker changes",
+      description:
+        "Mechanically apply non-overlapping worker changes back to the source repository without committing them. CPTR refuses active commands, base-revision drift, and overlapping source changes so ChatGPT can review and resolve conflicts itself.",
+      inputSchema: directWorkersIntegrateSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        integrated: z.array(z.string()),
+        conflicts: z.record(z.string(), z.array(z.string())),
+        applied_paths: z.record(z.string(), z.array(z.string())),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) => activityResult(await client.integrateDirectWorkers(input), "cptr_direct_workers_integrate"),
+  );
+
+  server.registerTool(
+    "cptr_direct_worker_close",
+    {
+      title: "Close an isolated Direct Coding Worker",
+      description:
+        "Remove an isolated worker worktree after its changes are integrated. Unintegrated changes are preserved by default and can be discarded only when discard_changes=true is explicitly supplied.",
+      inputSchema: directWorkerCloseSchema,
+      outputSchema: {
+        worker_id: z.string(),
+        workspace_id: z.string(),
+        status: z.string(),
+        discarded: z.boolean(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) => activityResult(await client.closeDirectWorker(input), "cptr_direct_worker_close"),
+  );
+
+  server.registerTool(
     "cptr_workspace_run_test_target",
     {
       title: "Run a fixed local CPTR test profile",
@@ -1005,6 +1228,21 @@ export function createMcpServer(
     async (input) => {
       const { workbench_session_id, ...testInput } = input;
       const command = await client.runWorkspaceTestTarget(testInput);
+      if (input.worker_id) {
+        if (workbench_session_id) {
+          recordWorkbenchActivity(client, workbench_session_id, {
+            event_type: "direct_worker.test.started",
+            state: command.status,
+            workspace_id: input.workspace_id,
+            tool_name: "cptr_workspace_run_test_target",
+            summary: `ChatGPT started ${command.target} in Direct Coding Worker ${input.worker_id}.`,
+          });
+        }
+        return activityResult(
+          { ...command, workspace_id: input.workspace_id },
+          "cptr_workspace_run_test_target",
+        );
+      }
       if (workbench_session_id) {
         await client.bindWorkbenchSession({
           session_id: workbench_session_id,
@@ -1028,6 +1266,35 @@ export function createMcpServer(
         "cptr_workspace_run_test_target",
       );
     },
+  );
+
+  server.registerTool(
+    "cptr_fdx_intelligence",
+    {
+      title: "FDX Intelligence CLI",
+      description:
+        "Preferred first repository-intelligence entry point for Direct Coding. Choose the FDX action that best fits the task: capabilities/status, token-optimized read, search/grep, batch, outline/tree/listing, dependency impact, why explanations, evidence/semantic/build intelligence, symbol-aware diff, index status, or verification planning. This is structured read-only intelligence, not a raw shell and not agent delegation. If status is unavailable/degraded or fallback_recommended=true, continue with normal CPTR Direct Coding tools. Use exact cptr_code_read_file output and SHA-256 before editing.",
+      inputSchema: fdxIntelligenceSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        worker_id: z.string().optional(),
+        repo_path: z.string().optional(),
+        action: z.string(),
+        provider: z.string(),
+        status: z.enum(["ok", "degraded", "unavailable"]),
+        fallback_recommended: z.boolean(),
+        truncated: z.boolean().optional(),
+        assurance: z.string().optional(),
+        error_code: z.string().optional(),
+        reason: z.string().optional(),
+        retriable: z.boolean().optional(),
+        fallback_tools: z.array(z.string()).optional(),
+        data: z.unknown().optional(),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.runFdxIntelligence(input), "cptr_fdx_intelligence"),
   );
 
   server.registerTool(
@@ -1207,7 +1474,7 @@ export function createMcpServer(
       title: "Get Git status for an authorized CPTR workspace",
       description:
         "Use this to inspect changed, staged, and untracked files in the selected CPTR workspace before or after direct coding edits.",
-      inputSchema: workspaceIdSchema,
+      inputSchema: gitStatusSchema,
       outputSchema: {
         is_repo: z.boolean(),
         branch: z.string().optional(),
@@ -1228,7 +1495,7 @@ export function createMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
-    async ({ workspace_id }) => activityResult(await client.getGitStatus(workspace_id), "cptr_code_get_git_status"),
+    async (input) => activityResult(await client.getGitStatus(input), "cptr_code_get_git_status"),
   );
 
   server.registerTool(
@@ -1245,6 +1512,21 @@ export function createMcpServer(
     async (input) => {
       const { workbench_session_id, ...commandInput } = input;
       const command = await client.runCodingCommand(commandInput);
+      if (input.worker_id) {
+        if (workbench_session_id) {
+          recordWorkbenchActivity(client, workbench_session_id, {
+            event_type: "direct_worker.command.started",
+            state: command.status,
+            workspace_id: input.workspace_id,
+            tool_name: "cptr_code_run_command",
+            summary: `ChatGPT started a command in Direct Coding Worker ${input.worker_id}.`,
+          });
+        }
+        return activityResult(
+          { ...command, workspace_id: input.workspace_id },
+          "cptr_code_run_command",
+        );
+      }
       if (workbench_session_id) {
         await client.bindWorkbenchSession({
           session_id: workbench_session_id,
@@ -1283,6 +1565,12 @@ export function createMcpServer(
     },
     async (input) => {
       const command = await client.getCodingCommand(input);
+      if (input.worker_id) {
+        return activityResult(
+          { ...command, workspace_id: input.workspace_id },
+          "cptr_code_get_command",
+        );
+      }
       return workbenchResult(
         { ...command, workspace_id: input.workspace_id },
         { targetType: "command", targetId: input.command_id, workspaceId: input.workspace_id },
@@ -1304,6 +1592,12 @@ export function createMcpServer(
     },
     async (input) => {
       const command = await client.cancelCodingCommand(input);
+      if (input.worker_id) {
+        return activityResult(
+          { ...command, workspace_id: input.workspace_id },
+          "cptr_code_cancel_command",
+        );
+      }
       return workbenchResult(
         { ...command, workspace_id: input.workspace_id },
         { targetType: "command", targetId: input.command_id, workspaceId: input.workspace_id },

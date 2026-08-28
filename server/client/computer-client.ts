@@ -147,6 +147,25 @@ export class ComputerApiError extends Error {
 
 export type FetchLike = typeof fetch;
 
+export type DirectCodingWorker = {
+  worker_id: string;
+  workspace_id: string;
+  name: string;
+  responsibility: string;
+  repo_path: string;
+  status: string;
+  branch: string;
+  base_revision: string;
+  changed_file_count: number;
+  changed_paths: string[];
+  active_command_ids: string[];
+  recent_command_ids: string[];
+  created_at: number;
+  updated_at: number;
+  integrated_at: number | null;
+  closed_at: number | null;
+};
+
 export type WorkbenchSession = {
   session_id: string;
   name: string;
@@ -246,6 +265,60 @@ export class ComputerClient {
 
   async getWorkspace(workspaceId: string): Promise<Workspace> {
     return this.request(`/workspaces/${encodeURIComponent(workspaceId)}`);
+  }
+
+  async createDirectWorker(input: {
+    workspace_id: string;
+    name: string;
+    responsibility?: string;
+    repo_path?: string;
+  }): Promise<DirectCodingWorker> {
+    const { workspace_id, ...body } = input;
+    return this.request(`/workspaces/${encodeURIComponent(workspace_id)}/coding/workers`, {
+      method: "POST",
+      body,
+    });
+  }
+
+  async listDirectWorkers(workspaceId: string): Promise<{ workspace_id: string; workers: DirectCodingWorker[] }> {
+    return this.request(`/workspaces/${encodeURIComponent(workspaceId)}/coding/workers`);
+  }
+
+  async getDirectWorker(input: { workspace_id: string; worker_id: string }): Promise<DirectCodingWorker> {
+    return this.request(
+      `/workspaces/${encodeURIComponent(input.workspace_id)}/coding/workers/${encodeURIComponent(input.worker_id)}`,
+    );
+  }
+
+  async directWorkersOverview(workspaceId: string): Promise<{
+    workspace_id: string;
+    workers: DirectCodingWorker[];
+    total: number;
+    active: number;
+    ready: number;
+    integrated: number;
+  }> {
+    return this.request(`/workspaces/${encodeURIComponent(workspaceId)}/coding/workers-overview`);
+  }
+
+  async integrateDirectWorkers(input: { workspace_id: string; worker_ids: string[] }): Promise<Record<string, unknown>> {
+    const { workspace_id, ...body } = input;
+    return this.request(`/workspaces/${encodeURIComponent(workspace_id)}/coding/workers-integrate`, {
+      method: "POST",
+      body,
+    });
+  }
+
+  async closeDirectWorker(input: {
+    workspace_id: string;
+    worker_id: string;
+    discard_changes?: boolean;
+  }): Promise<Record<string, unknown>> {
+    const { workspace_id, worker_id, ...body } = input;
+    return this.request(
+      `/workspaces/${encodeURIComponent(workspace_id)}/coding/workers/${encodeURIComponent(worker_id)}/close`,
+      { method: "POST", body },
+    );
   }
 
   async startTask(input: {
@@ -392,6 +465,7 @@ export class ComputerClient {
 
   async listCodingFiles(input: {
     workspace_id: string;
+    worker_id?: string;
     path?: string;
     recursive?: boolean;
     max_entries?: number;
@@ -408,6 +482,7 @@ export class ComputerClient {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/list`, {
       method: "POST",
       body: {
+        ...(input.worker_id ? { worker_id: input.worker_id } : {}),
         path: input.path ?? ".",
         recursive: input.recursive ?? false,
         max_entries: input.max_entries ?? 500,
@@ -418,6 +493,7 @@ export class ComputerClient {
 
   async readCodingFile(input: {
     workspace_id: string;
+    worker_id?: string;
     path: string;
     start_line?: number;
     end_line?: number;
@@ -425,6 +501,7 @@ export class ComputerClient {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/read`, {
       method: "POST",
       body: {
+        ...(input.worker_id ? { worker_id: input.worker_id } : {}),
         path: input.path,
         start_line: input.start_line ?? 0,
         end_line: input.end_line ?? 0,
@@ -434,6 +511,7 @@ export class ComputerClient {
 
   async searchCodingFiles(input: {
     workspace_id: string;
+    worker_id?: string;
     query: string;
     path?: string;
     regex?: boolean;
@@ -452,6 +530,7 @@ export class ComputerClient {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/search`, {
       method: "POST",
       body: {
+        ...(input.worker_id ? { worker_id: input.worker_id } : {}),
         query: input.query,
         path: input.path ?? ".",
         regex: input.regex ?? false,
@@ -464,8 +543,22 @@ export class ComputerClient {
     });
   }
 
+  async runFdxIntelligence(input: {
+    workspace_id: string;
+    worker_id?: string;
+    action: string;
+    [key: string]: unknown;
+  }): Promise<Record<string, unknown>> {
+    const { workspace_id, ...body } = input;
+    return this.request(`/workspaces/${encodeURIComponent(workspace_id)}/coding/fdx`, {
+      method: "POST",
+      body,
+    });
+  }
+
   async writeCodingFile(input: {
     workspace_id: string;
+    worker_id?: string;
     path: string;
     content: string;
     expected_sha256?: string;
@@ -474,6 +567,7 @@ export class ComputerClient {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/write`, {
       method: "POST",
       body: {
+        ...(input.worker_id ? { worker_id: input.worker_id } : {}),
         path: input.path,
         content: input.content,
         ...(input.expected_sha256 ? { expected_sha256: input.expected_sha256 } : {}),
@@ -484,6 +578,7 @@ export class ComputerClient {
 
   async editCodingFile(input: {
     workspace_id: string;
+    worker_id?: string;
     path: string;
     target: string;
     replacement: string;
@@ -502,6 +597,7 @@ export class ComputerClient {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/edit`, {
       method: "POST",
       body: {
+        ...(input.worker_id ? { worker_id: input.worker_id } : {}),
         path: input.path,
         target: input.target,
         replacement: input.replacement,
@@ -515,38 +611,48 @@ export class ComputerClient {
 
   async createCodingDirectory(input: {
     workspace_id: string;
+    worker_id?: string;
     path: string;
   }): Promise<{ workspace_id: string; path: string; type: string; created: boolean }> {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/directories`, {
       method: "POST",
-      body: { path: input.path },
+      body: { ...(input.worker_id ? { worker_id: input.worker_id } : {}), path: input.path },
     });
   }
 
   async moveCodingFile(input: {
     workspace_id: string;
+    worker_id?: string;
     source: string;
     destination: string;
     overwrite?: boolean;
   }): Promise<{ workspace_id: string; source: string; destination: string; sha256: string }> {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/move`, {
       method: "POST",
-      body: { source: input.source, destination: input.destination, overwrite: input.overwrite ?? false },
+      body: { ...(input.worker_id ? { worker_id: input.worker_id } : {}), source: input.source, destination: input.destination, overwrite: input.overwrite ?? false },
     });
   }
 
   async deleteCodingFile(input: {
     workspace_id: string;
+    worker_id?: string;
     path: string;
   }): Promise<{ workspace_id: string; path: string; deleted: boolean; existed: boolean }> {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/delete`, {
       method: "POST",
-      body: { path: input.path },
+      body: { ...(input.worker_id ? { worker_id: input.worker_id } : {}), path: input.path },
     });
   }
 
-  async getGitStatus(workspaceId: string): Promise<Record<string, unknown>> {
-    return this.request(`/workspaces/${encodeURIComponent(workspaceId)}/git/status`);
+  async getGitStatus(
+    input: string | { workspace_id: string; worker_id?: string },
+  ): Promise<Record<string, unknown>> {
+    const request = typeof input === "string" ? { workspace_id: input } : input;
+    const query = new URLSearchParams();
+    if (request.worker_id) query.set("worker_id", request.worker_id);
+    return this.request(
+      `/workspaces/${encodeURIComponent(request.workspace_id)}/git/status${query.size ? `?${query}` : ""}`,
+    );
   }
 
   async createWorkbenchSession(input: { name?: string; workspace_id?: string } = {}): Promise<WorkbenchSession> {
@@ -630,6 +736,7 @@ export class ComputerClient {
 
   async inspectWorkspace(input: {
     workspace_id: string;
+    worker_id?: string;
     kind: "project" | "tree" | "metadata" | "read_many" | "symbols" | "tests" | "dependencies" | "scripts" | "release";
     path?: string;
     paths?: string[];
@@ -645,6 +752,7 @@ export class ComputerClient {
 
   async runWorkspaceTestTarget(input: {
     workspace_id: string;
+    worker_id?: string;
     target: "python_pytest" | "node_test" | "node_vitest" | "node_build";
     path?: string;
     test_path?: string;
@@ -659,6 +767,7 @@ export class ComputerClient {
 
   async runCodingCommand(input: {
     workspace_id: string;
+    worker_id?: string;
     command: string;
     cwd?: string;
     wait_seconds?: number;
@@ -668,6 +777,7 @@ export class ComputerClient {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/commands`, {
       method: "POST",
       body: {
+        ...(input.worker_id ? { worker_id: input.worker_id } : {}),
         command: input.command,
         cwd: input.cwd ?? ".",
         wait_seconds: input.wait_seconds ?? 0,
@@ -679,6 +789,7 @@ export class ComputerClient {
 
   async getCodingCommand(input: {
     workspace_id: string;
+    worker_id?: string;
     command_id: string;
     offset?: number;
     wait_seconds?: number;
@@ -689,6 +800,7 @@ export class ComputerClient {
       wait_seconds: String(input.wait_seconds ?? 0),
     });
     if (input.tail_bytes !== undefined) query.set("tail_bytes", String(input.tail_bytes));
+    if (input.worker_id) query.set("worker_id", input.worker_id);
     return this.request(
       `/workspaces/${encodeURIComponent(input.workspace_id)}/coding/commands/${encodeURIComponent(input.command_id)}?${query}`,
     );
@@ -696,10 +808,13 @@ export class ComputerClient {
 
   async cancelCodingCommand(input: {
     workspace_id: string;
+    worker_id?: string;
     command_id: string;
   }): Promise<DirectCommand> {
+    const query = new URLSearchParams();
+    if (input.worker_id) query.set("worker_id", input.worker_id);
     return this.request(
-      `/workspaces/${encodeURIComponent(input.workspace_id)}/coding/commands/${encodeURIComponent(input.command_id)}/cancel`,
+      `/workspaces/${encodeURIComponent(input.workspace_id)}/coding/commands/${encodeURIComponent(input.command_id)}/cancel${query.size ? `?${query}` : ""}`,
       { method: "POST" },
     );
   }
@@ -888,10 +1003,11 @@ export class ComputerClient {
   }
 
   async getDiff(
-    input: string | { workspace_id: string; paths?: string[]; max_bytes?: number },
+    input: string | { workspace_id: string; worker_id?: string; paths?: string[]; max_bytes?: number },
   ): Promise<GitDiff> {
     const request = typeof input === "string" ? { workspace_id: input } : input;
     const query = new URLSearchParams({ max_bytes: String(request.max_bytes ?? 100_000) });
+    if (request.worker_id) query.set("worker_id", request.worker_id);
     for (const path of request.paths ?? []) query.append("paths", path);
     return this.request(`/workspaces/${encodeURIComponent(request.workspace_id)}/git/diff?${query}`);
   }

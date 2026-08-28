@@ -1,6 +1,31 @@
 import { z } from "zod";
 
 export const workspaceIdSchema = { workspace_id: z.string().min(1).max(200) };
+const optionalWorkerTargetSchema = {
+  worker_id: z.string().min(1).max(200).optional().describe(
+    "Optional model-free Direct Coding Worker. When set, ChatGPT operates inside that worker's isolated Git worktree.",
+  ),
+};
+const requiredWorkerIdSchema = { worker_id: z.string().min(1).max(200) };
+
+export const directWorkerCreateSchema = {
+  ...workspaceIdSchema,
+  name: z.string().min(1).max(80),
+  responsibility: z.string().max(500).default(""),
+  repo_path: z.string().min(1).max(1_000).default("."),
+};
+export const directWorkerListSchema = { ...workspaceIdSchema };
+export const directWorkerGetSchema = { ...workspaceIdSchema, ...requiredWorkerIdSchema };
+export const directWorkersOverviewSchema = { ...workspaceIdSchema };
+export const directWorkersIntegrateSchema = {
+  ...workspaceIdSchema,
+  worker_ids: z.array(z.string().min(1).max(200)).min(1).max(16),
+};
+export const directWorkerCloseSchema = {
+  ...workspaceIdSchema,
+  ...requiredWorkerIdSchema,
+  discard_changes: z.boolean().default(false),
+};
 export const taskIdSchema = { task_id: z.string().min(1).max(200) };
 export const monitorIdSchema = { monitor_id: z.string().min(1).max(200) };
 export const steerAutonomousSchema = {
@@ -112,6 +137,7 @@ export const listWorkspacesSchema = {
 
 export const codingListSchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   path: z.string().min(1).max(1_000).default("."),
   recursive: z.boolean().default(false),
   max_entries: z.number().int().min(1).max(5000).default(500),
@@ -120,6 +146,7 @@ export const codingListSchema = {
 
 export const codingReadSchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   path: z.string().min(1).max(1_000),
   start_line: z.number().int().min(0).max(1_000_000).default(0),
   end_line: z.number().int().min(0).max(1_000_000).default(0),
@@ -127,6 +154,7 @@ export const codingReadSchema = {
 
 export const codingSearchSchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   query: z.string().min(1).max(10_000),
   path: z.string().min(1).max(1_000).default("."),
   regex: z.boolean().default(false),
@@ -137,8 +165,68 @@ export const codingSearchSchema = {
   context_lines: z.number().int().min(0).max(10).default(0),
 };
 
+export const fdxIntelligenceSchema = {
+  workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
+  action: z.enum([
+    "status",
+    "capabilities",
+    "read",
+    "search",
+    "grep",
+    "batch",
+    "outline",
+    "tree",
+    "ls",
+    "impact",
+    "impact_v2",
+    "why",
+    "evidence_graph",
+    "semantic_status",
+    "semantic_references",
+    "build_status",
+    "build_graph",
+    "diff",
+    "index_status",
+    "plan",
+  ]).describe("Choose the FDX intelligence operation that best fits the current repository question."),
+  repo_path: z.string().min(1).max(1_000).default(".").describe(
+    "Workspace- or worker-relative repository root. Use this when the authorized CPTR workspace contains a nested Git repository.",
+  ),
+  path: z.string().min(1).max(1_000).optional(),
+  paths: z.array(z.string().min(1).max(1_000)).max(20).default([]),
+  query: z.string().max(10_000).optional(),
+  pattern: z.string().max(10_000).optional(),
+  symbol: z.string().max(2_000).optional(),
+  target: z.string().max(2_000).optional(),
+  mode: z.enum(["auto", "raw", "prototype", "deep"]).default("auto"),
+  kind: z.string().max(120).optional(),
+  direction: z.enum(["in", "out", "both"]).default("both"),
+  depth: z.number().int().min(1).max(20).default(3),
+  base: z.string().max(300).optional(),
+  head: z.string().max(300).optional(),
+  limit: z.number().int().min(1).max(20_000).optional(),
+  offset: z.number().int().min(1).max(10_000_000).optional(),
+  max_matches: z.number().int().min(1).max(1_000).default(50),
+  max_files: z.number().int().min(1).max(100).default(20),
+  limit_per_file: z.number().int().min(1).max(20_000).optional(),
+  min_lines: z.number().int().min(1).max(100_000).default(1),
+  context: z.number().int().min(0).max(20).default(2),
+  with_deps: z.boolean().default(true),
+  fixed_strings: z.boolean().default(false),
+  case_sensitive: z.boolean().default(false),
+  no_cache: z.boolean().default(false),
+  dirs_only: z.boolean().default(false),
+  all: z.boolean().default(false),
+  staged: z.boolean().default(false),
+  policy_overlay: z.boolean().default(false),
+  lang: z.enum(["rust", "typescript", "javascript"]).default("rust"),
+  intent: z.enum(["localize", "reference_complete", "rename", "impact_seed", "context"]).default("reference_complete"),
+};
+
 export const codingWriteSchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   path: z.string().min(1).max(1_000),
   content: z.string().max(1_000_000),
   expected_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -147,6 +235,7 @@ export const codingWriteSchema = {
 
 export const codingEditSchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   path: z.string().min(1).max(1_000),
   target: z.string().min(1).max(1_000_000),
   replacement: z.string().max(1_000_000),
@@ -158,11 +247,13 @@ export const codingEditSchema = {
 
 export const codingDirectorySchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   path: z.string().min(1).max(1_000),
 };
 
 export const codingMoveSchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   source: z.string().min(1).max(1_000),
   destination: z.string().min(1).max(1_000),
   overwrite: z.boolean().default(false),
@@ -170,38 +261,45 @@ export const codingMoveSchema = {
 
 export const codingDeleteSchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   path: z.string().min(1).max(1_000),
 };
 
-export const workspaceProjectSchema = { workspace_id: z.string().min(1).max(200) };
+export const workspaceProjectSchema = { workspace_id: z.string().min(1).max(200), ...optionalWorkerTargetSchema };
 export const workspaceTreeSchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   path: z.string().min(1).max(1_000).default("."),
   depth: z.number().int().min(1).max(4).default(2),
 };
 export const workspaceMetadataSchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   path: z.string().min(1).max(1_000),
 };
 export const workspaceReadManySchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   paths: z.array(z.string().min(1).max(1_000)).min(1).max(20),
 };
 export const workspaceSymbolSearchSchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   query: z.string().min(1).max(200),
   path: z.string().min(1).max(1_000).default("."),
 };
 export const workspaceTestDiscoverySchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   path: z.string().min(1).max(1_000).default("."),
   depth: z.number().int().min(1).max(4).default(3),
 };
-export const workspaceDependencySchema = { workspace_id: z.string().min(1).max(200) };
-export const workspaceScriptsSchema = { workspace_id: z.string().min(1).max(200) };
-export const workspaceReleaseReadinessSchema = { workspace_id: z.string().min(1).max(200) };
+export const workspaceDependencySchema = { workspace_id: z.string().min(1).max(200), ...optionalWorkerTargetSchema };
+export const workspaceScriptsSchema = { workspace_id: z.string().min(1).max(200), ...optionalWorkerTargetSchema };
+export const workspaceReleaseReadinessSchema = { workspace_id: z.string().min(1).max(200), ...optionalWorkerTargetSchema };
 export const workspaceTestTargetSchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   target: z.enum(["python_pytest", "node_test", "node_vitest", "node_build"]),
   path: z.string().min(1).max(1_000).default("."),
   test_path: z.string().min(1).max(1_000).optional(),
@@ -211,6 +309,7 @@ export const workspaceTestTargetSchema = {
 
 export const codingCommandSchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   command: z.string().min(1).max(20_000),
   cwd: z.string().min(1).max(1_000).default("."),
   wait_seconds: z.number().int().min(0).max(60).default(0),
@@ -221,6 +320,7 @@ export const codingCommandSchema = {
 
 export const codingCommandStatusSchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   command_id: z.string().min(1).max(200),
   offset: z.number().int().min(0).max(100_000_000).default(0),
   wait_seconds: z.number().int().min(0).max(60).default(0),
@@ -234,12 +334,14 @@ export const autonomousEvidenceSchema = { monitor_id: z.string().min(1), scope_i
 export const listAutonomousSchema = { workspace_id: z.string().optional(), status: z.string().optional(), limit: z.number().int().min(1).max(100).default(20) };
 export const taskOutputSchema = { task_id: z.string().min(1).max(200), offset: z.number().int().min(0).default(0), max_chars: z.number().int().min(1).max(200_000).default(20_000) };
 export const taskReviewSchema = { task_id: z.string().min(1).max(200), max_diff_bytes: z.number().int().min(1).max(2_000_000).default(100_000) };
-export const gitDiffSchema = { workspace_id: z.string().min(1).max(200), paths: z.array(z.string().min(1).max(1_000)).max(100).optional(), max_bytes: z.number().int().min(1).max(2_000_000).default(100_000) };
-export const readManyFilesSchema = { workspace_id: z.string().min(1), files: z.array(z.object({ path: z.string().min(1), start_line: z.number().int().min(0).optional(), end_line: z.number().int().min(0).optional() })).min(1).max(10), max_chars: z.number().int().min(1).max(200000).default(20000) };
-export const applyEditsSchema = { workspace_id: z.string().min(1), path: z.string().min(1), edits: z.array(z.object({ target: z.string().min(1), replacement: z.string() })).min(1).max(20), expected_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional() };
+export const gitStatusSchema = { workspace_id: z.string().min(1).max(200), ...optionalWorkerTargetSchema };
+export const gitDiffSchema = { workspace_id: z.string().min(1).max(200), ...optionalWorkerTargetSchema, paths: z.array(z.string().min(1).max(1_000)).max(100).optional(), max_bytes: z.number().int().min(1).max(2_000_000).default(100_000) };
+export const readManyFilesSchema = { workspace_id: z.string().min(1), ...optionalWorkerTargetSchema, files: z.array(z.object({ path: z.string().min(1), start_line: z.number().int().min(0).optional(), end_line: z.number().int().min(0).optional() })).min(1).max(10), max_chars: z.number().int().min(1).max(200000).default(20000) };
+export const applyEditsSchema = { workspace_id: z.string().min(1), ...optionalWorkerTargetSchema, path: z.string().min(1), edits: z.array(z.object({ target: z.string().min(1), replacement: z.string() })).min(1).max(20), expected_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional() };
 
 export const codingCommandCancelSchema = {
   workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
   command_id: z.string().min(1).max(200),
 };
 

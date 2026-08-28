@@ -31,10 +31,17 @@ const expectedTools = [
   "cptr_code_write_file",
   "cptr_confirm_delete_workbench_session",
   "cptr_decide_task_review",
+  "cptr_direct_worker_close",
+  "cptr_direct_worker_create",
+  "cptr_direct_worker_get",
+  "cptr_direct_worker_list",
+  "cptr_direct_workers_integrate",
+  "cptr_direct_workers_overview",
   "cptr_execute_task",
   "cptr_get_autonomous",
   "cptr_get_autonomous_events",
   "cptr_get_autonomous_evidence",
+  "cptr_fdx_intelligence",
   "cptr_get_diff",
   "cptr_get_task",
   "cptr_get_task_events",
@@ -77,7 +84,7 @@ const auxiliaryTools = new Set([
   "cptr_ssh_list_hosts", "cptr_ssh_run_command", "cptr_ssh_get_command", "cptr_ssh_cancel_command",
 ]);
 const expectedPlannedTools = expectedTools.filter((name) => !auxiliaryTools.has(name));
-const expectedRegisteredToolCount = 62;
+const expectedRegisteredToolCount = 69;
 const expectedResource = "ui://cptr/live-workbench.html";
 
 if (!endpoint || !token) {

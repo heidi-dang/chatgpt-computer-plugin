@@ -68,6 +68,13 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_code_run_command",
       "cptr_code_get_command",
       "cptr_code_cancel_command",
+      "cptr_direct_worker_create",
+      "cptr_direct_worker_list",
+      "cptr_direct_worker_get",
+      "cptr_direct_workers_overview",
+      "cptr_direct_workers_integrate",
+      "cptr_direct_worker_close",
+      "cptr_fdx_intelligence",
       "cptr_ssh_list_hosts",
       "cptr_ssh_run_command",
       "cptr_ssh_get_command",
@@ -99,6 +106,14 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_code_list_files")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_code_read_file")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_code_search_files")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_fdx_intelligence")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_fdx_intelligence")?.annotations?.destructiveHint, false);
+  assert.equal(tools.get("cptr_fdx_intelligence")?.annotations?.openWorldHint, false);
+  assert.match(tools.get("cptr_fdx_intelligence")?.title ?? "", /^\[ChatGPT Direct Coding\]/);
+  assert.match(tools.get("cptr_fdx_intelligence")?.description ?? "", /preferred first repository-intelligence/i);
+  assert.notEqual(tools.get("cptr_fdx_intelligence")?.inputSchema.properties?.action, undefined);
+  assert.notEqual(tools.get("cptr_fdx_intelligence")?.inputSchema.properties?.worker_id, undefined);
+  assert.equal(tools.get("cptr_fdx_intelligence")?.inputSchema.properties?.model_id, undefined);
   assert.equal(tools.get("cptr_code_write_file")?.annotations?.destructiveHint, true);
   assert.equal(tools.get("cptr_code_edit_file")?.annotations?.destructiveHint, true);
   assert.equal(tools.get("cptr_code_create_directory")?.annotations?.readOnlyHint, false);
@@ -158,7 +173,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_plugin_update")?.annotations?.openWorldHint, false);
   assert.match(CPTR_APP_VERSION, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
   assert.equal(MCP_CONTRACT_VERSION, CPTR_APP_VERSION);
-  assert.equal(MCP_CONTRACT_TOOL_COUNT, 56);
+  assert.equal(MCP_CONTRACT_TOOL_COUNT, 63);
   assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT + 6);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
@@ -292,13 +307,13 @@ test("reports plugin release status through the stable update action", async () 
     arguments: {
       action: "verify_server",
       expected_contract_version: CPTR_APP_VERSION,
-      expected_tool_count: 56,
+      expected_tool_count: 63,
     },
   });
   const value = response.structuredContent as Record<string, unknown> | undefined;
   assert.equal(response.isError, undefined);
   assert.equal(value?.version, CPTR_APP_VERSION);
-  assert.equal(value?.tool_count, 56);
+  assert.equal(value?.tool_count, 63);
   assert.equal(value?.contract_matches, true);
   assert.equal(value?.tool_count_matches, true);
   assert.deepEqual((value?.verification as { tool?: string } | undefined)?.tool, "cptr_plugin_update");

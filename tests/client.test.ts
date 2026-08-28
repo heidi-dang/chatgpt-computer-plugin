@@ -75,6 +75,47 @@ test("routes managed Chrome control through the existing scoped Control API", as
   assert.equal(response.managed, true);
 });
 
+test("routes the single FDX intelligence gateway with repository and worker scope", async () => {
+  let seenUrl = "";
+  let seenBody: Record<string, unknown> = {};
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seenUrl = String(input);
+      seenBody = JSON.parse(String(init?.body ?? "{}"));
+      return new Response(JSON.stringify({
+        workspace_id: "ws-1",
+        worker_id: "dcw-1",
+        repo_path: "repo",
+        action: "impact_v2",
+        provider: "fdx_native",
+        status: "ok",
+        fallback_recommended: false,
+        data: {},
+      }), { status: 200 });
+    },
+  });
+
+  await client.runFdxIntelligence({
+    workspace_id: "ws-1",
+    worker_id: "dcw-1",
+    repo_path: "repo",
+    action: "impact_v2",
+    base: "HEAD",
+    depth: 3,
+  });
+
+  assert.equal(seenUrl, "http://cptr.test/api/control/v1/workspaces/ws-1/coding/fdx");
+  assert.deepEqual(seenBody, {
+    worker_id: "dcw-1",
+    repo_path: "repo",
+    action: "impact_v2",
+    base: "HEAD",
+    depth: 3,
+  });
+});
+
 test("normalizes CPTR errors without exposing credentials", async () => {
   const client = new ComputerClient({
     baseUrl: "http://cptr.test",

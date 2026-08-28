@@ -15,6 +15,8 @@ const initial: WorkbenchState = {
   status: "CONNECTING",
   lastSequence: 0,
   transcript: [],
+  workers: {},
+  workerOrder: [],
 };
 
 test("appends MCP tool usage without disturbing the authoritative live-event cursor", () => {
@@ -66,7 +68,7 @@ test("renders MCP tool result as result and done rows", () => {
 });
 
 test("renders failed MCP tool usage as an error without changing task status", () => {
-  const running: WorkbenchState = { status: "RUNNING", lastSequence: 19, transcript: [] };
+  const running: WorkbenchState = { status: "RUNNING", lastSequence: 19, transcript: [], workers: {}, workerOrder: [] };
   const next = appendMcpToolActivity(running, {
     event_id: "mcp-failed-1",
     timestamp: "2026-08-27T00:00:02Z",

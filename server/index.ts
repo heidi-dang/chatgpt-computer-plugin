@@ -67,7 +67,9 @@ const liveGateway = new LiveGateway(client, liveTickets);
 const promptSessions = new PromptTerminalStore({
   streamUrl: `${publicOrigin}/live/prompt/stream`,
   snapshotUrl: `${publicOrigin}/live/prompt/snapshot`,
-  streamingEnabled: liveTerminalStreamingEnabled,
+  // Prompt activity is intentionally lightweight and remains available even
+  // when raw live-terminal streaming is disabled for chat/UI performance.
+  streamingEnabled: true,
 });
 const promptGateway = new PromptTerminalGateway(promptSessions);
 
@@ -160,6 +162,7 @@ function createSessionServer() {
   return createMcpServer(client, {
     tickets: liveTickets,
     promptSessions,
+    liveTerminalStreamingEnabled,
     widgetAssets: () => {
       const assets = currentWorkbenchAssets();
       return { bundle: assets.bundle, styles: assets.styles };

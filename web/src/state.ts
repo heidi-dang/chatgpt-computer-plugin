@@ -26,6 +26,47 @@ export type McpToolActivity = {
   };
 };
 
+export type DirectWorkerActivity = {
+  event_id: string;
+  timestamp: string;
+  type: "direct.worker";
+  payload: {
+    worker_id: string;
+    workspace_id?: unknown;
+    name?: unknown;
+    responsibility?: unknown;
+    repo_path?: unknown;
+    status?: unknown;
+    summary?: unknown;
+    changed_file_count?: unknown;
+    changed_paths?: unknown;
+    active_command_ids?: unknown;
+    recent_command_ids?: unknown;
+  };
+};
+
+export type DirectWorkerActivityRow = {
+  id: string;
+  timestamp: string;
+  status: string;
+  summary: string;
+};
+
+export type DirectWorkerState = {
+  workerId: string;
+  workspaceId: string;
+  name: string;
+  responsibility: string;
+  repoPath: string;
+  status: string;
+  summary: string;
+  changedFileCount: number;
+  changedPaths: string[];
+  activeCommandIds: string[];
+  recentCommandIds: string[];
+  activity: DirectWorkerActivityRow[];
+};
+
 export type TerminalRow = {
   id: string;
   sequence: number;
@@ -40,9 +81,12 @@ export type WorkbenchState = {
   status: string;
   lastSequence: number;
   transcript: TerminalRow[];
+  workers: Record<string, DirectWorkerState>;
+  workerOrder: string[];
 };
 
 const MAX_TERMINAL_ROWS = 2_000;
+const MAX_WORKER_ACTIVITY_ROWS = 120;
 
 export const TERMINAL_WORKBENCH_STATUSES = new Set([
   "COMPLETE",
@@ -145,6 +189,52 @@ function bounded<T>(items: T[], limit: number): T[] {
 
 function stringValue(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
+}
+
+function stringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is string => typeof item === "string");
+}
+
+export function appendDirectWorkerActivity(
+  state: WorkbenchState,
+  event: DirectWorkerActivity,
+): WorkbenchState {
+  const payload = event.payload;
+  const workerId = stringValue(payload.worker_id);
+  if (!workerId) return state;
+  const existing = state.workers[workerId];
+  if (existing?.activity.some((row) => row.id === event.event_id)) return state;
+  const status = stringValue(payload.status, existing?.status ?? "READY").toUpperCase();
+  const summary = stringValue(payload.summary, existing?.summary ?? "Worker ready");
+  const changedPaths = stringArray(payload.changed_paths) ?? existing?.changedPaths ?? [];
+  const activeCommandIds = stringArray(payload.active_command_ids) ?? existing?.activeCommandIds ?? [];
+  const recentCommandIds = stringArray(payload.recent_command_ids) ?? existing?.recentCommandIds ?? [];
+  const changedCount = typeof payload.changed_file_count === "number"
+    ? Math.max(0, Math.trunc(payload.changed_file_count))
+    : existing?.changedFileCount ?? changedPaths.length;
+  const worker: DirectWorkerState = {
+    workerId,
+    workspaceId: stringValue(payload.workspace_id, existing?.workspaceId ?? ""),
+    name: stringValue(payload.name, existing?.name ?? workerId.slice(0, 12)),
+    responsibility: stringValue(payload.responsibility, existing?.responsibility ?? "Direct coding"),
+    repoPath: stringValue(payload.repo_path, existing?.repoPath ?? "."),
+    status,
+    summary,
+    changedFileCount: changedCount,
+    changedPaths,
+    activeCommandIds,
+    recentCommandIds,
+    activity: bounded([
+      ...(existing?.activity ?? []),
+      { id: event.event_id, timestamp: event.timestamp, status, summary },
+    ], MAX_WORKER_ACTIVITY_ROWS),
+  };
+  return {
+    ...state,
+    workers: { ...state.workers, [workerId]: worker },
+    workerOrder: existing ? state.workerOrder : [...state.workerOrder, workerId],
+  };
 }
 
 export function appendMcpToolActivity(state: WorkbenchState, activity: McpToolActivity): WorkbenchState {
@@ -288,6 +378,8 @@ export function initialWorkbenchState(): WorkbenchState {
     status: "CONNECTING",
     lastSequence: 0,
     transcript: [],
+    workers: {},
+    workerOrder: [],
   };
 }
 

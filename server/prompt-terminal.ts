@@ -25,6 +25,26 @@ export type PromptActivityEvent = {
   };
 };
 
+export type PromptDirectWorkerEvent = {
+  event_id: string;
+  sequence: number;
+  timestamp: string;
+  type: "direct.worker";
+  payload: {
+    worker_id: string;
+    workspace_id?: string;
+    name?: string;
+    responsibility?: string;
+    repo_path?: string;
+    status?: string;
+    summary?: string;
+    changed_file_count?: number;
+    changed_paths?: string[];
+    active_command_ids?: string[];
+    recent_command_ids?: string[];
+  };
+};
+
 export type PromptLiveBindingEvent = {
   event_id: string;
   sequence: number;
@@ -35,7 +55,7 @@ export type PromptLiveBindingEvent = {
   };
 };
 
-export type PromptTerminalEvent = PromptActivityEvent | PromptLiveBindingEvent;
+export type PromptTerminalEvent = PromptActivityEvent | PromptDirectWorkerEvent | PromptLiveBindingEvent;
 
 export type PromptTerminalMetadata = {
   ticket: string;
@@ -47,6 +67,7 @@ export type PromptTerminalMetadata = {
 
 type PendingPromptEvent =
   | Omit<PromptActivityEvent, "event_id" | "sequence" | "timestamp">
+  | Omit<PromptDirectWorkerEvent, "event_id" | "sequence" | "timestamp">
   | Omit<PromptLiveBindingEvent, "event_id" | "sequence" | "timestamp">;
 
 type PromptSession = {

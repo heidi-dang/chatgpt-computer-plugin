@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  appendDirectWorkerActivity,
   appendMcpToolActivity,
   eventTerminatesWorkbench,
   initialWorkbenchState,
@@ -9,11 +10,13 @@ import {
   reduceWorkbenchEvent,
   reduceWorkbenchEvents,
   workbenchTargetIdentity,
+  type DirectWorkerActivity,
   type McpToolActivity,
   type WorkbenchEvent,
   type WorkbenchState,
 } from "./state.js";
 import { requestHostDisplayMode, type DisplayModeBridge } from "./display-mode.js";
+import { DirectWorkersView, type DirectWorkerTab } from "./direct-workers-view.js";
 import { TerminalView } from "./terminal-view.js";
 import { PluginUpdateCenter } from "./plugin-update.js";
 import { CPTR_APP_VERSION } from "./version.js";
@@ -57,7 +60,7 @@ type PromptEvent = {
   event_id: string;
   sequence: number;
   timestamp: string;
-  type: "mcp.tool" | "live.bind";
+  type: "mcp.tool" | "direct.worker" | "live.bind";
   payload?: {
     tool_name?: unknown;
     summary?: unknown;
@@ -66,6 +69,15 @@ type PromptEvent = {
     result_json?: unknown;
     error?: unknown;
     live?: LiveMetadata;
+    worker_id?: unknown;
+    workspace_id?: unknown;
+    name?: unknown;
+    responsibility?: unknown;
+    repo_path?: unknown;
+    changed_file_count?: unknown;
+    changed_paths?: unknown;
+    active_command_ids?: unknown;
+    recent_command_ids?: unknown;
   };
 };
 
@@ -126,6 +138,30 @@ function usePromptActivity(
             error: event.payload?.error,
           },
         }));
+      } else if (event.type === "direct.worker") {
+        const payload = event.payload;
+        if (typeof payload?.worker_id !== "string") return;
+        // Direct workers use compact prompt activity. Do not bind the widget to
+        // a raw command stream; terminal output is fetched on demand per lane.
+        setMeta(null);
+        setState((current) => appendDirectWorkerActivity(current, {
+          event_id: event.event_id,
+          timestamp: event.timestamp,
+          type: "direct.worker",
+          payload: {
+            worker_id: payload.worker_id,
+            workspace_id: payload.workspace_id,
+            name: payload.name,
+            responsibility: payload.responsibility,
+            repo_path: payload.repo_path,
+            status: payload.status,
+            summary: payload.summary,
+            changed_file_count: payload.changed_file_count,
+            changed_paths: payload.changed_paths,
+            active_command_ids: payload.active_command_ids,
+            recent_command_ids: payload.recent_command_ids,
+          },
+        } as DirectWorkerActivity));
       } else if (event.type === "live.bind" && event.payload?.live) {
         setMeta(event.payload.live);
       }
@@ -467,9 +503,37 @@ function targetLabel(meta: LiveMetadata | null): string {
   return `${meta.targetType} · ${id}`;
 }
 
+function structuredToolResult(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const record = value as Record<string, unknown>;
+  const structured = record.structuredContent;
+  if (structured && typeof structured === "object" && !Array.isArray(structured)) {
+    return structured as Record<string, unknown>;
+  }
+  const result = record.result;
+  if (result && typeof result === "object" && !Array.isArray(result)) {
+    return structuredToolResult(result);
+  }
+  return record;
+}
+
+function formatGitStatus(value: Record<string, unknown>): string {
+  const files = Array.isArray(value.files) ? value.files : [];
+  if (!files.length) return "No changed files.";
+  return files.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return "";
+    const record = item as Record<string, unknown>;
+    return `${String(record.status ?? "changed").padEnd(10)} ${String(record.path ?? "")}`.trimEnd();
+  }).filter(Boolean).join("\n");
+}
+
 function OwnedWorkbench() {
   const [state, setState] = useState(initialWorkbenchState);
   const [actionStatus, setActionStatus] = useState("");
+  const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
+  const [selectedWorkerTab, setSelectedWorkerTab] = useState<DirectWorkerTab>("activity");
+  const [workerChanges, setWorkerChanges] = useState("");
+  const [workerTerminal, setWorkerTerminal] = useState("");
   const callTool = useMcpBridge();
   const promptMetadata = findPromptMetadata(hostBridge()?.toolResponseMetadata);
   const liveStreamingEnabled = promptMetadata?.streamingEnabled === true;
@@ -479,7 +543,9 @@ function OwnedWorkbench() {
   const [meta, setMeta] = useState<LiveMetadata | null>(null);
   const promptConnection = usePromptActivity(setMeta, setState, liveStreamingEnabled);
   const targetConnection = useLiveSession(meta, setMeta, setState, liveStreamingEnabled);
-  const connection = meta?.targetId ? targetConnection : promptConnection;
+  const hasWorkers = state.workerOrder.length > 0;
+  const connection = hasWorkers ? promptConnection : meta?.targetId ? targetConnection : promptConnection;
+  const selectedWorker = selectedWorkerId ? state.workers[selectedWorkerId] : undefined;
   const visibleTarget = useRef<string | null>(null);
   const autoPinAttempted = useRef(false);
   const isCommand = meta?.targetType === "command" && !!meta.targetId && !!meta.workspaceId;
@@ -487,6 +553,18 @@ function OwnedWorkbench() {
   const displayStatus = meta?.targetType && meta.targetId
     ? state.status
     : state.transcript.length ? "ACTIVE" : "READY";
+
+  useEffect(() => {
+    if (!state.workerOrder.length) return;
+    if (selectedWorkerId && state.workers[selectedWorkerId]) return;
+    setSelectedWorkerId(state.workerOrder[0] ?? null);
+  }, [selectedWorkerId, state.workerOrder, state.workers]);
+
+  useEffect(() => {
+    setWorkerChanges("");
+    setWorkerTerminal("");
+    setSelectedWorkerTab("activity");
+  }, [selectedWorkerId]);
 
   useEffect(() => {
     const identity = workbenchTargetIdentity(meta?.targetType, meta?.targetId, meta?.workspaceId);
@@ -506,8 +584,8 @@ function OwnedWorkbench() {
   }, [liveStreamingEnabled]);
 
   useEffect(() => {
-    hostBridge()?.notifyIntrinsicHeight?.(Math.min(680, Math.max(280, document.body.scrollHeight)));
-  }, [state.status, state.transcript.length, connection, actionStatus]);
+    hostBridge()?.notifyIntrinsicHeight?.(Math.min(760, Math.max(280, document.body.scrollHeight)));
+  }, [state.status, state.transcript.length, state.workerOrder.length, selectedWorkerTab, connection, actionStatus]);
 
   const stop = async () => {
     if (!meta?.targetType || !meta.targetId) return;
@@ -526,6 +604,62 @@ function OwnedWorkbench() {
       setActionStatus("stop requested");
     } catch {
       setActionStatus("stop request failed");
+    }
+  };
+
+  const refreshWorkerChanges = async () => {
+    if (!selectedWorker?.workspaceId) return;
+    setActionStatus("refreshing worker changes…");
+    try {
+      const value = await callTool("cptr_code_get_git_status", {
+        workspace_id: selectedWorker.workspaceId,
+        worker_id: selectedWorker.workerId,
+      });
+      setWorkerChanges(formatGitStatus(structuredToolResult(value)));
+      setActionStatus("worker changes refreshed");
+    } catch {
+      setActionStatus("could not refresh worker changes");
+    }
+  };
+
+  const refreshWorkerTerminal = async () => {
+    if (!selectedWorker?.workspaceId) return;
+    const commandId = selectedWorker.activeCommandIds[0]
+      ?? selectedWorker.recentCommandIds[selectedWorker.recentCommandIds.length - 1];
+    if (!commandId) {
+      setWorkerTerminal("No command has run in this worker yet.");
+      return;
+    }
+    setActionStatus("loading recent command tail…");
+    try {
+      const value = await callTool("cptr_code_get_command", {
+        workspace_id: selectedWorker.workspaceId,
+        worker_id: selectedWorker.workerId,
+        command_id: commandId,
+        offset: 0,
+        wait_seconds: 0,
+        tail_bytes: 32_768,
+      });
+      const result = structuredToolResult(value);
+      setWorkerTerminal(typeof result.output === "string" ? result.output : "No command output available.");
+      setActionStatus("recent command tail loaded");
+    } catch {
+      setActionStatus("could not load command tail");
+    }
+  };
+
+  const stopWorkerCommand = async () => {
+    if (!selectedWorker?.workspaceId || !selectedWorker.activeCommandIds.length) return;
+    setActionStatus("requesting worker command stop…");
+    try {
+      await callTool("cptr_code_cancel_command", {
+        workspace_id: selectedWorker.workspaceId,
+        worker_id: selectedWorker.workerId,
+        command_id: selectedWorker.activeCommandIds[0],
+      });
+      setActionStatus("worker command stop requested");
+    } catch {
+      setActionStatus("worker command stop failed");
     }
   };
 
@@ -560,10 +694,30 @@ function OwnedWorkbench() {
     }
   };
 
-  return <main className="terminal-workbench" aria-label="CPTR live terminal">
-    <TerminalView
+  const updateCenter = <PluginUpdateCenter callTool={callTool} manifestUrl={updateManifestUrl} onStatus={setActionStatus} />;
+
+  return <main className="terminal-workbench" aria-label="CPTR live workbench">
+    {hasWorkers ? <DirectWorkersView
+      workers={state.workers}
+      workerOrder={state.workerOrder}
+      selectedWorkerId={selectedWorkerId}
+      selectedTab={selectedWorkerTab}
+      connection={connection}
+      actionStatus={actionStatus}
+      changesText={workerChanges}
+      terminalText={workerTerminal}
+      onSelectWorker={setSelectedWorkerId}
+      onSelectTab={setSelectedWorkerTab}
+      onRefreshChanges={() => void refreshWorkerChanges()}
+      onRefreshTerminal={() => void refreshWorkerTerminal()}
+      onStopCommand={() => void stopWorkerCommand()}
+      canStopCommand={Boolean(selectedWorker?.activeCommandIds.length)}
+      onPin={() => void pin()}
+      onExpand={() => void expand()}
+      updateCenter={updateCenter}
+    /> : <TerminalView
       rows={state.transcript}
-      updateCenter={<PluginUpdateCenter callTool={callTool} manifestUrl={updateManifestUrl} onStatus={setActionStatus} />}
+      updateCenter={updateCenter}
       status={displayStatus}
       connection={connection}
       targetLabel={targetLabel(meta)}
@@ -573,7 +727,7 @@ function OwnedWorkbench() {
       onCopy={() => void copyTranscript()}
       onPin={() => void pin()}
       onExpand={() => void expand()}
-    />
+    />}
   </main>;
 }
 
