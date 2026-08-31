@@ -9,6 +9,7 @@ import type {
   TaskOutput,
   Workspace,
 } from "../types.js";
+import type { McpTrafficEvent } from "../mcp-traffic.js";
 
 const COMPLETE_WITH_TOOL_ERRORS = "COMPLETE_WITH_TOOL_ERRORS";
 const TERMINAL_TASK_STATUSES = new Set([
@@ -223,6 +224,39 @@ export class ComputerClient {
     this.token = options.token;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 30_000;
+  }
+
+  async ingestMcpTraffic(events: McpTrafficEvent[]): Promise<void> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await this.fetchImpl(`${this.baseUrl}/api/mcp/traffic/events`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ events }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new ComputerApiError(
+          response.status,
+          "CPTR MCP telemetry ingestion failed",
+          "mcp_traffic_ingestion_failed",
+          response.status >= 500,
+        );
+      }
+    } catch (error) {
+      if (error instanceof ComputerApiError) throw error;
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new ComputerApiError(504, "CPTR MCP telemetry ingestion timed out", "mcp_traffic_timeout");
+      }
+      throw new ComputerApiError(502, "CPTR MCP telemetry ingestion failed", "mcp_traffic_unavailable");
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   async listWorkspaces(includeUnavailable = false): Promise<{ workspaces: Workspace[] }> {
