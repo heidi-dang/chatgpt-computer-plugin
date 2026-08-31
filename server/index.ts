@@ -9,6 +9,13 @@ import {
   type McpAuthResult,
 } from "./auth.js";
 import { clientFromEnvironment } from "./client/computer-client.js";
+import {
+  McpTrafficEmitter,
+  mcpRequestContext,
+  normalizeMcpClient,
+  type McpRequestContextValue,
+  type TrafficClient,
+} from "./mcp-traffic.js";
 import { MCP_CONTRACT_TOOL_COUNT, MCP_CONTRACT_VERSION, createMcpServer } from "./mcp.js";
 import { currentPluginUpdateManifest } from "./release.js";
 import { CPTR_APP_VERSION } from "./version.js";
@@ -57,6 +64,7 @@ const oauthConfig: McpAuthConfig = {
 };
 
 const client = clientFromEnvironment();
+const mcpTraffic = new McpTrafficEmitter({ deliver: (events) => client.ingestMcpTraffic(events) });
 const liveTerminalStreamingEnabled = resolveLiveTerminalStreaming();
 const liveTickets = new LiveTicketStore({
   streamUrl: `${publicOrigin}/live/stream`,
@@ -112,7 +120,9 @@ function authIdentity(auth: Extract<McpAuthResult, { authorized: true }>): strin
     : "static:configured-token";
 }
 
-async function readJsonBody(req: IncomingMessage, maxBytes = 2_000_000): Promise<unknown> {
+type ParsedJsonBody = { value: unknown; bytes: number };
+
+async function readJsonBody(req: IncomingMessage, maxBytes = 2_000_000): Promise<ParsedJsonBody> {
   const chunks: Buffer[] = [];
   let bytes = 0;
   for await (const chunk of req) {
@@ -121,14 +131,121 @@ async function readJsonBody(req: IncomingMessage, maxBytes = 2_000_000): Promise
     if (bytes > maxBytes) throw new Error("MCP request body is too large");
     chunks.push(value);
   }
-  if (!chunks.length) return undefined;
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  if (!chunks.length) return { value: undefined, bytes: 0 };
+  return { value: JSON.parse(Buffer.concat(chunks).toString("utf8")), bytes };
+}
+
+function jsonRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function trafficClientFromRequest(
+  req: IncomingMessage,
+  body: unknown,
+  fallback?: TrafficClient,
+): TrafficClient {
+  if (fallback) return fallback;
+  const record = jsonRecord(body);
+  const params = jsonRecord(record?.params);
+  const clientInfo = jsonRecord(params?.clientInfo);
+  if (clientInfo) {
+    return normalizeMcpClient({ name: clientInfo.name, version: clientInfo.version });
+  }
+  const userAgent = Array.isArray(req.headers["user-agent"])
+    ? req.headers["user-agent"][0]
+    : req.headers["user-agent"];
+  const key = String(userAgent ?? "").toLowerCase();
+  if (key.includes("chatgpt")) return normalizeMcpClient({ name: "ChatGPT" });
+  if (key.includes("claude")) return normalizeMcpClient({ name: "Claude" });
+  if (key.includes("gemini")) return normalizeMcpClient({ name: "Gemini" });
+  if (key.includes("codex")) return normalizeMcpClient({ name: "Codex" });
+  if (key.includes("inspector")) return normalizeMcpClient({ name: "MCP Inspector" });
+  return normalizeMcpClient(undefined);
+}
+
+function trafficMethod(req: IncomingMessage, body: unknown): string | null {
+  const record = jsonRecord(body);
+  if (typeof record?.method === "string") return record.method.slice(0, 128);
+  if (req.method === "GET") return "transport/get";
+  if (req.method === "DELETE") return "transport/delete";
+  return null;
+}
+
+function responseChunkBytes(chunk: unknown, encoding?: unknown): number {
+  if (typeof chunk === "string") {
+    const value = typeof encoding === "string" ? encoding as BufferEncoding : "utf8";
+    return Buffer.byteLength(chunk, value);
+  }
+  if (Buffer.isBuffer(chunk) || chunk instanceof Uint8Array) return chunk.byteLength;
+  return 0;
+}
+
+function trackResponseBytes(res: ServerResponse): { bytes: () => number; restore: () => void } {
+  let count = 0;
+  const originalWrite = res.write;
+  const originalEnd = res.end;
+  res.write = function (this: ServerResponse, ...args: Parameters<ServerResponse["write"]>) {
+    count += responseChunkBytes(args[0], args[1]);
+    return originalWrite.apply(this, args as never);
+  } as ServerResponse["write"];
+  res.end = function (this: ServerResponse, ...args: Parameters<ServerResponse["end"]>) {
+    count += responseChunkBytes(args[0], args[1]);
+    return originalEnd.apply(this, args as never);
+  } as ServerResponse["end"];
+  return {
+    bytes: () => Math.min(100_000_000, count),
+    restore: () => {
+      res.write = originalWrite;
+      res.end = originalEnd;
+    },
+  };
+}
+
+async function handleWithTraffic(
+  req: IncomingMessage,
+  res: ServerResponse,
+  input: {
+    body: unknown;
+    requestBytes: number | null;
+    sessionId: string | null;
+    client: TrafficClient;
+  },
+  run: (context: McpRequestContextValue) => Promise<void>,
+): Promise<void> {
+  const context: McpRequestContextValue = {
+    requestId: randomUUID(),
+    sessionId: input.sessionId,
+    client: input.client,
+    method: trafficMethod(req, input.body),
+    startedAt: Date.now(),
+    requestBytes: input.requestBytes,
+  };
+  mcpTraffic.requestStarted({
+    requestId: context.requestId,
+    sessionId: context.sessionId,
+    client: context.client,
+    method: context.method,
+    requestBytes: context.requestBytes,
+  });
+  const responseCounter = trackResponseBytes(res);
+  try {
+    await mcpRequestContext.run(context, () => run(context));
+    mcpTraffic.requestFinished({ ...context, responseBytes: responseCounter.bytes() });
+  } catch (error) {
+    mcpTraffic.requestFailed({ ...context, responseBytes: responseCounter.bytes() }, error);
+    throw error;
+  } finally {
+    responseCounter.restore();
+  }
 }
 
 type McpSessionRecord = {
   transport: StreamableHTTPServerTransport;
   server: ReturnType<typeof createMcpServer>;
   authIdentity: string;
+  trafficClient: TrafficClient;
   lastSeenAt: number;
 };
 
@@ -136,10 +253,17 @@ const mcpSessions = new Map<string, McpSessionRecord>();
 const maxMcpSessions = Math.max(1, Number(process.env.CPTR_MCP_MAX_SESSIONS ?? "128") || 128);
 const mcpSessionIdleMs = Math.max(60_000, Number(process.env.CPTR_MCP_SESSION_IDLE_MS ?? String(30 * 60_000)) || 30 * 60_000);
 
-async function closeMcpSession(sessionId: string): Promise<void> {
+function removeMcpSession(sessionId: string): McpSessionRecord | undefined {
   const record = mcpSessions.get(sessionId);
-  if (!record) return;
+  if (!record) return undefined;
   mcpSessions.delete(sessionId);
+  mcpTraffic.sessionClosed(sessionId, record.trafficClient);
+  return record;
+}
+
+async function closeMcpSession(sessionId: string): Promise<void> {
+  const record = removeMcpSession(sessionId);
+  if (!record) return;
   await record.transport.close().catch(() => undefined);
   await record.server.close().catch(() => undefined);
 }
@@ -168,6 +292,7 @@ function createSessionServer() {
       return { bundle: assets.bundle, styles: assets.styles };
     },
     connectDomain: publicOrigin,
+    traffic: mcpTraffic,
   });
 }
 
@@ -175,10 +300,12 @@ async function handleStatefulInitialize(
   req: IncomingMessage,
   res: ServerResponse,
   body: unknown,
+  requestBytes: number,
   identity: string,
 ): Promise<void> {
   await pruneMcpSessions();
   await evictMcpSessionIfFull();
+  const trafficClient = trafficClientFromRequest(req, body);
   let initializedSessionId: string | null = null;
   let transport!: StreamableHTTPServerTransport;
   const server = createSessionServer();
@@ -187,12 +314,16 @@ async function handleStatefulInitialize(
     enableJsonResponse: true,
     onsessioninitialized: (sessionId) => {
       initializedSessionId = sessionId;
+      const context = mcpRequestContext.getStore();
+      if (context) context.sessionId = sessionId;
       mcpSessions.set(sessionId, {
         transport,
         server,
         authIdentity: identity,
+        trafficClient,
         lastSeenAt: Date.now(),
       });
+      mcpTraffic.sessionOpened(sessionId, trafficClient);
       if (process.env.CPTR_NOTIFY_TOOL_LIST_CHANGED !== "0") {
         const timer = setTimeout(() => {
           try {
@@ -206,11 +337,20 @@ async function handleStatefulInitialize(
     },
   });
   transport.onclose = () => {
-    if (initializedSessionId) mcpSessions.delete(initializedSessionId);
+    if (!initializedSessionId) return;
+    const record = removeMcpSession(initializedSessionId);
+    if (record) void record.server.close().catch(() => undefined);
   };
   try {
     await server.connect(transport);
-    await transport.handleRequest(req, res, body);
+    await handleWithTraffic(
+      req,
+      res,
+      { body, requestBytes, sessionId: null, client: trafficClient },
+      async () => {
+        await transport.handleRequest(req, res, body);
+      },
+    );
   } catch (error) {
     if (initializedSessionId) await closeMcpSession(initializedSessionId);
     else {
@@ -225,7 +365,9 @@ async function handleStatelessCompatibilityRequest(
   req: IncomingMessage,
   res: ServerResponse,
   body: unknown,
+  requestBytes: number,
 ): Promise<void> {
+  const trafficClient = trafficClientFromRequest(req, body);
   const server = createSessionServer();
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
@@ -238,7 +380,14 @@ async function handleStatelessCompatibilityRequest(
   res.once("close", close);
   try {
     await server.connect(transport);
-    await transport.handleRequest(req, res, body);
+    await handleWithTraffic(
+      req,
+      res,
+      { body, requestBytes, sessionId: null, client: trafficClient },
+      async () => {
+        await transport.handleRequest(req, res, body);
+      },
+    );
   } finally {
     if (res.writableEnded) {
       res.removeListener("close", close);
@@ -455,23 +604,37 @@ const httpServer = createServer(async (req, res) => {
         return;
       }
       session.lastSeenAt = Date.now();
-      const body = req.method === "POST" ? await readJsonBody(req) : undefined;
-      await session.transport.handleRequest(req, res, body);
+      const parsed = req.method === "POST"
+        ? await readJsonBody(req)
+        : { value: undefined, bytes: 0 };
+      await handleWithTraffic(
+        req,
+        res,
+        {
+          body: parsed.value,
+          requestBytes: req.method === "POST" ? parsed.bytes : null,
+          sessionId: sessionHeader,
+          client: session.trafficClient,
+        },
+        async () => {
+          await session.transport.handleRequest(req, res, parsed.value);
+        },
+      );
       if (req.method === "DELETE") await closeMcpSession(sessionHeader);
       return;
     }
 
     if (req.method === "POST") {
-      const body = await readJsonBody(req);
-      if (isInitializeRequest(body)) {
-        await handleStatefulInitialize(req, res, body, identity);
+      const parsed = await readJsonBody(req);
+      if (isInitializeRequest(parsed.value)) {
+        await handleStatefulInitialize(req, res, parsed.value, parsed.bytes, identity);
         return;
       }
       // Migration compatibility for a ChatGPT connection created before the
       // current contract. After connector metadata Refresh, initialize-capable
       // clients receive an Mcp-Session-Id and all prompt activity stays scoped.
       res.setHeader("X-CPTR-Contract-Refresh", `required-v${CPTR_APP_VERSION}`);
-      await handleStatelessCompatibilityRequest(req, res, body);
+      await handleStatelessCompatibilityRequest(req, res, parsed.value, parsed.bytes);
       return;
     }
 
@@ -491,6 +654,11 @@ async function shutdown(signal: string) {
   console.log(`Shutting down ChatGPT Computer MCP server (${signal})`);
   clearInterval(sessionPruner);
   await Promise.all([...mcpSessions.keys()].map((sessionId) => closeMcpSession(sessionId)));
+  const telemetryDeadline = new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, 1_000);
+    timer.unref?.();
+  });
+  await Promise.race([mcpTraffic.close(), telemetryDeadline]);
   httpServer.close();
 }
 

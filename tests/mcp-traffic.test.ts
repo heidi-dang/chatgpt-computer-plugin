@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ComputerClient } from "../server/client/computer-client.js";
 import {
   McpTrafficEmitter,
+  mcpRequestContext,
   normalizeMcpClient,
   normalizeTrafficErrorCode,
+  type McpRequestContextValue,
   type McpTrafficEvent,
 } from "../server/mcp-traffic.js";
+import { createMcpServer } from "../server/mcp.js";
 
 test("MCP traffic normalizes known clients and preserves safe unknown labels", () => {
   assert.deepEqual(normalizeMcpClient({ name: "ChatGPT", version: "1" }), {
@@ -92,6 +98,134 @@ test("MCP traffic delivery rejection is swallowed and does not reject emit calls
   await emitter.flush();
   assert.equal(emitter.stats().queued, 0);
   await emitter.close();
+});
+
+test("MCP traffic request contexts remain isolated across concurrent work", async () => {
+  const delivered: McpTrafficEvent[][] = [];
+  const emitter = new McpTrafficEmitter({
+    env: { CPTR_MCP_TRAFFIC_PLUGIN_BATCH_SIZE: "10", CPTR_MCP_TRAFFIC_PLUGIN_FLUSH_MS: "10000" },
+    deliver: async (events) => {
+      delivered.push(events);
+    },
+  });
+  const client = normalizeMcpClient({ name: "ChatGPT" });
+  const context = (requestId: string): McpRequestContextValue => ({
+    requestId,
+    sessionId: "session-1",
+    client,
+    method: "tools/call",
+    startedAt: Date.now(),
+    requestBytes: 20,
+  });
+
+  await Promise.all([
+    mcpRequestContext.run(context("request-a"), async () => {
+      await Promise.resolve();
+      emitter.toolStarted("tool-a");
+      emitter.toolFinished("tool-a");
+    }),
+    mcpRequestContext.run(context("request-b"), async () => {
+      await new Promise((resolve) => setImmediate(resolve));
+      emitter.toolStarted("tool-b");
+      emitter.toolFinished("tool-b");
+    }),
+  ]);
+  await emitter.flush();
+  await emitter.close();
+  const events = delivered.flat();
+  assert.deepEqual(
+    events.filter((event) => event.event_type === "tool_started").map((event) => [event.tool_name, event.request_id]).sort(),
+    [["tool-a", "request-a"], ["tool-b", "request-b"]],
+  );
+});
+
+test("MCP traffic instruments the existing registerTool boundary without changing tool behavior", async () => {
+  const delivered: McpTrafficEvent[][] = [];
+  const emitter = new McpTrafficEmitter({
+    env: { CPTR_MCP_TRAFFIC_PLUGIN_BATCH_SIZE: "10", CPTR_MCP_TRAFFIC_PLUGIN_FLUSH_MS: "10000" },
+    deliver: async (events) => {
+      delivered.push(events);
+    },
+  });
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async (input) => {
+      if (String(input).includes("/workspaces?")) {
+        return new Response(JSON.stringify({ workspaces: [] }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const server = createMcpServer(computer, { traffic: emitter });
+  const sdkClient = new Client({ name: "ChatGPT", version: "1" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), sdkClient.connect(clientTransport)]);
+
+  const context: McpRequestContextValue = {
+    requestId: "request-real-tool",
+    sessionId: "session-real",
+    client: normalizeMcpClient({ name: "ChatGPT", version: "1" }),
+    method: "tools/call",
+    startedAt: Date.now(),
+    requestBytes: 44,
+  };
+  const response = await mcpRequestContext.run(context, () =>
+    sdkClient.callTool({ name: "cptr_list_workspaces", arguments: {} }),
+  );
+  assert.equal(response.isError, undefined);
+  await emitter.flush();
+  await Promise.all([sdkClient.close(), server.close()]);
+  await emitter.close();
+
+  const toolEvents = delivered.flat().filter((event) => event.tool_name === "cptr_list_workspaces");
+  assert.deepEqual(toolEvents.map((event) => event.event_type), ["tool_started", "tool_finished"]);
+  assert.deepEqual(new Set(toolEvents.map((event) => event.request_id)), new Set(["request-real-tool"]));
+});
+
+test("MCP traffic delivery failure cannot fail a real MCP tool call", async () => {
+  const emitter = new McpTrafficEmitter({
+    env: { CPTR_MCP_TRAFFIC_PLUGIN_BATCH_SIZE: "1", CPTR_MCP_TRAFFIC_PLUGIN_FLUSH_MS: "25" },
+    deliver: async () => {
+      throw new Error("telemetry destination unavailable");
+    },
+  });
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async () => new Response(JSON.stringify({ workspaces: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+  });
+  const server = createMcpServer(computer, { traffic: emitter });
+  const sdkClient = new Client({ name: "Gemini", version: "1" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), sdkClient.connect(clientTransport)]);
+  const context: McpRequestContextValue = {
+    requestId: "request-failure-isolation",
+    sessionId: null,
+    client: normalizeMcpClient({ name: "Gemini" }),
+    method: "tools/call",
+    startedAt: Date.now(),
+    requestBytes: 12,
+  };
+  const response = await mcpRequestContext.run(context, () =>
+    sdkClient.callTool({ name: "cptr_list_workspaces", arguments: {} }),
+  );
+  assert.equal(response.isError, undefined);
+  await emitter.flush();
+  await Promise.all([sdkClient.close(), server.close()]);
+  await emitter.close();
+});
+
+test("MCP traffic HTTP boundary instruments stateful sessions and stateless requests", async () => {
+  const source = await readFile(new URL("../server/index.ts", import.meta.url), "utf8");
+  assert.match(source, /mcpTraffic\.sessionOpened\(sessionId, trafficClient\)/);
+  assert.match(source, /mcpTraffic\.sessionClosed\(sessionId, record\.trafficClient\)/);
+  assert.match(source, /mcpTraffic\.requestStarted/);
+  assert.match(source, /mcpTraffic\.requestFinished/);
+  assert.match(source, /mcpTraffic\.requestFailed/);
+  assert.match(source, /mcpRequestContext\.run/);
+  assert.match(source, /handleStatelessCompatibilityRequest/);
+  assert.doesNotMatch(source, /handleStatelessCompatibilityRequest[\s\S]{0,1000}sessionOpened/);
 });
 
 test("MCP traffic ComputerClient delivery uses the dedicated endpoint and sanitizes failures", async () => {
