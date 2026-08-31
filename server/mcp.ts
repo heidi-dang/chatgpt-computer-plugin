@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ComputerApiError, ComputerClient } from "./client/computer-client.js";
+import { McpTrafficEmitter, mcpRequestContext } from "./mcp-traffic.js";
 import { LiveTicketStore, type LiveTarget } from "./live-tickets.js";
 import { PromptTerminalStore } from "./prompt-terminal.js";
 import { WORKBENCH_RESOURCE_URI, createWorkbenchResource } from "./ui/workbench-resource.js";
@@ -411,6 +412,7 @@ export function createMcpServer(
     widgetStyles?: string;
     widgetAssets?: () => { bundle: string; styles: string };
     connectDomain?: string;
+    traffic?: McpTrafficEmitter;
   } = {},
 ): McpServer {
   const server = new McpServer({ name: "chatgpt-computer-plugin", version: MCP_CONTRACT_VERSION });
@@ -526,6 +528,9 @@ export function createMcpServer(
         const label = groupedConfig.title?.trim() || name;
         const input = args.length ? args[0] : {};
         const inputWorkerId = workerIdFrom(input);
+        const trafficContext = mcpRequestContext.getStore();
+        const trafficStartedAt = Date.now();
+        options.traffic?.toolStarted(name, trafficContext);
         const workerScoped = Boolean(inputWorkerId) || name.startsWith("cptr_direct_worker");
         if (inputWorkerId) {
           const inputRecord = input as Record<string, unknown>;
@@ -557,6 +562,7 @@ export function createMcpServer(
             );
           }
           const value = await handler(...args);
+          options.traffic?.toolFinished(name, trafficContext, Date.now() - trafficStartedAt);
           if (workerScoped) {
             publishWorkerResult(input, value, `ChatGPT completed ${label}.`);
           } else {
@@ -569,6 +575,7 @@ export function createMcpServer(
           }
           return value as never;
         } catch (error) {
+          options.traffic?.toolFailed(name, error, trafficContext, Date.now() - trafficStartedAt);
           const envelope = error instanceof ComputerApiError
             ? error.toEnvelope()
             : {
