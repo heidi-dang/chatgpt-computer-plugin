@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ComputerApiError, ComputerClient } from "../server/client/computer-client.js";
 import {
   McpActivityEmitter,
   type McpActivityEvent,
 } from "../server/mcp-activity.js";
-import { normalizeMcpClient } from "../server/mcp-traffic.js";
+import {
+  mcpRequestContext,
+  normalizeMcpClient,
+  type McpRequestContextValue,
+} from "../server/mcp-traffic.js";
+import { createMcpServer } from "../server/mcp.js";
 
 const client = normalizeMcpClient({ name: "ChatGPT", version: "1" });
 
@@ -140,4 +148,191 @@ test("activity ingestion failures are generic and never include response bodies"
       },
     );
   }
+});
+
+function requestContext(requestId: string, toolClient = client): McpRequestContextValue {
+  return {
+    requestId,
+    sessionId: "session-1",
+    client: toolClient,
+    method: "tools/call",
+    startedAt: Date.now(),
+    requestBytes: 64,
+  };
+}
+
+function successfulComputer(): ComputerClient {
+  return new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async (input) => {
+      const url = String(input);
+      if (url.includes("/coding/workers/")) {
+        return new Response(
+          JSON.stringify({
+            worker_id: "dcw-1",
+            workspace_id: "workspace-1",
+            name: "Worker",
+            responsibility: "Verify activity",
+            repo_path: ".",
+            status: "READY",
+            branch: "feature/test",
+            base_revision: "abc123",
+            changed_file_count: 0,
+            changed_paths: [],
+            active_command_ids: [],
+            recent_command_ids: [],
+            created_at: 1,
+            updated_at: 1,
+            integrated_at: null,
+            closed_at: null,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (url.includes("/workspaces?")) {
+        return new Response(JSON.stringify({ workspaces: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  });
+}
+
+async function connectedServer(
+  computer: ComputerClient,
+  activityTelemetry: McpActivityEmitter,
+): Promise<{ sdkClient: Client; server: ReturnType<typeof createMcpServer> }> {
+  const server = createMcpServer(computer, { activityTelemetry });
+  const sdkClient = new Client({ name: "ChatGPT", version: "1" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), sdkClient.connect(clientTransport)]);
+  return { sdkClient, server };
+}
+
+test("MCP activity instruments a real registered action with correlated started and complete output", async () => {
+  const delivered: McpActivityEvent[][] = [];
+  const emitter = new McpActivityEmitter({
+    flushMs: 10_000,
+    deliver: async (events) => {
+      delivered.push(events);
+    },
+  });
+  const { sdkClient, server } = await connectedServer(successfulComputer(), emitter);
+
+  const response = await mcpRequestContext.run(requestContext("request-real"), () =>
+    sdkClient.callTool({ name: "cptr_list_workspaces", arguments: {} }),
+  );
+  assert.equal(response.isError, undefined);
+  await emitter.flush();
+  const events = delivered.flat().filter((event) => event.tool_name === "cptr_list_workspaces");
+  assert.deepEqual(events.map((event) => event.phase), ["started", "complete"]);
+  assert.equal(events[0].arguments_json !== null, true);
+  assert.equal(events[0].result_json, null);
+  assert.equal(events[1].result_json !== null, true);
+  assert.equal(events[1].error_json, null);
+  assert.ok((events[1].duration_ms ?? -1) >= 0);
+  assert.deepEqual(
+    events.map((event) => [event.client.label, event.session_id, event.request_id]),
+    [
+      ["ChatGPT", "session-1", "request-real"],
+      ["ChatGPT", "session-1", "request-real"],
+    ],
+  );
+
+  await Promise.all([sdkClient.close(), server.close()]);
+  await emitter.close();
+});
+
+test("MCP activity emits failed output from the same wrapper error envelope", async () => {
+  const delivered: McpActivityEvent[][] = [];
+  const emitter = new McpActivityEmitter({
+    flushMs: 10_000,
+    deliver: async (events) => {
+      delivered.push(events);
+    },
+  });
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async () => new Response(JSON.stringify({ detail: "backend failure" }), { status: 500 }),
+  });
+  const { sdkClient, server } = await connectedServer(computer, emitter);
+
+  const response = await mcpRequestContext.run(requestContext("request-failed"), () =>
+    sdkClient.callTool({ name: "cptr_list_workspaces", arguments: {} }),
+  );
+  assert.equal(response.isError, true);
+  await emitter.flush();
+  const events = delivered.flat().filter((event) => event.tool_name === "cptr_list_workspaces");
+  assert.deepEqual(events.map((event) => event.phase), ["started", "failed"]);
+  assert.equal(events[1].error_json !== null, true);
+  assert.equal(events[1].result_json, null);
+  assert.ok((events[1].duration_ms ?? -1) >= 0);
+
+  await Promise.all([sdkClient.close(), server.close()]);
+  await emitter.close();
+});
+
+test("worker-scoped direct coding actions also emit normalized MCP activity", async () => {
+  const delivered: McpActivityEvent[][] = [];
+  const emitter = new McpActivityEmitter({
+    flushMs: 10_000,
+    deliver: async (events) => {
+      delivered.push(events);
+    },
+  });
+  const { sdkClient, server } = await connectedServer(successfulComputer(), emitter);
+
+  const response = await mcpRequestContext.run(requestContext("request-worker"), () =>
+    sdkClient.callTool({
+      name: "cptr_direct_worker_get",
+      arguments: { workspace_id: "workspace-1", worker_id: "dcw-1" },
+    }),
+  );
+  assert.equal(response.isError, undefined);
+  await emitter.flush();
+  const events = delivered.flat().filter((event) => event.tool_name === "cptr_direct_worker_get");
+  assert.deepEqual(events.map((event) => event.phase), ["started", "complete"]);
+  assert.equal(events[0].arguments_json?.includes("workspace-1"), true);
+  assert.equal(events[1].result_json?.includes("dcw-1"), true);
+
+  await Promise.all([sdkClient.close(), server.close()]);
+  await emitter.close();
+});
+
+test("MCP activity delivery failure never changes a real tool result", async () => {
+  const emitter = new McpActivityEmitter({
+    batchSize: 1,
+    flushMs: 1,
+    deliver: async () => {
+      throw new Error("activity destination unavailable");
+    },
+  });
+  const { sdkClient, server } = await connectedServer(successfulComputer(), emitter);
+
+  const response = await mcpRequestContext.run(requestContext("request-isolation"), () =>
+    sdkClient.callTool({ name: "cptr_list_workspaces", arguments: {} }),
+  );
+  assert.equal(response.isError, undefined);
+  await assert.doesNotReject(() => emitter.flush());
+  assert.ok(emitter.stats().dropped >= 1);
+
+  await Promise.all([sdkClient.close(), server.close()]);
+  await emitter.close();
+});
+
+test("plugin process wires MCP activity delivery into stateful and stateless session servers", async () => {
+  const source = await readFile(new URL("../server/index.ts", import.meta.url), "utf8");
+  assert.match(source, /new McpActivityEmitter\(\{ deliver: \(events\) => client\.ingestMcpActivity\(events\) \}\)/);
+  assert.match(source, /activityTelemetry: mcpActivity/);
+  assert.match(source, /function createSessionServer\(\)/);
+  assert.match(source, /handleStatefulInitialize[\s\S]*createSessionServer\(\)/);
+  assert.match(source, /handleStatelessCompatibilityRequest[\s\S]*createSessionServer\(\)/);
+  assert.match(source, /mcpActivity\.close\(\)/);
 });

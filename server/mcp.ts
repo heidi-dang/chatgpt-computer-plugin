@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ComputerApiError, ComputerClient } from "./client/computer-client.js";
-import { McpTrafficEmitter, mcpRequestContext } from "./mcp-traffic.js";
+import { McpActivityEmitter } from "./mcp-activity.js";
+import { McpTrafficEmitter, mcpRequestContext, normalizeMcpClient } from "./mcp-traffic.js";
 import { LiveTicketStore, type LiveTarget } from "./live-tickets.js";
 import { PromptTerminalStore } from "./prompt-terminal.js";
 import { WORKBENCH_RESOURCE_URI, createWorkbenchResource } from "./ui/workbench-resource.js";
@@ -413,6 +414,7 @@ export function createMcpServer(
     widgetAssets?: () => { bundle: string; styles: string };
     connectDomain?: string;
     traffic?: McpTrafficEmitter;
+    activityTelemetry?: McpActivityEmitter;
   } = {},
 ): McpServer {
   const server = new McpServer({ name: "chatgpt-computer-plugin", version: MCP_CONTRACT_VERSION });
@@ -530,7 +532,18 @@ export function createMcpServer(
         const inputWorkerId = workerIdFrom(input);
         const trafficContext = mcpRequestContext.getStore();
         const trafficStartedAt = Date.now();
+        const activityClient = trafficContext?.client ?? normalizeMcpClient(undefined);
+        const activityArgumentsJson = terminalJson(input);
         options.traffic?.toolStarted(name, trafficContext);
+        options.activityTelemetry?.started({
+          client: activityClient,
+          sessionId: trafficContext?.sessionId ?? null,
+          requestId: trafficContext?.requestId ?? null,
+          toolName: name,
+          title: label,
+          summary: `Working: ${label}.`,
+          argumentsJson: activityArgumentsJson,
+        });
         const workerScoped = Boolean(inputWorkerId) || name.startsWith("cptr_direct_worker");
         if (inputWorkerId) {
           const inputRecord = input as Record<string, unknown>;
@@ -545,7 +558,7 @@ export function createMcpServer(
             name,
             `Working: ${label}.`,
             "STARTED",
-            { argumentsJson: terminalJson(input) },
+            { argumentsJson: activityArgumentsJson },
           );
         }
         try {
@@ -562,7 +575,19 @@ export function createMcpServer(
             );
           }
           const value = await handler(...args);
-          options.traffic?.toolFinished(name, trafficContext, Date.now() - trafficStartedAt);
+          const activityDurationMs = Date.now() - trafficStartedAt;
+          const activityResultJson = terminalJson(terminalToolResult(value));
+          options.traffic?.toolFinished(name, trafficContext, activityDurationMs);
+          options.activityTelemetry?.complete({
+            client: activityClient,
+            sessionId: trafficContext?.sessionId ?? null,
+            requestId: trafficContext?.requestId ?? null,
+            toolName: name,
+            title: label,
+            summary: `Completed: ${label}.`,
+            resultJson: activityResultJson,
+            durationMs: activityDurationMs,
+          });
           if (workerScoped) {
             publishWorkerResult(input, value, `ChatGPT completed ${label}.`);
           } else {
@@ -570,12 +595,13 @@ export function createMcpServer(
               name,
               `Completed: ${label}.`,
               "COMPLETE",
-              { resultJson: terminalJson(terminalToolResult(value)) },
+              { resultJson: activityResultJson },
             );
           }
           return value as never;
         } catch (error) {
-          options.traffic?.toolFailed(name, error, trafficContext, Date.now() - trafficStartedAt);
+          const activityDurationMs = Date.now() - trafficStartedAt;
+          options.traffic?.toolFailed(name, error, trafficContext, activityDurationMs);
           const envelope = error instanceof ComputerApiError
             ? error.toEnvelope()
             : {
@@ -583,6 +609,17 @@ export function createMcpServer(
                 message: redactTerminalString(error instanceof Error ? error.message : String(error)),
                 retriable: false,
               };
+          const activityErrorJson = terminalJson(envelope);
+          options.activityTelemetry?.failed({
+            client: activityClient,
+            sessionId: trafficContext?.sessionId ?? null,
+            requestId: trafficContext?.requestId ?? null,
+            toolName: name,
+            title: label,
+            summary: `Failed: ${label}.`,
+            errorJson: activityErrorJson,
+            durationMs: activityDurationMs,
+          });
           if (inputWorkerId) {
             const inputRecord = input as Record<string, unknown>;
             publishDirectWorker({
@@ -596,7 +633,7 @@ export function createMcpServer(
               name,
               `Failed: ${label}.`,
               "FAILED",
-              { error: terminalJson(envelope) },
+              { error: activityErrorJson },
             );
           }
           return {

@@ -9,6 +9,7 @@ import {
   type McpAuthResult,
 } from "./auth.js";
 import { clientFromEnvironment } from "./client/computer-client.js";
+import { McpActivityEmitter } from "./mcp-activity.js";
 import {
   McpTrafficEmitter,
   mcpRequestContext,
@@ -65,6 +66,7 @@ const oauthConfig: McpAuthConfig = {
 
 const client = clientFromEnvironment();
 const mcpTraffic = new McpTrafficEmitter({ deliver: (events) => client.ingestMcpTraffic(events) });
+const mcpActivity = new McpActivityEmitter({ deliver: (events) => client.ingestMcpActivity(events) });
 const liveTerminalStreamingEnabled = resolveLiveTerminalStreaming();
 const liveTickets = new LiveTicketStore({
   streamUrl: `${publicOrigin}/live/stream`,
@@ -293,6 +295,7 @@ function createSessionServer() {
     },
     connectDomain: publicOrigin,
     traffic: mcpTraffic,
+    activityTelemetry: mcpActivity,
   });
 }
 
@@ -658,7 +661,15 @@ async function shutdown(signal: string) {
     const timer = setTimeout(resolve, 1_000);
     timer.unref?.();
   });
-  await Promise.race([mcpTraffic.close(), telemetryDeadline]);
+  const closeTelemetry = Promise.all([
+    mcpTraffic.close().catch(() => {
+      console.warn("MCP traffic telemetry shutdown did not complete cleanly");
+    }),
+    mcpActivity.close().catch(() => {
+      console.warn("MCP activity telemetry shutdown did not complete cleanly");
+    }),
+  ]);
+  await Promise.race([closeTelemetry, telemetryDeadline]);
   httpServer.close();
 }
 
