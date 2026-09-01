@@ -1,7 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ComputerApiError, ComputerClient } from "./client/computer-client.js";
 import { McpActivityEmitter } from "./mcp-activity.js";
-import { McpTrafficEmitter, mcpRequestContext, normalizeMcpClient } from "./mcp-traffic.js";
+import { McpDiagnosticsEmitter } from "./mcp-diagnostics.js";
+import {
+  McpTrafficEmitter,
+  mcpRequestContext,
+  normalizeMcpClient,
+  normalizeTrafficErrorCode,
+} from "./mcp-traffic.js";
 import { LiveTicketStore, type LiveTarget } from "./live-tickets.js";
 import { PromptTerminalStore } from "./prompt-terminal.js";
 import { WORKBENCH_RESOURCE_URI, createWorkbenchResource } from "./ui/workbench-resource.js";
@@ -415,6 +421,7 @@ export function createMcpServer(
     connectDomain?: string;
     traffic?: McpTrafficEmitter;
     activityTelemetry?: McpActivityEmitter;
+    diagnostics?: McpDiagnosticsEmitter;
   } = {},
 ): McpServer {
   const server = new McpServer({ name: "chatgpt-computer-plugin", version: MCP_CONTRACT_VERSION });
@@ -539,6 +546,7 @@ export function createMcpServer(
           client: activityClient,
           sessionId: trafficContext?.sessionId ?? null,
           requestId: trafficContext?.requestId ?? null,
+          correlationId: trafficContext?.correlationId ?? null,
           toolName: name,
           title: label,
           summary: `Working: ${label}.`,
@@ -576,12 +584,70 @@ export function createMcpServer(
           }
           const value = await handler(...args);
           const activityDurationMs = Date.now() - trafficStartedAt;
-          const activityResultJson = terminalJson(terminalToolResult(value));
+          const terminalValue = terminalToolResult(value);
+          const activityResultJson = terminalJson(terminalValue);
+          const valueRecord = value && typeof value === "object" && !Array.isArray(value)
+            ? value as Record<string, unknown>
+            : null;
+          const returnedToolError = valueRecord?.isError === true;
+          if (returnedToolError) {
+            if (trafficContext) {
+              trafficContext.outcome.failed = true;
+              trafficContext.outcome.errorCode = "tool_error";
+            }
+            options.traffic?.toolFailed(name, { code: "tool_error", kind: "tool_error" }, trafficContext, activityDurationMs);
+            options.activityTelemetry?.failed({
+              client: activityClient,
+              sessionId: trafficContext?.sessionId ?? null,
+              requestId: trafficContext?.requestId ?? null,
+              correlationId: trafficContext?.correlationId ?? null,
+              toolName: name,
+              title: label,
+              summary: `Failed: ${label}.`,
+              errorJson: activityResultJson,
+              durationMs: activityDurationMs,
+            });
+            options.diagnostics?.failure({
+              request_id: trafficContext?.requestId ?? null,
+              correlation_id: trafficContext?.correlationId ?? null,
+              session_id: trafficContext?.sessionId ?? null,
+              client_id: activityClient.id,
+              method: trafficContext?.method ?? null,
+              tool_name: name,
+              stage: "cptr_mcp",
+              error_code: "tool_error",
+              http_status: null,
+              retryable: false,
+              started_at_ms: trafficStartedAt,
+              duration_ms: activityDurationMs,
+              request_bytes: null,
+              response_bytes: null,
+              summary: "MCP tool returned an error result.",
+            });
+            if (inputWorkerId) {
+              const inputRecord = input as Record<string, unknown>;
+              publishDirectWorker({
+                worker_id: inputWorkerId,
+                workspace_id: typeof inputRecord.workspace_id === "string" ? inputRecord.workspace_id : undefined,
+                status: "FAILED",
+                summary: `Failed: ${label}.`,
+              });
+            } else {
+              publishActivity(
+                name,
+                `Failed: ${label}.`,
+                "FAILED",
+                { error: activityResultJson },
+              );
+            }
+            return value as never;
+          }
           options.traffic?.toolFinished(name, trafficContext, activityDurationMs);
           options.activityTelemetry?.complete({
             client: activityClient,
             sessionId: trafficContext?.sessionId ?? null,
             requestId: trafficContext?.requestId ?? null,
+            correlationId: trafficContext?.correlationId ?? null,
             toolName: name,
             title: label,
             summary: `Completed: ${label}.`,
@@ -601,7 +667,31 @@ export function createMcpServer(
           return value as never;
         } catch (error) {
           const activityDurationMs = Date.now() - trafficStartedAt;
+          const normalizedErrorCode = normalizeTrafficErrorCode(error);
+          if (trafficContext) {
+            trafficContext.outcome.failed = true;
+            trafficContext.outcome.errorCode = normalizedErrorCode;
+          }
           options.traffic?.toolFailed(name, error, trafficContext, activityDurationMs);
+          if (!(error instanceof ComputerApiError)) {
+            options.diagnostics?.failure({
+              request_id: trafficContext?.requestId ?? null,
+              correlation_id: trafficContext?.correlationId ?? null,
+              session_id: trafficContext?.sessionId ?? null,
+              client_id: activityClient.id,
+              method: trafficContext?.method ?? null,
+              tool_name: name,
+              stage: "cptr_mcp",
+              error_code: normalizedErrorCode,
+              http_status: null,
+              retryable: false,
+              started_at_ms: trafficStartedAt,
+              duration_ms: activityDurationMs,
+              request_bytes: null,
+              response_bytes: null,
+              summary: "MCP tool handler failed.",
+            });
+          }
           const envelope = error instanceof ComputerApiError
             ? error.toEnvelope()
             : {
@@ -614,6 +704,7 @@ export function createMcpServer(
             client: activityClient,
             sessionId: trafficContext?.sessionId ?? null,
             requestId: trafficContext?.requestId ?? null,
+            correlationId: trafficContext?.correlationId ?? null,
             toolName: name,
             title: label,
             summary: `Failed: ${label}.`,

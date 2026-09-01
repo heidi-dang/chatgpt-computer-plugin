@@ -80,7 +80,9 @@ function hasAdminCookie(req) {
 async function createCptrHarness() {
   const successTraffic = [];
   const successActivity = [];
+  const successDiagnostics = [];
   const failureTraffic = [];
+  const failureDiagnostics = [];
   let failureActivityAttempts = 0;
 
   const server = http.createServer(async (req, res) => {
@@ -110,6 +112,20 @@ async function createCptrHarness() {
         const payload = await readJsonBody(req);
         const events = Array.isArray(payload.events) ? payload.events : [];
         const destination = token === controlToken ? successTraffic : failureTraffic;
+        destination.push(...events.map((event) => structuredClone(event)));
+        writeJson(res, 200, { accepted: events.length, duplicates: 0, dropped: 0 });
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/api/mcp/diagnostics/events") {
+        const token = bearer(req);
+        if (token !== controlToken && token !== failureControlToken) {
+          writeJson(res, 403, { error: "forbidden" });
+          return;
+        }
+        const payload = await readJsonBody(req);
+        const events = Array.isArray(payload.events) ? payload.events : [];
+        const destination = token === controlToken ? successDiagnostics : failureDiagnostics;
         destination.push(...events.map((event) => structuredClone(event)));
         writeJson(res, 200, { accepted: events.length, duplicates: 0, dropped: 0 });
         return;
@@ -151,6 +167,15 @@ async function createCptrHarness() {
         return;
       }
 
+      if (req.method === "GET" && url.pathname === "/api/mcp/diagnostics/snapshot") {
+        if (!hasAdminCookie(req)) {
+          writeJson(res, 401, { error: "admin cookie required" });
+          return;
+        }
+        writeJson(res, 200, { version: 1, events: successDiagnostics });
+        return;
+      }
+
       writeJson(res, 404, { error: "not found" });
     } catch {
       if (!res.headersSent) writeJson(res, 500, { error: "harness failure" });
@@ -170,7 +195,9 @@ async function createCptrHarness() {
     server,
     successTraffic,
     successActivity,
+    successDiagnostics,
     failureTraffic,
+    failureDiagnostics,
     get failureActivityAttempts() {
       return failureActivityAttempts;
     },
@@ -192,6 +219,7 @@ function spawnPlugin({ port, cptrBaseUrl, token, apiToken }) {
       CPTR_NOTIFY_TOOL_LIST_CHANGED: "0",
       CPTR_MCP_TRAFFIC_PLUGIN_FLUSH_MS: "25",
       CPTR_MCP_ACTIVITY_PLUGIN_FLUSH_MS: "25",
+      CPTR_MCP_DIAGNOSTICS_PLUGIN_FLUSH_MS: "25",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -268,6 +296,19 @@ function assertActivitySecretAbsence(events) {
   assert.doesNotMatch(encoded, /\bBearer\s+[A-Za-z0-9._~+/=-]+/i);
 }
 
+function assertDiagnosticsSafe(events) {
+  const encoded = JSON.stringify(events);
+  assert.equal(encoded.includes(secretSentinel), false, "diagnostics must not contain credential sentinel");
+  assert.equal(encoded.includes(controlToken), false);
+  assert.equal(encoded.includes(mcpToken), false);
+  assert.doesNotMatch(encoded, /\bBearer\s+[A-Za-z0-9._~+/=-]+/i);
+  for (const event of events) {
+    for (const forbidden of ["arguments_json", "result_json", "error_json", "headers", "authorization", "stack"]) {
+      assert.equal(Object.hasOwn(event, forbidden), false, `diagnostics must not contain ${forbidden}`);
+    }
+  }
+}
+
 async function stopChildren() {
   await Promise.all(
     children.map(async ({ child }) => {
@@ -328,16 +369,27 @@ try {
     () => harness.successTraffic.some((event) => event.tool_name === toolName && event.event_type === "tool_finished"),
     "traffic tool completion",
   );
+  await waitFor(
+    () =>
+      harness.successDiagnostics.some(
+        (event) => event.kind === "latency" && event.edge_id === "cptr-mcp-cptr-backend",
+      ),
+    "backend RTT diagnostic",
+  );
 
   const trafficSnapshot = await snapshot(harness.baseUrl, "/api/mcp/traffic/snapshot");
   const activitySnapshot = await snapshot(harness.baseUrl, "/api/mcp/activity/snapshot");
+  const diagnosticsSnapshot = await snapshot(harness.baseUrl, "/api/mcp/diagnostics/snapshot");
   const traffic = trafficSnapshot.events;
   const activity = activitySnapshot.events;
+  const diagnostics = diagnosticsSnapshot.events;
 
   const toolStart = traffic.find(
     (event) => event.event_type === "tool_started" && event.tool_name === toolName && event.client?.label === "ChatGPT",
   );
   assert.ok(toolStart, "traffic must contain ChatGPT tool_started");
+  assert.equal(typeof toolStart.correlation_id, "string");
+  assert.ok(toolStart.correlation_id.length > 0);
   assert.ok(
     traffic.some(
       (event) =>
@@ -357,6 +409,19 @@ try {
   );
   assert.ok(started, "Activity must contain correlated started record");
   assert.ok(complete, "Activity must contain correlated complete record");
+  assert.equal(started.correlation_id, toolStart.correlation_id);
+  assert.equal(complete.correlation_id, toolStart.correlation_id);
+  const correlatedDiagnostics = diagnostics.filter(
+    (event) => event.request_id === toolStart.request_id && event.correlation_id === toolStart.correlation_id,
+  );
+  const observedEdges = new Map(
+    correlatedDiagnostics
+      .filter((event) => event.kind === "latency")
+      .map((event) => [event.edge_id, event.metric_type]),
+  );
+  assert.equal(observedEdges.get("client-mcp-connector"), "observed_request_time");
+  assert.equal(observedEdges.get("mcp-connector-cptr-mcp"), "adapter_handoff");
+  assert.equal(observedEdges.get("cptr-mcp-cptr-backend"), "backend_api_rtt");
   assert.equal(started.client?.label, "ChatGPT");
   assert.equal(typeof started.arguments_json, "string");
   assert.ok(started.arguments_json.length > 0 && started.arguments_json.length <= 13_000);
@@ -369,6 +434,7 @@ try {
 
   assertTrafficMetadataOnly(traffic);
   assertActivitySecretAbsence(activity);
+  assertDiagnosticsSafe(diagnostics);
 
   await successClient.transport.terminateSession();
   await successClient.client.close();
@@ -397,6 +463,19 @@ try {
     () => harness.failureTraffic.some((event) => event.event_type === "tool_finished" && event.tool_name === toolName),
     "healthy traffic delivery on Activity failure path",
   );
+  await waitFor(
+    () =>
+      harness.failureDiagnostics.some(
+        (event) => event.kind === "failure" && event.stage === "activity_delivery",
+      ),
+    "activity delivery diagnostic",
+  );
+  const activityDeliveryFailure = harness.failureDiagnostics.find(
+    (event) => event.kind === "failure" && event.stage === "activity_delivery",
+  );
+  assert.equal(activityDeliveryFailure.error_code, "telemetry_delivery_failed");
+  assert.equal(activityDeliveryFailure.retryable, true);
+  assertDiagnosticsSafe(harness.failureDiagnostics);
   await failureClient.transport.terminateSession().catch(() => undefined);
   await failureClient.client.close().catch(() => undefined);
   failureClient = undefined;
@@ -414,9 +493,15 @@ try {
         credential_secret_absence: "passed",
         session_close: "passed",
         activity_failure_isolation: "passed",
+        diagnostics_correlation: "passed",
+        truthful_latency_edges: "passed",
+        diagnostics_secret_absence: "passed",
+        activity_delivery_diagnostic: "passed",
         observed: {
           traffic_events: traffic.length,
           activity_events: activity.length,
+          diagnostic_events: diagnostics.length,
+          failure_diagnostic_events: harness.failureDiagnostics.length,
           rejected_activity_batches: harness.failureActivityAttempts,
         },
       },

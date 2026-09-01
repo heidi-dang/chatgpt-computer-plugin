@@ -25,6 +25,7 @@ test("MCP traffic normalizes known clients and preserves safe unknown labels", (
   assert.equal(normalizeMcpClient({ name: "Codex CLI" }).label, "Codex");
   assert.equal(normalizeMcpClient({ name: "My Internal MCP Client" }).label, "My Internal MCP Client");
   assert.equal(normalizeMcpClient({ name: "x".repeat(200) }).label.length, 80);
+  assert.equal(normalizeMcpClient(undefined).label, "Unknown MCP Client");
 });
 
 test("MCP traffic error codes are normalized without exposing exception text", () => {
@@ -57,6 +58,7 @@ test("MCP traffic emitter is synchronous, bounded, batched, and allowlist-only",
   for (let index = 0; index < 20; index += 1) {
     emitter.requestStarted({
       requestId: `request-${index}`,
+      correlationId: `corr-${index}`,
       sessionId: "session-1",
       client,
       method: "tools/call",
@@ -82,7 +84,8 @@ test("MCP traffic emitter is synchronous, bounded, batched, and allowlist-only",
   await emitter.close();
 });
 
-test("MCP traffic delivery rejection is swallowed and does not reject emit calls", async () => {
+test("MCP traffic delivery rejection is swallowed and reports one best-effort failure callback", async () => {
+  const failures: Array<{ error: unknown; events: readonly McpTrafficEvent[] }> = [];
   const emitter = new McpTrafficEmitter({
     env: {
       CPTR_MCP_TRAFFIC_PLUGIN_BATCH_SIZE: "1",
@@ -92,11 +95,14 @@ test("MCP traffic delivery rejection is swallowed and does not reject emit calls
     deliver: async () => {
       throw new Error("delivery unavailable with Bearer secret");
     },
+    onDeliveryFailure: (error, events) => failures.push({ error, events }),
   });
   const client = normalizeMcpClient({ name: "Gemini" });
   assert.doesNotThrow(() => emitter.sessionOpened("session-1", client));
   await emitter.flush();
   assert.equal(emitter.stats().queued, 0);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].events.length, 1);
   await emitter.close();
 });
 
@@ -111,11 +117,13 @@ test("MCP traffic request contexts remain isolated across concurrent work", asyn
   const client = normalizeMcpClient({ name: "ChatGPT" });
   const context = (requestId: string): McpRequestContextValue => ({
     requestId,
+    correlationId: `corr-${requestId}`,
     sessionId: "session-1",
     client,
     method: "tools/call",
     startedAt: Date.now(),
     requestBytes: 20,
+    outcome: { failed: false, errorCode: null },
   });
 
   await Promise.all([
@@ -164,11 +172,13 @@ test("MCP traffic instruments the existing registerTool boundary without changin
 
   const context: McpRequestContextValue = {
     requestId: "request-real-tool",
+    correlationId: "corr-real-tool",
     sessionId: "session-real",
     client: normalizeMcpClient({ name: "ChatGPT", version: "1" }),
     method: "tools/call",
     startedAt: Date.now(),
     requestBytes: 44,
+    outcome: { failed: false, errorCode: null },
   };
   const response = await mcpRequestContext.run(context, () =>
     sdkClient.callTool({ name: "cptr_list_workspaces", arguments: {} }),
@@ -181,6 +191,7 @@ test("MCP traffic instruments the existing registerTool boundary without changin
   const toolEvents = delivered.flat().filter((event) => event.tool_name === "cptr_list_workspaces");
   assert.deepEqual(toolEvents.map((event) => event.event_type), ["tool_started", "tool_finished"]);
   assert.deepEqual(new Set(toolEvents.map((event) => event.request_id)), new Set(["request-real-tool"]));
+  assert.deepEqual(new Set(toolEvents.map((event) => event.correlation_id)), new Set(["corr-real-tool"]));
 });
 
 test("MCP traffic delivery failure cannot fail a real MCP tool call", async () => {
@@ -201,11 +212,13 @@ test("MCP traffic delivery failure cannot fail a real MCP tool call", async () =
   await Promise.all([server.connect(serverTransport), sdkClient.connect(clientTransport)]);
   const context: McpRequestContextValue = {
     requestId: "request-failure-isolation",
+    correlationId: "corr-failure-isolation",
     sessionId: null,
     client: normalizeMcpClient({ name: "Gemini" }),
     method: "tools/call",
     startedAt: Date.now(),
     requestBytes: 12,
+    outcome: { failed: false, errorCode: null },
   };
   const response = await mcpRequestContext.run(context, () =>
     sdkClient.callTool({ name: "cptr_list_workspaces", arguments: {} }),

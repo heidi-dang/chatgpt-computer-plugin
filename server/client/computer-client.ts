@@ -10,6 +10,7 @@ import type {
   Workspace,
 } from "../types.js";
 import type { McpActivityEvent } from "../mcp-activity.js";
+import type { McpDiagnosticEvent } from "../mcp-diagnostics.js";
 import type { McpTrafficEvent } from "../mcp-traffic.js";
 
 const COMPLETE_WITH_TOOL_ERRORS = "COMPLETE_WITH_TOOL_ERRORS";
@@ -149,6 +150,14 @@ export class ComputerApiError extends Error {
 
 export type FetchLike = typeof fetch;
 
+export type BackendRequestObservation = {
+  method: string;
+  path: string;
+  status: number | null;
+  durationMs: number;
+  error: ComputerApiError | null;
+};
+
 export type DirectCodingWorker = {
   worker_id: string;
   workspace_id: string;
@@ -207,6 +216,7 @@ export class ComputerClient {
   private readonly token: string;
   private readonly fetchImpl: FetchLike;
   private readonly timeoutMs: number;
+  private requestObserver: ((observation: BackendRequestObservation) => void) | null = null;
   private readonly workspaceCache = new Map<boolean, { expiresAt: number; value: { workspaces: Workspace[] } }>();
   private modelCache: {
     expiresAt: number;
@@ -225,6 +235,18 @@ export class ComputerClient {
     this.token = options.token;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 30_000;
+  }
+
+  setRequestObserver(observer: ((observation: BackendRequestObservation) => void) | null): void {
+    this.requestObserver = observer;
+  }
+
+  private notifyRequestObserver(observation: BackendRequestObservation): void {
+    try {
+      this.requestObserver?.(observation);
+    } catch {
+      // Observability is best-effort and must never alter the backend request result.
+    }
   }
 
   async ingestMcpTraffic(events: McpTrafficEvent[]): Promise<void> {
@@ -255,6 +277,39 @@ export class ComputerClient {
         throw new ComputerApiError(504, "CPTR MCP telemetry ingestion timed out", "mcp_traffic_timeout");
       }
       throw new ComputerApiError(502, "CPTR MCP telemetry ingestion failed", "mcp_traffic_unavailable");
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  async ingestMcpDiagnostics(events: McpDiagnosticEvent[]): Promise<void> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const response = await this.fetchImpl(`${this.baseUrl}/api/mcp/diagnostics/events`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ events }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new ComputerApiError(
+          response.status,
+          "CPTR MCP diagnostics ingestion failed",
+          "mcp_diagnostics_ingestion_failed",
+          response.status >= 500,
+        );
+      }
+    } catch (error) {
+      if (error instanceof ComputerApiError) throw error;
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new ComputerApiError(504, "CPTR MCP diagnostics ingestion timed out", "mcp_diagnostics_timeout");
+      }
+      throw new ComputerApiError(502, "CPTR MCP diagnostics ingestion failed", "mcp_diagnostics_unavailable");
     } finally {
       clearTimeout(timeout);
     }
@@ -1135,9 +1190,13 @@ export class ComputerClient {
   ): Promise<T> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
+    const startedAt = Date.now();
+    const method = options.method ?? "GET";
+    let status: number | null = null;
+    let observedError: ComputerApiError | null = null;
     try {
       const response = await this.fetchImpl(`${this.baseUrl}/api/control/v1${path}`, {
-        method: options.method ?? "GET",
+        method,
         headers: {
           Authorization: `Bearer ${this.token}`,
           Accept: "application/json",
@@ -1146,6 +1205,7 @@ export class ComputerClient {
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
         signal: controller.signal,
       });
+      status = response.status;
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         const rawDetail = payload?.detail;
@@ -1164,13 +1224,22 @@ export class ComputerClient {
       }
       return payload as T;
     } catch (error) {
-      if (error instanceof ComputerApiError) throw error;
-      if (error instanceof DOMException && error.name === "AbortError") {
-        throw new ComputerApiError(504, "CPTR request timed out", "computer_api_timeout");
+      if (error instanceof ComputerApiError) observedError = error;
+      else if (error instanceof DOMException && error.name === "AbortError") {
+        observedError = new ComputerApiError(504, "CPTR request timed out", "computer_api_timeout");
+      } else {
+        observedError = new ComputerApiError(502, "CPTR request failed", "computer_api_unavailable");
       }
-      throw new ComputerApiError(502, "CPTR request failed", "computer_api_unavailable");
+      throw observedError;
     } finally {
       clearTimeout(timeout);
+      this.notifyRequestObserver({
+        method,
+        path,
+        status,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        error: observedError,
+      });
     }
   }
 }

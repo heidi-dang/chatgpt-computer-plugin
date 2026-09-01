@@ -11,6 +11,7 @@ export type McpActivityEvent = {
   client: TrafficClient;
   session_id: string | null;
   request_id: string | null;
+  correlation_id: string | null;
   tool_name: string;
   title: string | null;
   phase: McpActivityPhase;
@@ -25,6 +26,7 @@ export type McpActivityBaseInput = {
   client: TrafficClient;
   sessionId?: string | null;
   requestId?: string | null;
+  correlationId?: string | null;
   toolName: string;
   title?: string | null;
   summary: string;
@@ -51,6 +53,7 @@ export type McpActivityEmitterOptions = {
   batchSize?: number;
   flushMs?: number;
   maxQueue?: number;
+  onDeliveryFailure?: (error: unknown, events: readonly McpActivityEvent[]) => void;
 };
 
 let processSequence = 0;
@@ -105,6 +108,7 @@ function copyEvent(event: McpActivityEvent): McpActivityEvent {
     client: safeClient(event.client),
     session_id: boundedText(event.session_id, 128),
     request_id: boundedText(event.request_id, 128),
+    correlation_id: boundedText(event.correlation_id, 128),
     tool_name: boundedText(event.tool_name, 256) ?? "unknown-tool",
     title: boundedText(event.title, 160),
     phase: event.phase,
@@ -121,6 +125,7 @@ export class McpActivityEmitter {
   private readonly batchSize: number;
   private readonly flushMs: number;
   private readonly maxQueue: number;
+  private readonly onDeliveryFailure?: (error: unknown, events: readonly McpActivityEvent[]) => void;
   private queue: McpActivityEvent[] = [];
   private dropped = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -136,6 +141,7 @@ export class McpActivityEmitter {
     this.batchSize = boundedOverride(options.batchSize, envBatchSize, 1, 100);
     this.flushMs = boundedOverride(options.flushMs, envFlushMs, 1, 10_000);
     this.maxQueue = boundedOverride(options.maxQueue, envMaxQueue, 1, 5_000);
+    this.onDeliveryFailure = options.onDeliveryFailure;
   }
 
   stats(): { queued: number; dropped: number; delivering: boolean } {
@@ -211,6 +217,7 @@ export class McpActivityEmitter {
       client: safeClient(input.client),
       session_id: boundedText(input.sessionId, 128),
       request_id: boundedText(input.requestId, 128),
+      correlation_id: boundedText(input.correlationId, 128),
       tool_name: boundedText(input.toolName, 256) ?? "unknown-tool",
       title: boundedText(input.title, 160),
       summary: boundedText(input.summary, 500) ?? "MCP tool activity",
@@ -246,8 +253,13 @@ export class McpActivityEmitter {
       const batch = this.queue.splice(0, this.batchSize).map(copyEvent);
       try {
         await this.deliver(batch);
-      } catch {
+      } catch (error) {
         this.dropped += batch.length;
+        try {
+          this.onDeliveryFailure?.(error, batch);
+        } catch {
+          // Diagnostics callbacks are best-effort and must never affect MCP activity.
+        }
       }
     }
   }

@@ -34,6 +34,7 @@ export type McpTrafficEvent = {
   session_id: string | null;
   client: TrafficClient;
   request_id: string | null;
+  correlation_id: string | null;
   method: string | null;
   tool_name: string | null;
   status: "started" | "complete" | "error" | "connected" | "disconnected";
@@ -45,11 +46,13 @@ export type McpTrafficEvent = {
 
 export type McpRequestContextValue = {
   requestId: string;
+  correlationId: string;
   sessionId: string | null;
   client: TrafficClient;
   method: string | null;
   startedAt: number;
   requestBytes: number | null;
+  outcome: { failed: boolean; errorCode: McpTrafficErrorCode | null };
 };
 
 export const mcpRequestContext = new AsyncLocalStorage<McpRequestContextValue>();
@@ -143,6 +146,7 @@ function copyEvent(event: McpTrafficEvent): McpTrafficEvent {
     session_id: boundedText(event.session_id, 128),
     client: safeClient(event.client),
     request_id: boundedText(event.request_id, 128),
+    correlation_id: boundedText(event.correlation_id, 128),
     method: boundedText(event.method, 128),
     tool_name: boundedText(event.tool_name, 256),
     status: event.status,
@@ -156,6 +160,7 @@ function copyEvent(event: McpTrafficEvent): McpTrafficEvent {
 export type McpTrafficEmitterOptions = {
   deliver: (events: McpTrafficEvent[]) => Promise<void>;
   env?: Record<string, string | undefined>;
+  onDeliveryFailure?: (error: unknown, events: readonly McpTrafficEvent[]) => void;
 };
 
 export class McpTrafficEmitter {
@@ -163,6 +168,7 @@ export class McpTrafficEmitter {
   private readonly batchSize: number;
   private readonly flushMs: number;
   private readonly maxQueue: number;
+  private readonly onDeliveryFailure?: (error: unknown, events: readonly McpTrafficEvent[]) => void;
   private queue: McpTrafficEvent[] = [];
   private dropped = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -175,6 +181,7 @@ export class McpTrafficEmitter {
     this.batchSize = boundedInt(env.CPTR_MCP_TRAFFIC_PLUGIN_BATCH_SIZE, 20, 1, 100);
     this.flushMs = boundedInt(env.CPTR_MCP_TRAFFIC_PLUGIN_FLUSH_MS, 250, 25, 10_000);
     this.maxQueue = boundedInt(env.CPTR_MCP_TRAFFIC_PLUGIN_MAX_QUEUE, 1000, 10, 10_000);
+    this.onDeliveryFailure = options.onDeliveryFailure;
   }
 
   stats(): { queued: number; dropped: number; delivering: boolean } {
@@ -187,6 +194,7 @@ export class McpTrafficEmitter {
       session_id: sessionId,
       client,
       request_id: null,
+      correlation_id: null,
       method: null,
       tool_name: null,
       status: "connected",
@@ -203,6 +211,7 @@ export class McpTrafficEmitter {
       session_id: sessionId,
       client,
       request_id: null,
+      correlation_id: null,
       method: null,
       tool_name: null,
       status: "disconnected",
@@ -215,6 +224,7 @@ export class McpTrafficEmitter {
 
   requestStarted(input: {
     requestId?: string;
+    correlationId?: string | null;
     sessionId: string | null;
     client: TrafficClient;
     method: string | null;
@@ -226,6 +236,7 @@ export class McpTrafficEmitter {
       session_id: input.sessionId,
       client: input.client,
       request_id: requestId,
+      correlation_id: input.correlationId ?? null,
       method: input.method,
       tool_name: null,
       status: "started",
@@ -243,6 +254,7 @@ export class McpTrafficEmitter {
       session_id: input.sessionId,
       client: input.client,
       request_id: input.requestId,
+      correlation_id: input.correlationId,
       method: input.method,
       tool_name: null,
       status: "complete",
@@ -262,13 +274,17 @@ export class McpTrafficEmitter {
       session_id: input.sessionId,
       client: input.client,
       request_id: input.requestId,
+      correlation_id: input.correlationId,
       method: input.method,
       tool_name: null,
       status: "error",
       duration_ms: input.durationMs ?? Date.now() - input.startedAt,
       request_bytes: input.requestBytes,
       response_bytes: input.responseBytes ?? null,
-      error_code: normalizeTrafficErrorCode(error),
+      error_code:
+        input.outcome.failed && input.outcome.errorCode
+          ? input.outcome.errorCode
+          : normalizeTrafficErrorCode(error),
     });
   }
 
@@ -336,6 +352,7 @@ export class McpTrafficEmitter {
       session_id: context.sessionId,
       client: context.client,
       request_id: context.requestId,
+      correlation_id: context.correlationId,
       method: context.method,
       tool_name: toolName,
       status,
@@ -382,8 +399,13 @@ export class McpTrafficEmitter {
       const batch = this.queue.splice(0, this.batchSize).map(copyEvent);
       try {
         await this.deliver(batch);
-      } catch {
+      } catch (error) {
         this.dropped += batch.length;
+        try {
+          this.onDeliveryFailure?.(error, batch);
+        } catch {
+          // Diagnostics callbacks are best-effort and must never affect MCP traffic.
+        }
       }
     }
   }

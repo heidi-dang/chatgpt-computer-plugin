@@ -22,6 +22,7 @@ function startedInput(index = 1, argumentsJson = '{"ok":true}') {
     client,
     sessionId: "session-1",
     requestId: `request-${index}`,
+    correlationId: `corr-${index}`,
     toolName: "cptr_list_workspaces",
     title: "List workspaces",
     summary: "Working: List workspaces.",
@@ -54,6 +55,7 @@ test("MCP activity emitter is bounded, allowlist-only, and caps payload strings"
     [
       "arguments_json",
       "client",
+      "correlation_id",
       "duration_ms",
       "error_json",
       "event_id",
@@ -73,7 +75,8 @@ test("MCP activity emitter is bounded, allowlist-only, and caps payload strings"
   await emitter.close();
 });
 
-test("MCP activity delivery rejection is isolated from emit calls", async () => {
+test("MCP activity delivery rejection is isolated and reports one best-effort failure callback", async () => {
+  const failures: Array<{ error: unknown; events: readonly McpActivityEvent[] }> = [];
   const emitter = new McpActivityEmitter({
     maxQueue: 2,
     batchSize: 1,
@@ -81,6 +84,7 @@ test("MCP activity delivery rejection is isolated from emit calls", async () => 
     deliver: async () => {
       throw new Error("Bearer secret /private/path");
     },
+    onDeliveryFailure: (error, events) => failures.push({ error, events }),
   });
 
   assert.doesNotThrow(() => emitter.started(startedInput()));
@@ -94,6 +98,8 @@ test("MCP activity delivery rejection is isolated from emit calls", async () => 
   );
   await assert.doesNotReject(() => emitter.flush());
   assert.equal(emitter.stats().dropped, 2);
+  assert.equal(failures.length, 2);
+  assert.equal(failures.every((failure) => failure.events.length === 1), true);
   await emitter.close();
 });
 
@@ -153,11 +159,13 @@ test("activity ingestion failures are generic and never include response bodies"
 function requestContext(requestId: string, toolClient = client): McpRequestContextValue {
   return {
     requestId,
+    correlationId: `corr-${requestId}`,
     sessionId: "session-1",
     client: toolClient,
     method: "tools/call",
     startedAt: Date.now(),
     requestBytes: 64,
+    outcome: { failed: false, errorCode: null },
   };
 }
 
@@ -244,6 +252,7 @@ test("MCP activity instruments a real registered action with correlated started 
       ["ChatGPT", "session-1", "request-real"],
     ],
   );
+  assert.deepEqual(new Set(events.map((event) => event.correlation_id)), new Set(["corr-request-real"]));
 
   await Promise.all([sdkClient.close(), server.close()]);
   await emitter.close();
@@ -329,8 +338,10 @@ test("MCP activity delivery failure never changes a real tool result", async () 
 
 test("plugin process wires MCP activity delivery into stateful and stateless session servers", async () => {
   const source = await readFile(new URL("../server/index.ts", import.meta.url), "utf8");
-  assert.match(source, /new McpActivityEmitter\(\{ deliver: \(events\) => client\.ingestMcpActivity\(events\) \}\)/);
+  assert.match(source, /new McpActivityEmitter\([\s\S]*client\.ingestMcpActivity\(events\)/);
+  assert.match(source, /onDeliveryFailure:[\s\S]*stage: "activity_delivery"/);
   assert.match(source, /activityTelemetry: mcpActivity/);
+  assert.match(source, /diagnostics: mcpDiagnostics/);
   assert.match(source, /function createSessionServer\(\)/);
   assert.match(source, /handleStatefulInitialize[\s\S]*createSessionServer\(\)/);
   assert.match(source, /handleStatelessCompatibilityRequest[\s\S]*createSessionServer\(\)/);
