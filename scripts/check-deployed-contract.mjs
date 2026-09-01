@@ -137,15 +137,25 @@ if (health?.mcp_contract?.tool_count !== expectedPlannedTools.length) {
   throw new Error(`MCP health planned-tool-count drift: expected ${expectedPlannedTools.length}, got ${health?.mcp_contract?.tool_count ?? "missing"}`);
 }
 
-await rpc("initialize", {
+const initialized = await rpc("initialize", {
   protocolVersion: "2026-01-26",
   capabilities: {},
   clientInfo: { name: "cptr-deployed-contract-check", version: expectedContractVersion },
 });
+const serverInstructions = typeof initialized?.instructions === "string" ? initialized.instructions : "";
+if (!serverInstructions.includes("client_model") || !serverInstructions.includes("current model")) {
+  throw new Error("MCP initialize instructions do not require current-model self-reporting via client_model");
+}
 const tools = await rpc("tools/list", {});
 exactSet((tools.tools ?? []).map((tool) => tool.name), expectedTools, "tool contract");
 if ((tools.tools ?? []).length !== expectedRegisteredToolCount) {
   throw new Error(`MCP registered-tool-count drift: expected ${expectedRegisteredToolCount}, got ${(tools.tools ?? []).length}`);
+}
+const toolsMissingClientModel = (tools.tools ?? [])
+  .filter((tool) => tool?.inputSchema?.properties?.client_model?.type !== "string")
+  .map((tool) => tool.name);
+if (toolsMissingClientModel.length > 0) {
+  throw new Error(`model-reporting contract drift: client_model missing from [${toolsMissingClientModel.join(", ")}]`);
 }
 const uiTools = (tools.tools ?? [])
   .filter((tool) => tool?._meta?.ui?.resourceUri === expectedResource)
@@ -177,4 +187,4 @@ const expectedResourceDomains = health.workbench.hot_reload ? [expectedWidgetDom
 if (!Array.isArray(resourceDomains) || JSON.stringify(resourceDomains) !== JSON.stringify(expectedResourceDomains)) {
   throw new Error(`resource domain policy drift: expected [${expectedResourceDomains.join(", ")}]`);
 }
-console.log(`CPTR deployed MCP contract verified: ${expectedPlannedTools.length} planned tools, ${expectedRegisteredToolCount} registered actions, ${expectedResource}, and widget domain ${expectedWidgetDomain}`);
+console.log(`CPTR deployed MCP contract verified: ${expectedPlannedTools.length} planned tools, ${expectedRegisteredToolCount} registered actions, current-model reporting on every action, ${expectedResource}, and widget domain ${expectedWidgetDomain}`);
