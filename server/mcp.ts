@@ -586,14 +586,20 @@ export function createMcpServer(
         const trafficStartedAt = Date.now();
         const activityClient = trafficContext?.client ?? normalizeMcpClient(undefined);
         const activityArgumentsJson = terminalJson(input);
+        const modelGeneratedArguments = trafficContext?.rawToolArguments ?? originalInput;
         const emitUsage = (status: "complete" | "error", returnedEnvelope: unknown) => {
           if (!options.diagnostics) return;
           try {
-            const outputEstimate = estimateModelTokens(
+            // Billing orientation is from the model's perspective: ChatGPT-generated
+            // raw tool-call arguments are model output, while MCP results fed back to
+            // ChatGPT are model input. For HTTP MCP calls, use the transient raw
+            // request arguments so schema defaults injected by the SDK are not billed
+            // as model-generated tokens.
+            const toolCallOutputEstimate = estimateModelTokens(
               normalizedModel.canonical,
-              canonicalToolCallEnvelope(name, originalInput),
+              canonicalToolCallEnvelope(name, modelGeneratedArguments),
             );
-            const inputEstimate = estimateModelTokens(
+            const toolResultInputEstimate = estimateModelTokens(
               normalizedModel.canonical,
               canonicalMcpResultEnvelope(returnedEnvelope),
             );
@@ -606,12 +612,12 @@ export function createMcpServer(
               model_canonical: normalizedModel.canonical,
               model_source: normalizedModel.reported ? "self_reported" : "unavailable",
               tool_name: name,
-              input_tokens_estimated: inputEstimate.tokens,
-              output_tokens_estimated: outputEstimate.tokens,
+              input_tokens_estimated: toolResultInputEstimate.tokens,
+              output_tokens_estimated: toolCallOutputEstimate.tokens,
               cached_input_tokens_estimated: null,
-              estimator_method: `output=${outputEstimate.method};input=${inputEstimate.method}`,
+              estimator_method: `input=${toolResultInputEstimate.method};output=${toolCallOutputEstimate.method}`,
               estimator_exact_for_model:
-                outputEstimate.exact_for_model && inputEstimate.exact_for_model,
+                toolResultInputEstimate.exact_for_model && toolCallOutputEstimate.exact_for_model,
               status,
             });
           } catch {

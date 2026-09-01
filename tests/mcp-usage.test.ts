@@ -167,13 +167,14 @@ test("one terminal Usage event counts original tool arguments but Activity stays
   const client = new Client({ name: "ChatGPT", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
-  await client.callTool({
+  const originalArguments = {
+    workspace_id: "workspace-1",
+    path: "README.md",
+    client_model: "GPT-5.6 Sol",
+  };
+  const callResult = await client.callTool({
     name: "cptr_code_read_file",
-    arguments: {
-      workspace_id: "workspace-1",
-      path: "README.md",
-      client_model: "GPT-5.6 Sol",
-    },
+    arguments: originalArguments,
   });
   await Promise.all([diagnosticEmitter.flush(), activityEmitter.flush()]);
 
@@ -181,8 +182,29 @@ test("one terminal Usage event counts original tool arguments but Activity stays
   assert.equal(usage.length, 1);
   assert.equal(usage[0].model_reported, "GPT-5.6 Sol");
   assert.equal(usage[0].model_canonical, "gpt-5.6-sol");
-  assert.ok(Number(usage[0].input_tokens_estimated) > 0);
-  assert.ok(Number(usage[0].output_tokens_estimated) > 0);
+  const estimate = usageModule.estimateModelTokens as (
+    modelId: string | null,
+    text: string,
+  ) => { tokens: number; method: string; exact_for_model: boolean };
+  const callEnvelope = usageModule.canonicalToolCallEnvelope as (name: string, args: unknown) => string;
+  const resultEnvelope = usageModule.canonicalMcpResultEnvelope as (value: unknown) => string;
+  const validatedArguments = { ...originalArguments, start_line: 0, end_line: 0 };
+  const expectedOutput = estimate(
+    "gpt-5.6-sol",
+    callEnvelope("cptr_code_read_file", validatedArguments),
+  );
+  const expectedInput = estimate("gpt-5.6-sol", resultEnvelope(callResult));
+  assert.equal(
+    usage[0].input_tokens_estimated,
+    expectedInput.tokens,
+    "the MCP tool result returned to ChatGPT must count as model input",
+  );
+  assert.equal(
+    usage[0].output_tokens_estimated,
+    expectedOutput.tokens,
+    "the tool-call envelope must count as model output",
+  );
+  assert.match(String(usage[0].estimator_method), /^input=.*;output=/);
   assert.equal(usage[0].cached_input_tokens_estimated, null);
   assert.equal(usage[0].status, "complete");
   assert.equal(JSON.stringify(activity).includes("client_model"), false);

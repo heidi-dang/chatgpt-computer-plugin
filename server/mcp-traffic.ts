@@ -52,6 +52,9 @@ export type McpRequestContextValue = {
   method: string | null;
   startedAt: number;
   requestBytes: number | null;
+  // Transient request-local copy used only for token estimation. Traffic/Activity
+  // serializers remain allowlist-only and never emit these raw arguments.
+  rawToolArguments?: unknown;
   outcome: { failed: boolean; errorCode: McpTrafficErrorCode | null };
 };
 

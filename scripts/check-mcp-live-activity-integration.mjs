@@ -5,6 +5,7 @@ import http from "node:http";
 import net from "node:net";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { getEncoding } from "js-tiktoken";
 
 const host = "127.0.0.1";
 const timeoutMs = Math.max(
@@ -357,7 +358,7 @@ try {
 
   const call = await successClient.client.callTool({
     name: toolName,
-    arguments: { include_unavailable: false, client_model: "GPT-5.6 Sol" },
+    arguments: { client_model: "GPT-5.6 Sol" },
   });
   assert.notEqual(call.isError, true, "real MCP tool call must succeed");
 
@@ -431,6 +432,14 @@ try {
   assert.equal(usage[0].model_source, "self_reported");
   assert.ok(usage[0].input_tokens_estimated > 0);
   assert.ok(usage[0].output_tokens_estimated > 0);
+  const expectedRawOutputEnvelope =
+    '{"arguments":{"client_model":"GPT-5.6 Sol"},"name":"cptr_list_workspaces"}';
+  const expectedRawOutputTokens = getEncoding("o200k_base").encode(expectedRawOutputEnvelope).length;
+  assert.equal(
+    usage[0].output_tokens_estimated,
+    expectedRawOutputTokens,
+    "schema defaults injected after the HTTP request must not inflate model-output tokens",
+  );
   assert.equal(usage[0].cached_input_tokens_estimated, null);
   assert.equal(usage[0].status, "complete");
   assert.equal(started.client?.label, "ChatGPT");

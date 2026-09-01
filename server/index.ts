@@ -260,6 +260,14 @@ function trafficMethod(req: IncomingMessage, body: unknown): string | null {
   return null;
 }
 
+function rawToolArguments(body: unknown): unknown | undefined {
+  const record = jsonRecord(body);
+  if (record?.method !== "tools/call") return undefined;
+  const params = jsonRecord(record.params);
+  if (!params || !("arguments" in params)) return {};
+  return params.arguments;
+}
+
 function emitClientTransportFailure(
   req: IncomingMessage,
   input: {
@@ -384,6 +392,7 @@ async function handleWithTraffic(
     method: trafficMethod(req, input.body),
     startedAt: adapterSetupStartedAt,
     requestBytes: input.requestBytes,
+    rawToolArguments: rawToolArguments(input.body),
     outcome: { failed: false, errorCode: null },
   };
   mcpTraffic.requestStarted({
