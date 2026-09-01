@@ -28,6 +28,27 @@ export type McpLatencyDiagnostic = {
   status: "ok" | "error";
 };
 
+export type McpUsageDiagnostic = {
+  kind: "usage";
+  version: 1;
+  event_id: string;
+  timestamp_ms: number;
+  request_id: string | null;
+  correlation_id: string | null;
+  session_id: string | null;
+  client_id: string;
+  model_reported: string | null;
+  model_canonical: string | null;
+  model_source: "self_reported" | "unavailable";
+  tool_name: string;
+  input_tokens_estimated: number;
+  output_tokens_estimated: number;
+  cached_input_tokens_estimated: null;
+  estimator_method: string;
+  estimator_exact_for_model: boolean;
+  status: "complete" | "error";
+};
+
 export type McpFailureDiagnostic = {
   kind: "failure";
   version: 1;
@@ -50,7 +71,7 @@ export type McpFailureDiagnostic = {
   summary: string;
 };
 
-export type McpDiagnosticEvent = McpLatencyDiagnostic | McpFailureDiagnostic;
+export type McpDiagnosticEvent = McpLatencyDiagnostic | McpFailureDiagnostic | McpUsageDiagnostic;
 
 export type McpDiagnosticsEmitterOptions = {
   deliver: (events: McpDiagnosticEvent[]) => Promise<void>;
@@ -118,6 +139,29 @@ function copyLatency(event: McpLatencyDiagnostic): McpLatencyDiagnostic {
   };
 }
 
+function copyUsage(event: McpUsageDiagnostic): McpUsageDiagnostic {
+  return {
+    kind: "usage",
+    version: 1,
+    event_id: boundedText(event.event_id, 128) ?? randomUUID(),
+    timestamp_ms: boundedNumber(event.timestamp_ms, Number.MAX_SAFE_INTEGER) ?? Date.now(),
+    request_id: boundedText(event.request_id, 128),
+    correlation_id: boundedText(event.correlation_id, 128),
+    session_id: boundedText(event.session_id, 128),
+    client_id: (boundedText(event.client_id, 128) ?? "chatgpt").toLowerCase(),
+    model_reported: boundedText(event.model_reported, 120),
+    model_canonical: boundedText(event.model_canonical, 64),
+    model_source: event.model_source === "self_reported" ? "self_reported" : "unavailable",
+    tool_name: boundedText(event.tool_name, 256) ?? "unknown-tool",
+    input_tokens_estimated: boundedNumber(event.input_tokens_estimated, 100_000_000) ?? 0,
+    output_tokens_estimated: boundedNumber(event.output_tokens_estimated, 100_000_000) ?? 0,
+    cached_input_tokens_estimated: null,
+    estimator_method: boundedText(event.estimator_method, 160) ?? "unknown",
+    estimator_exact_for_model: event.estimator_exact_for_model === true,
+    status: event.status === "error" ? "error" : "complete",
+  };
+}
+
 function copyFailure(event: McpFailureDiagnostic): McpFailureDiagnostic {
   return {
     kind: "failure",
@@ -143,7 +187,9 @@ function copyFailure(event: McpFailureDiagnostic): McpFailureDiagnostic {
 }
 
 function copyEvent(event: McpDiagnosticEvent): McpDiagnosticEvent {
-  return event.kind === "latency" ? copyLatency(event) : copyFailure(event);
+  if (event.kind === "latency") return copyLatency(event);
+  if (event.kind === "usage") return copyUsage(event);
+  return copyFailure(event);
 }
 
 export class McpDiagnosticsEmitter {
@@ -192,6 +238,18 @@ export class McpDiagnosticsEmitter {
       version: 1,
       diagnostic_id: randomUUID(),
       completed_at_ms: Date.now(),
+      ...input,
+    });
+  }
+
+  usage(
+    input: Omit<McpUsageDiagnostic, "kind" | "version" | "event_id" | "timestamp_ms">,
+  ): void {
+    this.emit({
+      kind: "usage",
+      version: 1,
+      event_id: randomUUID(),
+      timestamp_ms: Date.now(),
       ...input,
     });
   }

@@ -3,6 +3,12 @@ import { ComputerApiError, ComputerClient } from "./client/computer-client.js";
 import { McpActivityEmitter } from "./mcp-activity.js";
 import { McpDiagnosticsEmitter } from "./mcp-diagnostics.js";
 import {
+  canonicalMcpResultEnvelope,
+  canonicalToolCallEnvelope,
+  estimateModelTokens,
+  normalizeReportedModel,
+} from "./mcp-usage.js";
+import {
   McpTrafficEmitter,
   mcpRequestContext,
   normalizeMcpClient,
@@ -388,7 +394,40 @@ const DIRECT_GROUP_DESCRIPTION =
 const DELEGATE_GROUP_DESCRIPTION =
   "Tool group: Delegated Agent. This tool is model/agent-backed CPTR orchestration or lifecycle control. It is blocked unless the current user prompt contains the exact opt-in token `allow:delegate` and the prompt Workbench session was opened with delegation_authorization=`allow:delegate`. The opt-in applies to CPTR native agents/models and other agent profiles such as Codex or Hermes.";
 
-function groupedToolConfig<T extends { title?: string; description?: string }>(name: string, config: T): T {
+export const CLIENT_MODEL_INSTRUCTION =
+  "When you are ChatGPT and invoke any CPTR tool, set client_model to the exact current model identity you are running as for this tool call, for example GPT-5.6 Sol. Report the current value on every CPTR tool call; do not reuse or infer it from an earlier call. If the current model identity is unavailable, omit client_model rather than guessing.";
+export const CLIENT_MODEL_FIELD_DESCRIPTION =
+  "ChatGPT callers: set client_model to the exact current ChatGPT model identity for this tool call, for example GPT-5.6 Sol. Report client_model on every CPTR call; if unavailable, omit this optional field rather than guessing.";
+const clientModelSchema = z.string().min(1).max(120).optional().describe(CLIENT_MODEL_FIELD_DESCRIPTION);
+
+type ModelAwareToolConfig = {
+  title?: string;
+  description?: string;
+  inputSchema?: unknown;
+};
+
+function withClientModelInputSchema(inputSchema: unknown): unknown {
+  if (inputSchema instanceof z.ZodObject) {
+    return inputSchema.extend({ client_model: clientModelSchema });
+  }
+  if (inputSchema && typeof inputSchema === "object" && !Array.isArray(inputSchema)) {
+    return { ...(inputSchema as Record<string, z.ZodTypeAny>), client_model: clientModelSchema };
+  }
+  return { client_model: clientModelSchema };
+}
+
+export function extractClientModel(input: unknown): { reported: string | null; handlerInput: unknown } {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return { reported: null, handlerInput: input };
+  }
+  const record = { ...(input as Record<string, unknown>) };
+  const raw = record.client_model;
+  delete record.client_model;
+  const reported = typeof raw === "string" ? raw.trim().slice(0, 120) || null : null;
+  return { reported, handlerInput: record };
+}
+
+function groupedToolConfig<T extends ModelAwareToolConfig>(name: string, config: T): T {
   const delegated = DELEGATED_AGENT_TOOL_NAMES.has(name);
   const groupName = delegated ? "Delegated Agent" : "ChatGPT Direct Coding";
   const policy = delegated ? DELEGATE_GROUP_DESCRIPTION : DIRECT_GROUP_DESCRIPTION;
@@ -398,7 +437,8 @@ function groupedToolConfig<T extends { title?: string; description?: string }>(n
   return {
     ...config,
     title: `[${groupName}] ${config.title?.trim() || name}`,
-    description: `${policy}${conditional}${config.description ? ` ${config.description}` : ""}`,
+    description: `${policy}${conditional}${config.description ? ` ${config.description}` : ""} ${CLIENT_MODEL_FIELD_DESCRIPTION}`,
+    inputSchema: withClientModelInputSchema(config.inputSchema),
   };
 }
 
@@ -424,7 +464,10 @@ export function createMcpServer(
     diagnostics?: McpDiagnosticsEmitter;
   } = {},
 ): McpServer {
-  const server = new McpServer({ name: "chatgpt-computer-plugin", version: MCP_CONTRACT_VERSION });
+  const server = new McpServer(
+    { name: "chatgpt-computer-plugin", version: MCP_CONTRACT_VERSION },
+    { instructions: CLIENT_MODEL_INSTRUCTION },
+  );
   const tickets = options.tickets ?? new LiveTicketStore();
   const promptSessions = options.promptSessions ?? new PromptTerminalStore();
   const liveTerminalStreamingEnabled = options.liveTerminalStreamingEnabled ?? true;
@@ -535,12 +578,46 @@ export function createMcpServer(
       groupedConfig as never,
       (async (...args: unknown[]) => {
         const label = groupedConfig.title?.trim() || name;
-        const input = args.length ? args[0] : {};
+        const originalInput = args.length ? args[0] : {};
+        const { reported: reportedClientModel, handlerInput: input } = extractClientModel(originalInput);
+        const normalizedModel = normalizeReportedModel(reportedClientModel);
         const inputWorkerId = workerIdFrom(input);
         const trafficContext = mcpRequestContext.getStore();
         const trafficStartedAt = Date.now();
         const activityClient = trafficContext?.client ?? normalizeMcpClient(undefined);
         const activityArgumentsJson = terminalJson(input);
+        const emitUsage = (status: "complete" | "error", returnedEnvelope: unknown) => {
+          if (!options.diagnostics) return;
+          try {
+            const outputEstimate = estimateModelTokens(
+              normalizedModel.canonical,
+              canonicalToolCallEnvelope(name, originalInput),
+            );
+            const inputEstimate = estimateModelTokens(
+              normalizedModel.canonical,
+              canonicalMcpResultEnvelope(returnedEnvelope),
+            );
+            options.diagnostics.usage({
+              request_id: trafficContext?.requestId ?? null,
+              correlation_id: trafficContext?.correlationId ?? null,
+              session_id: trafficContext?.sessionId ?? null,
+              client_id: activityClient.id,
+              model_reported: normalizedModel.reported,
+              model_canonical: normalizedModel.canonical,
+              model_source: normalizedModel.reported ? "self_reported" : "unavailable",
+              tool_name: name,
+              input_tokens_estimated: inputEstimate.tokens,
+              output_tokens_estimated: outputEstimate.tokens,
+              cached_input_tokens_estimated: null,
+              estimator_method: `output=${outputEstimate.method};input=${inputEstimate.method}`,
+              estimator_exact_for_model:
+                outputEstimate.exact_for_model && inputEstimate.exact_for_model,
+              status,
+            });
+          } catch {
+            // Usage simulation is best-effort observability and must never alter a tool result.
+          }
+        };
         options.traffic?.toolStarted(name, trafficContext);
         options.activityTelemetry?.started({
           client: activityClient,
@@ -582,7 +659,7 @@ export function createMcpServer(
               "allow:delegate",
             );
           }
-          const value = await handler(...args);
+          const value = await handler(...(args.length ? [input, ...args.slice(1)] : args));
           const activityDurationMs = Date.now() - trafficStartedAt;
           const terminalValue = terminalToolResult(value);
           const activityResultJson = terminalJson(terminalValue);
@@ -640,6 +717,7 @@ export function createMcpServer(
                 { error: activityResultJson },
               );
             }
+            emitUsage("error", value);
             return value as never;
           }
           options.traffic?.toolFinished(name, trafficContext, activityDurationMs);
@@ -664,6 +742,7 @@ export function createMcpServer(
               { resultJson: activityResultJson },
             );
           }
+          emitUsage("complete", value);
           return value as never;
         } catch (error) {
           const activityDurationMs = Date.now() - trafficStartedAt;
@@ -727,10 +806,12 @@ export function createMcpServer(
               { error: activityErrorJson },
             );
           }
-          return {
+          const errorResult = {
             isError: true,
             content: [{ type: "text" as const, text: JSON.stringify(envelope) }],
-          } as never;
+          };
+          emitUsage("error", errorResult);
+          return errorResult as never;
         }
       }) as never,
     );

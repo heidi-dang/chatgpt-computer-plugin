@@ -357,7 +357,7 @@ try {
 
   const call = await successClient.client.callTool({
     name: toolName,
-    arguments: { include_unavailable: false },
+    arguments: { include_unavailable: false, client_model: "GPT-5.6 Sol" },
   });
   assert.notEqual(call.isError, true, "real MCP tool call must succeed");
 
@@ -422,10 +422,22 @@ try {
   assert.equal(observedEdges.get("client-mcp-connector"), "observed_request_time");
   assert.equal(observedEdges.get("mcp-connector-cptr-mcp"), "adapter_handoff");
   assert.equal(observedEdges.get("cptr-mcp-cptr-backend"), "backend_api_rtt");
+  const usage = correlatedDiagnostics.filter(
+    (event) => event.kind === "usage" && event.tool_name === toolName,
+  );
+  assert.equal(usage.length, 1, "the correlated tool call must emit exactly one Usage diagnostic");
+  assert.equal(usage[0].model_reported, "GPT-5.6 Sol");
+  assert.equal(usage[0].model_canonical, "gpt-5.6-sol");
+  assert.equal(usage[0].model_source, "self_reported");
+  assert.ok(usage[0].input_tokens_estimated > 0);
+  assert.ok(usage[0].output_tokens_estimated > 0);
+  assert.equal(usage[0].cached_input_tokens_estimated, null);
+  assert.equal(usage[0].status, "complete");
   assert.equal(started.client?.label, "ChatGPT");
   assert.equal(typeof started.arguments_json, "string");
   assert.ok(started.arguments_json.length > 0 && started.arguments_json.length <= 13_000);
   assert.match(started.arguments_json, /include_unavailable/);
+  assert.doesNotMatch(started.arguments_json, /client_model/);
   assert.equal(started.result_json, null);
   assert.equal(typeof complete.result_json, "string");
   assert.ok(complete.result_json.length > 0 && complete.result_json.length <= 13_000);
@@ -452,7 +464,10 @@ try {
     failureMcpToken,
     "ChatGPT Activity Failure Acceptance",
   );
-  const failureCall = await failureClient.client.callTool({ name: toolName, arguments: {} });
+  const failureCall = await failureClient.client.callTool({
+    name: toolName,
+    arguments: { client_model: "GPT-5.6 Sol" },
+  });
   assert.notEqual(
     failureCall.isError,
     true,
@@ -496,6 +511,8 @@ try {
         diagnostics_correlation: "passed",
         truthful_latency_edges: "passed",
         diagnostics_secret_absence: "passed",
+        usage_model_self_report: "passed",
+        usage_token_estimation: "passed",
         activity_delivery_diagnostic: "passed",
         observed: {
           traffic_events: traffic.length,
