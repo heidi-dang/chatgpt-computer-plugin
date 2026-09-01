@@ -11,6 +11,7 @@
     "check:deployed-contract": "node scripts/check-deployed-contract.mjs",
     "check:mcp-traffic-integration": "node scripts/check-mcp-traffic-integration.mjs",
     "check:mcp-traffic-acceptance": "node scripts/run-mcp-traffic-acceptance.mjs",
+    "check:mcp-live-activity": "node scripts/check-mcp-live-activity-integration.mjs",
     "build": "npm run build:web && tsc -p tsconfig.json && npm run copy:web",
     "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p web/tsconfig.json"
