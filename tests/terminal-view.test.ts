@@ -155,7 +155,10 @@ test("Workbench reports intrinsic height through both ChatGPT host sizing paths 
   assert.match(source, /params: \{ height \}/);
   assert.doesNotMatch(source, /requestHostDisplayMode\(hostBridge\(\), "pip"\)[\s\S]*autoPinAttempted/);
   assert.doesNotMatch(source, /hasWorkers\s*\?\s*<DirectWorkersView/);
-  assert.match(source, /"connecting terminal session"/);
+  assert.match(source, /const promptConnection = usePromptActivity\(/);
+  assert.match(source, /const connection = meta\?\.targetId \? targetConnection : promptConnection/);
+  assert.doesNotMatch(source, /meta\?\.targetId \? targetConnection : "connecting terminal session"/);
+  assert.match(source, /promptConnection === "prompt live" \? "CPTR Computer" : "Connecting to computer"/);
   assert.match(source, /"Waiting for terminal session…"/);
 });
 

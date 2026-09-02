@@ -548,9 +548,9 @@ function OwnedWorkbench() {
     ? new URL("/plugin/update", promptMetadata.streamUrl).toString()
     : undefined;
   const [meta, setMeta] = useState<LiveMetadata | null>(null);
-  usePromptActivity(setMeta, setState, liveStreamingEnabled);
+  const promptConnection = usePromptActivity(setMeta, setState, liveStreamingEnabled);
   const targetConnection = useLiveSession(meta, setMeta, setState, liveStreamingEnabled);
-  const connection = meta?.targetId ? targetConnection : "connecting terminal session";
+  const connection = meta?.targetId ? targetConnection : promptConnection;
   const visibleTarget = useRef<string | null>(null);
   const isCommand = meta?.targetType === "command" && !!meta.targetId && !!meta.workspaceId;
   const canControl = !!meta?.targetType && ["RUNNING", "WORKING", "CONNECTING", "APPROVAL_REQUIRED"].includes(state.status);
@@ -624,7 +624,7 @@ function OwnedWorkbench() {
       updateCenter={updateCenter}
       status={displayStatus}
       connection={connection}
-      machineLabel={meta?.targetId ? "CPTR Computer" : "Connecting to computer"}
+      machineLabel={meta?.targetId || promptConnection === "prompt live" ? "CPTR Computer" : "Connecting to computer"}
       targetLabel={targetLabel(meta)}
       actionStatus={actionStatus}
       canStop={canControl}
