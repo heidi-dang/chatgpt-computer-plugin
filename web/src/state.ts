@@ -75,6 +75,7 @@ export type TerminalRow = {
   text: string;
   commandId?: string;
   label?: string;
+  effect?: "overflow";
 };
 
 export type WorkbenchState = {
@@ -230,8 +231,22 @@ export function appendDirectWorkerActivity(
       { id: event.event_id, timestamp: event.timestamp, status, summary },
     ], MAX_WORKER_ACTIVITY_ROWS),
   };
+  const tone: TerminalRow["tone"] = ["FAILED", "BLOCKED", "CONFLICTED"].includes(status)
+    ? "error"
+    : ["COMPLETE", "INTEGRATED"].includes(status)
+      ? "success"
+      : "system";
+  const workerRow: TerminalRow = {
+    id: `${event.event_id}:worker`,
+    sequence: state.lastSequence,
+    timestamp: event.timestamp,
+    tone,
+    text: `[worker:${worker.name}] ${summary}`,
+    label: "worker",
+  };
   return {
     ...state,
+    transcript: bounded([...state.transcript, workerRow], MAX_TERMINAL_ROWS),
     workers: { ...state.workers, [workerId]: worker },
     workerOrder: existing ? state.workerOrder : [...state.workerOrder, workerId],
   };
@@ -318,13 +333,16 @@ function terminalRows(event: WorkbenchEvent): TerminalRow[] {
   if (event.type === "terminal.chunk" || event.type === "shell.stdout") {
     const text = stringValue(payload.text, stringValue(payload.output));
     const tone = stringValue(payload.stream) === "stderr" ? "stderr" : "stdout";
-    return text.split(/\r?\n/).map((line, index) => ({
+    const separators = text.match(/\r\n|\r|\n/g)?.length ?? 0;
+    const effect: TerminalRow["effect"] = separators >= 2 && text.length < 4_096 ? "overflow" : undefined;
+    return text.split(/\r\n|\r|\n/).map((line, index) => ({
       id: `${event.event_id}:${index}`,
       sequence: event.sequence,
       timestamp: event.timestamp,
       tone,
       commandId,
       text: line || " ",
+      ...(effect ? { effect } : {}),
     }));
   }
   if (event.type === "command.completed") {

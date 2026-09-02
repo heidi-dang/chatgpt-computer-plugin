@@ -96,6 +96,10 @@ export type DirectCommand = {
   duration_ms?: number;
   output_truncated?: boolean;
   timed_out?: boolean;
+  pty?: boolean;
+  rows?: number;
+  cols?: number;
+  recovered?: boolean;
 };
 
 export type DirectSshCommand = DirectCommand & {

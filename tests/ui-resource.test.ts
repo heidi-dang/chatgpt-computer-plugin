@@ -30,8 +30,11 @@ test("publishes the configured widget domain and bounded MCP Apps metadata", asy
   assert.match(resource.contents[0].text, /console\.log/);
   assert.match(resource.contents[0].text, /data-terminal-static-shell/);
   assert.match(resource.contents[0].text, /CHATGPT LIVE TERMINAL/);
+  assert.match(resource.contents[0].text, /Connecting to computer/);
+  assert.match(resource.contents[0].text, /Waiting for terminal session…/);
   assert.match(resource.contents[0].text, /Terminal UI ready\./);
   assert.match(resource.contents[0].text, /viewport-fit=cover/);
+  assert.doesNotMatch(resource.contents[0].text, /Ready for real CPTR activity/);
   assert.doesNotMatch(resource.contents[0].text, /<div id="root"><\/div>/);
 });
 
@@ -50,9 +53,9 @@ test("publishes production-safe external assets and a loop-safe reload channel",
   assert.match(html, /__cptr\/dev\/workbench\.css/);
   assert.match(html, /__cptr\/dev\/reload/);
   assert.match(html, /build-42/);
-  assert.match(html, /min-height:380px/);
-  assert.match(html, /min-height:340px/);
-  assert.match(html, /min-height:320px/);
+  assert.match(html, /min-height:260px/);
+  assert.match(html, /min-height:240px/);
+  assert.match(html, /min-height:220px/);
   assert.match(html, /sessionStorage\.setItem/);
   assert.match(html, /encodeURIComponent\(current\)/);
   assert.match(html, /source\.close\(\);location\.reload\(\)/);

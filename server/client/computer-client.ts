@@ -895,6 +895,10 @@ export class ComputerClient {
     cwd?: string;
     wait_seconds?: number;
     allow_network?: boolean;
+    pty?: boolean;
+    rows?: number;
+    cols?: number;
+    stdin?: string;
     idempotency_key?: string;
   }): Promise<DirectCommand> {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/commands`, {
@@ -905,6 +909,10 @@ export class ComputerClient {
         cwd: input.cwd ?? ".",
         wait_seconds: input.wait_seconds ?? 0,
         allow_network: input.allow_network ?? false,
+        pty: input.pty ?? false,
+        rows: input.rows ?? 24,
+        cols: input.cols ?? 80,
+        ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
         ...(input.idempotency_key ? { idempotency_key: input.idempotency_key } : {}),
       },
     });
@@ -940,6 +948,94 @@ export class ComputerClient {
       `/workspaces/${encodeURIComponent(input.workspace_id)}/coding/commands/${encodeURIComponent(input.command_id)}/cancel${query.size ? `?${query}` : ""}`,
       { method: "POST" },
     );
+  }
+
+  async sendCodingCommandInput(input: {
+    workspace_id: string;
+    worker_id?: string;
+    command_id: string;
+    data: string;
+  }): Promise<DirectCommand> {
+    const { workspace_id, command_id, ...body } = input;
+    return this.request(
+      `/workspaces/${encodeURIComponent(workspace_id)}/coding/commands/${encodeURIComponent(command_id)}/input`,
+      { method: "POST", body },
+    );
+  }
+
+  async resizeCodingCommand(input: {
+    workspace_id: string;
+    worker_id?: string;
+    command_id: string;
+    rows: number;
+    cols: number;
+  }): Promise<DirectCommand> {
+    const { workspace_id, command_id, ...body } = input;
+    return this.request(
+      `/workspaces/${encodeURIComponent(workspace_id)}/coding/commands/${encodeURIComponent(command_id)}/resize`,
+      { method: "POST", body },
+    );
+  }
+
+  async signalCodingCommand(input: {
+    workspace_id: string;
+    worker_id?: string;
+    command_id: string;
+    signal: "interrupt" | "terminate" | "kill";
+  }): Promise<DirectCommand> {
+    const { workspace_id, command_id, ...body } = input;
+    return this.request(
+      `/workspaces/${encodeURIComponent(workspace_id)}/coding/commands/${encodeURIComponent(command_id)}/signal`,
+      { method: "POST", body },
+    );
+  }
+
+  async discoverLsp(input: { workspace_id: string; worker_id?: string }): Promise<Record<string, unknown>> {
+    const { workspace_id, ...body } = input;
+    return this.request(`/workspaces/${encodeURIComponent(workspace_id)}/coding/lsp/discover`, {
+      method: "POST",
+      body,
+    });
+  }
+
+  async startLsp(input: {
+    workspace_id: string;
+    worker_id?: string;
+    server_id: string;
+    root?: string;
+  }): Promise<Record<string, unknown>> {
+    const { workspace_id, ...body } = input;
+    return this.request(`/workspaces/${encodeURIComponent(workspace_id)}/coding/lsp/start`, {
+      method: "POST",
+      body: { root: ".", ...body },
+    });
+  }
+
+  async requestLsp(input: {
+    workspace_id: string;
+    worker_id?: string;
+    lsp_id: string;
+    method: string;
+    params?: unknown;
+    timeout_seconds?: number;
+  }): Promise<Record<string, unknown>> {
+    const { workspace_id, ...body } = input;
+    return this.request(`/workspaces/${encodeURIComponent(workspace_id)}/coding/lsp/request`, {
+      method: "POST",
+      body: { timeout_seconds: 15, ...body },
+    });
+  }
+
+  async stopLsp(input: {
+    workspace_id: string;
+    worker_id?: string;
+    lsp_id: string;
+  }): Promise<Record<string, unknown>> {
+    const { workspace_id, ...body } = input;
+    return this.request(`/workspaces/${encodeURIComponent(workspace_id)}/coding/lsp/stop`, {
+      method: "POST",
+      body,
+    });
   }
 
   async listSshHosts(input: { workspace_id: string }): Promise<{ workspace_id: string; aliases: string[] }> {

@@ -1,10 +1,11 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { TerminalRow } from "./state.js";
 
 export type TerminalViewProps = {
   rows: TerminalRow[];
   status: string;
   connection: string;
+  machineLabel?: string;
   targetLabel: string;
   actionStatus?: string;
   updateCenter?: React.ReactNode;
@@ -26,14 +27,75 @@ const TERM_RE = /(^.*?[$#>]\s)([\w./:+-]+)?|(^\s*(?:\/\/|#\s)[^\n]*)|\b(ERROR|FA
 const TERM_KIND = ["", "prompt", "command", "comment", "error", "warning", "success", "string", "option", "path", "number", "keyword"];
 const ANSI_SGR_RE = /\u001b\[([0-9;]*)m/g;
 const ANSI_COLORS = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
+const MAX_RENDERED_ROWS = 600;
+
+/**
+ * Byte-for-byte behavioral port of the ChatGPT Terminal UI text normalizer.
+ * It removes terminal cursor/control traffic while preserving stable text order.
+ */
+export function normalizeTerminalText(input: string): string {
+  let output = "";
+  let index = 0;
+  while (index < input.length) {
+    const code = input.charCodeAt(index);
+    if (code === 0x1b) {
+      const next = input[index + 1];
+      if (next === "[") {
+        index += 2;
+        while (index < input.length) {
+          const control = input.charCodeAt(index++);
+          if (control >= 0x40 && control <= 0x7e) break;
+        }
+        continue;
+      }
+      if (next === "]") {
+        index += 2;
+        while (index < input.length) {
+          const control = input.charCodeAt(index);
+          if (control === 0x07) {
+            index += 1;
+            break;
+          }
+          if (control === 0x1b && input[index + 1] === "\\") {
+            index += 2;
+            break;
+          }
+          index += 1;
+        }
+        continue;
+      }
+      index += Math.min(2, input.length - index);
+      continue;
+    }
+    if (code === 0x08) {
+      output = output.slice(0, -1);
+      index += 1;
+      continue;
+    }
+    if (code === 0x0d) {
+      if (input.charCodeAt(index + 1) === 0x0a) index += 1;
+      output += "\n";
+      index += 1;
+      continue;
+    }
+    if (code < 0x20 && code !== 0x09 && code !== 0x0a) {
+      index += 1;
+      continue;
+    }
+    output += input[index] ?? "";
+    index += 1;
+  }
+  return output;
+}
 
 function highlightPlainText(input: string): RichToken[] {
+  const text = normalizeTerminalText(input);
   const tokens: RichToken[] = [];
   let end = 0;
   TERM_RE.lastIndex = 0;
-  for (const match of input.matchAll(TERM_RE)) {
+  for (const match of text.matchAll(TERM_RE)) {
     const at = match.index ?? 0;
-    if (at > end) tokens.push({ text: input.slice(end, at) });
+    if (at > end) tokens.push({ text: text.slice(end, at) });
     if (match[1]) {
       tokens.push({ text: match[1], className: "term-prompt" });
       if (match[2]) tokens.push({ text: match[2], className: "term-command" });
@@ -44,7 +106,7 @@ function highlightPlainText(input: string): RichToken[] {
     }
     end = at + match[0].length;
   }
-  if (end < input.length) tokens.push({ text: input.slice(end) });
+  if (end < text.length) tokens.push({ text: text.slice(end) });
   return tokens;
 }
 
@@ -122,18 +184,24 @@ export function TerminalView({
   rows,
   status,
   connection,
+  machineLabel = "Connecting to computer",
   targetLabel,
 }: TerminalViewProps) {
   const output = useRef<HTMLPreElement>(null);
   const [follow, setFollow] = useState(true);
   const state = displayState(status, connection);
   const exitCode = exitCodeFromRows(rows);
+  const hiddenRowCount = Math.max(0, rows.length - MAX_RENDERED_ROWS);
+  const visibleRows = useMemo(
+    () => hiddenRowCount ? rows.slice(rows.length - MAX_RENDERED_ROWS) : rows,
+    [hiddenRowCount, rows],
+  );
 
   useEffect(() => {
     if (!follow) return;
     const element = output.current;
     if (element) element.scrollTop = element.scrollHeight;
-  }, [rows, follow]);
+  }, [visibleRows, follow]);
 
   const onScroll = () => {
     const element = output.current;
@@ -146,7 +214,7 @@ export function TerminalView({
       <div className="terminal-identity">
         <div className="terminal-kicker">CHATGPT LIVE TERMINAL</div>
         <div className="terminal-machine-row">
-          <span className="terminal-machine">CPTR Computer</span>
+          <span className="terminal-machine">{machineLabel}</span>
           <span className="terminal-status" data-state={state} role="status" aria-live="polite">
             <span className="state-dot" aria-hidden="true" />
             <span>{state.toUpperCase()}</span>
@@ -163,13 +231,14 @@ export function TerminalView({
         onScroll={onScroll}
         tabIndex={0}
         aria-label="Live terminal output"
-        aria-live="polite"
-        aria-relevant="additions text"
+        aria-live="off"
       >
-        {rows.length ? rows.map((row) => <React.Fragment key={row.id}>
-          <span className={`terminal-line terminal-${row.tone}`}>{richTerminalText(row.text)}</span>{"\n"}
+        {hiddenRowCount > 0 && <span className="terminal-history-note">… {hiddenRowCount} earlier lines retained outside the render window{"\n"}</span>}
+        {visibleRows.length ? visibleRows.map((row) => <React.Fragment key={row.id}>
+          <span className={`terminal-line terminal-${row.tone}${row.effect === "overflow" ? " term-overflow" : ""}`}>{richTerminalText(row.text)}</span>{"\n"}
         </React.Fragment>) : <>Terminal UI ready.{"\n"}Waiting for terminal stream…</>}
       </pre>
+      {!follow && <button className="terminal-latest" type="button" onClick={() => setFollow(true)}>Latest</button>}
     </section>
 
     <footer className="terminal-footer">

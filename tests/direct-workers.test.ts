@@ -14,7 +14,7 @@ import {
 import { DirectWorkersView } from "../web/src/direct-workers-view.js";
 
 
-test("direct worker activity creates and updates a compact worker lane without terminal spam", () => {
+test("direct worker activity keeps worker state and mirrors concise progress into the single terminal", () => {
   const started: DirectWorkerActivity = {
     event_id: "worker-start",
     timestamp: "2026-08-28T00:00:00Z",
@@ -51,7 +51,11 @@ test("direct worker activity creates and updates a compact worker lane without t
   assert.equal(second.workers.dcw_backend?.summary, "194 tests passed");
   assert.equal(second.workers.dcw_backend?.changedFileCount, 3);
   assert.deepEqual(second.workers.dcw_backend?.recentCommandIds, ["cmd-1"]);
-  assert.equal(second.transcript.length, 0, "worker status events must not flood the terminal transcript");
+  assert.equal(second.transcript.length, 2);
+  assert.equal(second.transcript[0]?.text, "[worker:Backend] Running backend tests");
+  assert.equal(second.transcript[0]?.tone, "system");
+  assert.equal(second.transcript[1]?.text, "[worker:Backend] 194 tests passed");
+  assert.equal(second.transcript[1]?.tone, "success");
   assert.equal(second.workers.dcw_backend?.activity.length, 2);
 });
 

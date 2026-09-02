@@ -21,7 +21,7 @@ test("publishes a bounded CPTR update manifest for the current MCP contract", ()
   assert.equal(CPTR_PLUGIN_VERSION, CPTR_APP_VERSION);
   assert.equal(CPTR_PLUGIN_SCHEMA_REVISION, CPTR_APP_VERSION);
   assert.equal(MCP_CONTRACT_VERSION, CPTR_APP_VERSION);
-  assert.equal(MCP_CONTRACT_TOOL_COUNT, 63);
+  assert.equal(MCP_CONTRACT_TOOL_COUNT, 70);
   assert.equal(manifest.version, CPTR_PLUGIN_VERSION);
   assert.equal(manifest.contract_version, MCP_CONTRACT_VERSION);
   assert.equal(manifest.tool_count, MCP_CONTRACT_TOOL_COUNT);

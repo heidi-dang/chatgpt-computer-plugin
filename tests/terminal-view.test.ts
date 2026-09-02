@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { TerminalView } from "../web/src/terminal-view.js";
+import { TerminalView, normalizeTerminalText } from "../web/src/terminal-view.js";
 
 test("default widget matches the ChatGPT Terminal live surface", () => {
   const html = renderToStaticMarkup(React.createElement(TerminalView, {
@@ -19,9 +19,11 @@ test("default widget matches the ChatGPT Terminal live surface", () => {
       timestamp: "2026-09-02T00:00:01Z",
       tone: "success",
       text: "PASS 12 tests",
+      effect: "overflow",
     }],
     status: "RUNNING",
     connection: "live",
+    machineLabel: "CPTR Computer",
     targetLabel: "task · task-1",
     canStop: true,
     onStop: () => {},
@@ -45,7 +47,7 @@ test("default widget matches the ChatGPT Terminal live surface", () => {
   assert.match(html, /term-path/);
   assert.match(html, /term-number/);
   assert.match(html, /term-success/);
-  assert.equal(html.includes("term-overflow"), false);
+  assert.match(html, /term-overflow/);
   assert.equal(html.includes("terminal-seq"), false);
   assert.equal(html.includes(">Stop<"), false);
   assert.equal(html.includes(">Copy<"), false);
@@ -55,12 +57,17 @@ test("default widget matches the ChatGPT Terminal live surface", () => {
   assert.equal(html.includes("›_"), false);
 });
 
+test("terminal text normalization matches the ChatGPT Terminal control-byte contract", () => {
+  assert.equal(normalizeTerminalText("\u001b[32mgreen\u001b[0m\r\nnext\b!"), "green\nnex!");
+  assert.equal(normalizeTerminalText("\u001b]0;title\u0007prompt\rprogress"), "prompt\nprogress");
+});
+
 test("terminal empty state uses the reference waiting transcript without synthetic commands", () => {
   const html = renderToStaticMarkup(React.createElement(TerminalView, {
     rows: [],
     status: "READY",
-    connection: "activity feed ready",
-    targetLabel: "Ready for real CPTR activity",
+    connection: "connecting terminal session",
+    targetLabel: "Waiting for terminal session…",
     canStop: false,
     onStop: () => {},
     onCopy: () => {},
@@ -69,8 +76,10 @@ test("terminal empty state uses the reference waiting transcript without synthet
   }));
 
   assert.match(html, /Terminal UI ready\./);
+  assert.match(html, /Connecting to computer/);
+  assert.match(html, /Waiting for terminal session…/);
   assert.match(html, /Waiting for terminal stream…/);
-  assert.match(html, /SSE OFFLINE/);
+  assert.match(html, /SSE CONNECTING/);
   assert.equal(html.includes("$ "), false);
   assert.equal(html.includes("mock"), false);
   assert.equal(html.includes("terminal-empty"), false);
@@ -105,17 +114,18 @@ test("terminal CSS preserves the reference desktop and mobile geometry", () => {
 
   assert.match(css, /\.terminal-workbench\s*\{[^}]*width:\s*100%[^}]*margin:\s*0[^}]*padding:\s*0/);
   assert.doesNotMatch(css, /\.terminal-workbench\s*\{[^}]*max-width:/);
-  assert.match(css, /\.terminal-shell\s*\{[\s\S]*grid-template-rows:\s*auto minmax\(260px, 1fr\) auto/);
-  assert.match(css, /\.terminal-shell\s*\{[\s\S]*min-height:\s*380px/);
+  assert.match(css, /\.terminal-shell\s*\{[\s\S]*grid-template-rows:\s*auto minmax\(140px, 1fr\) auto/);
+  assert.match(css, /\.terminal-shell\s*\{[\s\S]*min-height:\s*260px/);
   assert.match(css, /\.terminal-shell\s*\{[\s\S]*border-radius:\s*20px/);
-  assert.match(css, /\.terminal-output\s*\{[\s\S]*min-height:\s*254px/);
+  assert.match(css, /\.terminal-output\s*\{[\s\S]*min-height:\s*134px/);
   assert.match(css, /\.terminal-output\s*\{[\s\S]*font-size:\s*12px/);
   assert.match(css, /\.terminal-output\s*\{[\s\S]*line-height:\s*1\.34/);
-  assert.equal(css.includes(".term-overflow"), false);
-  assert.equal(css.includes("@keyframes overflow"), false);
+  assert.match(css, /\.term-overflow\s*\{[^}]*animation:\s*overflow \.18s steps\(2, end\)/);
+  assert.match(css, /@keyframes overflow/);
+  assert.match(css, /\.terminal-latest\s*\{/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]*min-height:\s*340px/);
-  assert.match(css, /@media \(max-width: 390px\)[\s\S]*min-height:\s*320px/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*min-height:\s*240px/);
+  assert.match(css, /@media \(max-width: 390px\)[\s\S]*min-height:\s*220px/);
   assert.equal(css.includes("82vh"), false);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.terminal-output\s*\{[\s\S]*font-size:\s*11\.5px/);
   assert.match(css, /@media \(max-width: 390px\)[\s\S]*\.terminal-output\s*\{\s*font-size:\s*11px/);
@@ -130,11 +140,23 @@ test("Workbench reports intrinsic height through both ChatGPT host sizing paths 
 
   assert.match(source, /new ResizeObserver\(schedule\)/);
   assert.match(source, /window\.matchMedia\("\(max-width: 390px\)"\)/);
-  assert.match(source, /\? 320/);
-  assert.match(source, /\? 340/);
-  assert.match(source, /: 380/);
+  assert.match(source, /\? 220/);
+  assert.match(source, /\? 240/);
+  assert.match(source, /: 260/);
   assert.match(source, /notifyIntrinsicHeight\?\.\(height\)/);
   assert.match(source, /method: "ui\/notifications\/size-changed"/);
   assert.match(source, /params: \{ height \}/);
   assert.doesNotMatch(source, /requestHostDisplayMode\(hostBridge\(\), "pip"\)[\s\S]*autoPinAttempted/);
+  assert.doesNotMatch(source, /hasWorkers\s*\?\s*<DirectWorkersView/);
+  assert.match(source, /"connecting terminal session"/);
+  assert.match(source, /"Waiting for terminal session…"/);
+});
+
+test("terminal view bounds rendered DOM rows and uses a dedicated connection live region", () => {
+  const source = readFileSync(new URL("../web/src/terminal-view.tsx", import.meta.url), "utf8");
+  assert.match(source, /MAX_RENDERED_ROWS\s*=\s*600/);
+  assert.match(source, /rows\.slice\(rows\.length - MAX_RENDERED_ROWS\)/);
+  assert.match(source, /className="terminal-latest"/);
+  assert.match(source, /aria-live="off"/);
+  assert.match(source, /terminal-status[^\n]*role="status" aria-live="polite"/);
 });

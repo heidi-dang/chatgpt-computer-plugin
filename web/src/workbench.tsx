@@ -16,7 +16,6 @@ import {
   type WorkbenchState,
 } from "./state.js";
 import { requestHostDisplayMode, type DisplayModeBridge } from "./display-mode.js";
-import { DirectWorkersView, type DirectWorkerTab } from "./direct-workers-view.js";
 import { TerminalView } from "./terminal-view.js";
 import { PluginUpdateCenter } from "./plugin-update.js";
 import { CPTR_APP_VERSION } from "./version.js";
@@ -93,10 +92,10 @@ function useWorkbenchAutoSize() {
     const report = () => {
       frame = undefined;
       const minimumHeight = window.matchMedia("(max-width: 390px)").matches
-        ? 320
+        ? 220
         : window.matchMedia("(max-width: 560px)").matches
-          ? 340
-          : 380;
+          ? 240
+          : 260;
       const height = Math.ceil(Math.max(
         minimumHeight,
         document.documentElement.scrollHeight,
@@ -167,6 +166,8 @@ function usePromptActivity(
       if (event.sequence <= cursor.current) return;
       cursor.current = event.sequence;
       if (event.type === "mcp.tool") {
+        const toolName = typeof event.payload?.tool_name === "string" ? event.payload.tool_name : "";
+        if (toolName === "cptr_open_live_workbench" || toolName === "cptr_render_live_terminal") return;
         setState((current) => appendMcpToolActivity(current, {
           event_id: event.event_id,
           timestamp: event.timestamp,
@@ -538,44 +539,16 @@ function useLiveSession(
 }
 
 function targetLabel(meta: LiveMetadata | null): string {
-  if (!meta?.targetType || !meta.targetId) return "Ready for real CPTR activity";
+  if (!meta?.targetType || !meta.targetId) return "Waiting for terminal session…";
   const id = meta.targetId.length > 34
     ? `${meta.targetId.slice(0, 16)}…${meta.targetId.slice(-10)}`
     : meta.targetId;
   return `${meta.targetType} · ${id}`;
 }
 
-function structuredToolResult(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  const record = value as Record<string, unknown>;
-  const structured = record.structuredContent;
-  if (structured && typeof structured === "object" && !Array.isArray(structured)) {
-    return structured as Record<string, unknown>;
-  }
-  const result = record.result;
-  if (result && typeof result === "object" && !Array.isArray(result)) {
-    return structuredToolResult(result);
-  }
-  return record;
-}
-
-function formatGitStatus(value: Record<string, unknown>): string {
-  const files = Array.isArray(value.files) ? value.files : [];
-  if (!files.length) return "No changed files.";
-  return files.map((item) => {
-    if (!item || typeof item !== "object" || Array.isArray(item)) return "";
-    const record = item as Record<string, unknown>;
-    return `${String(record.status ?? "changed").padEnd(10)} ${String(record.path ?? "")}`.trimEnd();
-  }).filter(Boolean).join("\n");
-}
-
 function OwnedWorkbench() {
   const [state, setState] = useState(initialWorkbenchState);
   const [actionStatus, setActionStatus] = useState("");
-  const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
-  const [selectedWorkerTab, setSelectedWorkerTab] = useState<DirectWorkerTab>("activity");
-  const [workerChanges, setWorkerChanges] = useState("");
-  const [workerTerminal, setWorkerTerminal] = useState("");
   const callTool = useMcpBridge();
   const promptMetadata = findPromptMetadata(hostBridge()?.toolResponseMetadata);
   const liveStreamingEnabled = promptMetadata?.streamingEnabled === true;
@@ -583,29 +556,13 @@ function OwnedWorkbench() {
     ? new URL("/plugin/update", promptMetadata.streamUrl).toString()
     : undefined;
   const [meta, setMeta] = useState<LiveMetadata | null>(null);
-  const promptConnection = usePromptActivity(setMeta, setState, liveStreamingEnabled);
+  usePromptActivity(setMeta, setState, liveStreamingEnabled);
   const targetConnection = useLiveSession(meta, setMeta, setState, liveStreamingEnabled);
-  const hasWorkers = state.workerOrder.length > 0;
-  const connection = hasWorkers ? promptConnection : meta?.targetId ? targetConnection : promptConnection;
-  const selectedWorker = selectedWorkerId ? state.workers[selectedWorkerId] : undefined;
+  const connection = meta?.targetId ? targetConnection : "connecting terminal session";
   const visibleTarget = useRef<string | null>(null);
   const isCommand = meta?.targetType === "command" && !!meta.targetId && !!meta.workspaceId;
   const canControl = !!meta?.targetType && ["RUNNING", "WORKING", "CONNECTING", "APPROVAL_REQUIRED"].includes(state.status);
-  const displayStatus = meta?.targetType && meta.targetId
-    ? state.status
-    : state.transcript.length ? "ACTIVE" : "READY";
-
-  useEffect(() => {
-    if (!state.workerOrder.length) return;
-    if (selectedWorkerId && state.workers[selectedWorkerId]) return;
-    setSelectedWorkerId(state.workerOrder[0] ?? null);
-  }, [selectedWorkerId, state.workerOrder, state.workers]);
-
-  useEffect(() => {
-    setWorkerChanges("");
-    setWorkerTerminal("");
-    setSelectedWorkerTab("activity");
-  }, [selectedWorkerId]);
+  const displayStatus = meta?.targetType && meta.targetId ? state.status : "CONNECTING";
 
   useEffect(() => {
     const identity = workbenchTargetIdentity(meta?.targetType, meta?.targetId, meta?.workspaceId);
@@ -633,62 +590,6 @@ function OwnedWorkbench() {
       setActionStatus("stop requested");
     } catch {
       setActionStatus("stop request failed");
-    }
-  };
-
-  const refreshWorkerChanges = async () => {
-    if (!selectedWorker?.workspaceId) return;
-    setActionStatus("refreshing worker changes…");
-    try {
-      const value = await callTool("cptr_code_get_git_status", {
-        workspace_id: selectedWorker.workspaceId,
-        worker_id: selectedWorker.workerId,
-      });
-      setWorkerChanges(formatGitStatus(structuredToolResult(value)));
-      setActionStatus("worker changes refreshed");
-    } catch {
-      setActionStatus("could not refresh worker changes");
-    }
-  };
-
-  const refreshWorkerTerminal = async () => {
-    if (!selectedWorker?.workspaceId) return;
-    const commandId = selectedWorker.activeCommandIds[0]
-      ?? selectedWorker.recentCommandIds[selectedWorker.recentCommandIds.length - 1];
-    if (!commandId) {
-      setWorkerTerminal("No command has run in this worker yet.");
-      return;
-    }
-    setActionStatus("loading recent command tail…");
-    try {
-      const value = await callTool("cptr_code_get_command", {
-        workspace_id: selectedWorker.workspaceId,
-        worker_id: selectedWorker.workerId,
-        command_id: commandId,
-        offset: 0,
-        wait_seconds: 0,
-        tail_bytes: 32_768,
-      });
-      const result = structuredToolResult(value);
-      setWorkerTerminal(typeof result.output === "string" ? result.output : "No command output available.");
-      setActionStatus("recent command tail loaded");
-    } catch {
-      setActionStatus("could not load command tail");
-    }
-  };
-
-  const stopWorkerCommand = async () => {
-    if (!selectedWorker?.workspaceId || !selectedWorker.activeCommandIds.length) return;
-    setActionStatus("requesting worker command stop…");
-    try {
-      await callTool("cptr_code_cancel_command", {
-        workspace_id: selectedWorker.workspaceId,
-        worker_id: selectedWorker.workerId,
-        command_id: selectedWorker.activeCommandIds[0],
-      });
-      setActionStatus("worker command stop requested");
-    } catch {
-      setActionStatus("worker command stop failed");
     }
   };
 
@@ -725,30 +626,13 @@ function OwnedWorkbench() {
 
   const updateCenter = <PluginUpdateCenter callTool={callTool} manifestUrl={updateManifestUrl} onStatus={setActionStatus} />;
 
-  return <main className="terminal-workbench" aria-label="CPTR live workbench">
-    {hasWorkers ? <DirectWorkersView
-      workers={state.workers}
-      workerOrder={state.workerOrder}
-      selectedWorkerId={selectedWorkerId}
-      selectedTab={selectedWorkerTab}
-      connection={connection}
-      actionStatus={actionStatus}
-      changesText={workerChanges}
-      terminalText={workerTerminal}
-      onSelectWorker={setSelectedWorkerId}
-      onSelectTab={setSelectedWorkerTab}
-      onRefreshChanges={() => void refreshWorkerChanges()}
-      onRefreshTerminal={() => void refreshWorkerTerminal()}
-      onStopCommand={() => void stopWorkerCommand()}
-      canStopCommand={Boolean(selectedWorker?.activeCommandIds.length)}
-      onPin={() => void pin()}
-      onExpand={() => void expand()}
-      updateCenter={updateCenter}
-    /> : <TerminalView
+  return <main className="terminal-workbench" aria-label="CPTR live terminal">
+    <TerminalView
       rows={state.transcript}
       updateCenter={updateCenter}
       status={displayStatus}
       connection={connection}
+      machineLabel={meta?.targetId ? "CPTR Computer" : "Connecting to computer"}
       targetLabel={targetLabel(meta)}
       actionStatus={actionStatus}
       canStop={canControl}
@@ -756,7 +640,7 @@ function OwnedWorkbench() {
       onCopy={() => void copyTranscript()}
       onPin={() => void pin()}
       onExpand={() => void expand()}
-    />}
+    />
   </main>;
 }
 

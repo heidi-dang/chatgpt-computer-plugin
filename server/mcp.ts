@@ -37,6 +37,9 @@ import {
   directWorkersIntegrateSchema,
   directWorkerCloseSchema,
   codingCommandCancelSchema,
+  codingCommandInputSchema,
+  codingCommandResizeSchema,
+  codingCommandSignalSchema,
   codingCommandSchema,
   codingCommandStatusSchema,
   codingDeleteSchema,
@@ -91,6 +94,10 @@ import {
   taskReviewSchema,
   gitStatusSchema,
   gitDiffSchema,
+  lspDiscoverSchema,
+  lspStartSchema,
+  lspRequestSchema,
+  lspStopSchema,
   readManyFilesSchema,
   applyEditsSchema,
 } from "./schemas/tools.js";
@@ -339,6 +346,10 @@ const directCommandOutputSchema = {
   duration_ms: z.number().int().nonnegative(),
   output_truncated: z.boolean(),
   timed_out: z.boolean(),
+  pty: z.boolean().optional(),
+  rows: z.number().int().optional(),
+  cols: z.number().int().optional(),
+  recovered: z.boolean().optional(),
 };
 
 const autonomousSummaryOutputSchema = {
@@ -1893,6 +1904,151 @@ export function createMcpServer(
         "cptr_code_cancel_command",
       );
     },
+  );
+
+  server.registerTool(
+    "cptr_code_send_input",
+    {
+      title: "Send stdin to a running direct-coding command",
+      description:
+        "Send bounded UTF-8 stdin to a running command. Use PTY mode for interactive shells and terminal applications.",
+      inputSchema: codingCommandInputSchema,
+      outputSchema: directCommandOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) => {
+      const command = await client.sendCodingCommandInput(input);
+      return input.worker_id
+        ? activityResult({ ...command, workspace_id: input.workspace_id }, "cptr_code_send_input")
+        : workbenchResult(
+            { ...command, workspace_id: input.workspace_id },
+            { targetType: "command", targetId: input.command_id, workspaceId: input.workspace_id },
+            "cptr_code_send_input",
+          );
+    },
+  );
+
+  server.registerTool(
+    "cptr_code_resize_command",
+    {
+      title: "Resize a running PTY command",
+      description:
+        "Resize the rows and columns of a running direct-coding command that was started with pty=true.",
+      inputSchema: codingCommandResizeSchema,
+      outputSchema: directCommandOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) => {
+      const command = await client.resizeCodingCommand(input);
+      return input.worker_id
+        ? activityResult({ ...command, workspace_id: input.workspace_id }, "cptr_code_resize_command")
+        : workbenchResult(
+            { ...command, workspace_id: input.workspace_id },
+            { targetType: "command", targetId: input.command_id, workspaceId: input.workspace_id },
+            "cptr_code_resize_command",
+          );
+    },
+  );
+
+  server.registerTool(
+    "cptr_code_signal_command",
+    {
+      title: "Signal a running direct-coding command",
+      description:
+        "Send interrupt, terminate, or kill to a running command. PTY interrupt behaves like Ctrl+C; termination applies to the owned process tree.",
+      inputSchema: codingCommandSignalSchema,
+      outputSchema: directCommandOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) => {
+      const command = await client.signalCodingCommand(input);
+      return input.worker_id
+        ? activityResult({ ...command, workspace_id: input.workspace_id }, "cptr_code_signal_command")
+        : workbenchResult(
+            { ...command, workspace_id: input.workspace_id },
+            { targetType: "command", targetId: input.command_id, workspaceId: input.workspace_id },
+            "cptr_code_signal_command",
+          );
+    },
+  );
+
+  server.registerTool(
+    "cptr_lsp_discover",
+    {
+      title: "Discover configured language servers",
+      description:
+        "Discover administrator-configured language servers that are installed for the selected workspace. This never executes project code.",
+      inputSchema: lspDiscoverSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        servers: z.array(z.object({ server_id: z.string(), available: z.boolean(), executable: z.string() })),
+      },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.discoverLsp(input), "cptr_lsp_discover"),
+  );
+
+  server.registerTool(
+    "cptr_lsp_start",
+    {
+      title: "Start a workspace language server",
+      description:
+        "Start one administrator-configured LSP server inside the authorized workspace root. CPTR initializes it and returns an owned opaque lsp_id.",
+      inputSchema: lspStartSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        lsp_id: z.string(),
+        server_id: z.string(),
+        root: z.string(),
+        status: z.string(),
+        pid: z.number().int(),
+        capabilities: z.record(z.string(), z.unknown()),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.startLsp(input), "cptr_lsp_start"),
+  );
+
+  server.registerTool(
+    "cptr_lsp_request",
+    {
+      title: "Send a JSON-RPC request to an owned language server",
+      description:
+        "Send one bounded LSP JSON-RPC request to an owned workspace-scoped language server, including hover, definition, references, symbols, completion, or rename-capability requests supported by that server.",
+      inputSchema: lspRequestSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        lsp_id: z.string(),
+        response: z.record(z.string(), z.unknown()),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.requestLsp(input), "cptr_lsp_request"),
+  );
+
+  server.registerTool(
+    "cptr_lsp_stop",
+    {
+      title: "Stop an owned workspace language server",
+      description:
+        "Gracefully shut down and dispose an owned LSP process inside the selected workspace.",
+      inputSchema: lspStopSchema,
+      outputSchema: {
+        workspace_id: z.string(),
+        lsp_id: z.string(),
+        server_id: z.string(),
+        status: z.string(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.stopLsp(input), "cptr_lsp_stop"),
   );
 
   server.registerTool(

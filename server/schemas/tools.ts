@@ -316,6 +316,10 @@ export const codingCommandSchema = {
   cwd: z.string().min(1).max(1_000).default("."),
   wait_seconds: z.number().int().min(0).max(60).default(0),
   allow_network: z.boolean().default(false),
+  pty: z.boolean().default(false).describe("Run the command in a real PTY so stdin, resize, and terminal control signals are available."),
+  rows: z.number().int().min(5).max(300).default(24),
+  cols: z.number().int().min(20).max(500).default(80),
+  stdin: z.string().max(65_536).optional().describe("Optional initial stdin sent immediately after the command session starts."),
   workbench_session_id: workbenchSessionId.optional(),
   idempotency_key: z.string().min(1).max(200).optional(),
 };
@@ -345,6 +349,55 @@ export const codingCommandCancelSchema = {
   workspace_id: z.string().min(1).max(200),
   ...optionalWorkerTargetSchema,
   command_id: z.string().min(1).max(200),
+};
+
+export const codingCommandInputSchema = {
+  workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
+  command_id: z.string().min(1).max(200),
+  data: z.string().max(65_536),
+};
+
+export const codingCommandResizeSchema = {
+  workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
+  command_id: z.string().min(1).max(200),
+  rows: z.number().int().min(5).max(300),
+  cols: z.number().int().min(20).max(500),
+};
+
+export const codingCommandSignalSchema = {
+  workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
+  command_id: z.string().min(1).max(200),
+  signal: z.enum(["interrupt", "terminate", "kill"]),
+};
+
+export const lspDiscoverSchema = {
+  workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
+};
+
+export const lspStartSchema = {
+  workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
+  server_id: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
+  root: z.string().min(1).max(1_000).default("."),
+};
+
+export const lspRequestSchema = {
+  workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
+  lsp_id: z.string().min(1).max(80),
+  method: z.string().min(1).max(256),
+  params: z.unknown().optional(),
+  timeout_seconds: z.number().min(0.1).max(60).default(15),
+};
+
+export const lspStopSchema = {
+  workspace_id: z.string().min(1).max(200),
+  ...optionalWorkerTargetSchema,
+  lsp_id: z.string().min(1).max(80),
 };
 
 export const sshHostsSchema = {

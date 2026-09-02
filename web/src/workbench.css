@@ -12,6 +12,7 @@
   --tw: #f0f6fc;
   --tk: #484f58;
 }
+:root[data-theme="light"] { --tr:#cf222e; --tg:#1a7f37; --ty:#9a6700; --tb:#0969da; --tm:#8250df; --tc:#1b7c83; --tw:#24292f; --tk:#57606a; }
 
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; width: 100%; min-width: 0; min-height: 100%; background: transparent; }
@@ -29,9 +30,9 @@ button:focus-visible, .terminal-output:focus-visible { outline: 2px solid #7fb8f
 .terminal-shell {
   position: relative;
   display: grid;
-  grid-template-rows: auto minmax(260px, 1fr) auto;
+  grid-template-rows: auto minmax(140px, 1fr) auto;
   width: 100%;
-  min-height: 380px;
+  min-height: 260px;
   overflow: hidden;
   isolation: isolate;
   color: #f0f6fc;
@@ -111,7 +112,7 @@ button:focus-visible, .terminal-output:focus-visible { outline: 2px solid #7fb8f
 
 .terminal-frame {
   position: relative;
-  min-height: 260px;
+  min-height: 140px;
   padding: 11px 10px 9px 11px;
   overflow: hidden;
   background: rgba(3, 5, 8, 0.72);
@@ -119,7 +120,7 @@ button:focus-visible, .terminal-output:focus-visible { outline: 2px solid #7fb8f
 .terminal-output {
   width: 100%;
   height: 100%;
-  min-height: 254px;
+  min-height: 134px;
   margin: 0;
   overflow: auto;
   color: #d7e0ea;
@@ -154,6 +155,24 @@ button:focus-visible, .terminal-output:focus-visible { outline: 2px solid #7fb8f
 .term-black { color: var(--tk); }
 .term-command, .term-error, .term-bold { font-weight: 700; }
 .term-comment { font-style: italic; }
+.term-overflow { position: relative; animation: overflow .18s steps(2, end); }
+@keyframes overflow { from { top: 1em; opacity: .45; } to { top: 0; opacity: 1; } }
+.terminal-history-note { color: #484f58; font-style: italic; }
+.terminal-latest {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  z-index: 2;
+  padding: 4px 8px;
+  border: 1px solid rgba(121, 192, 255, .22);
+  border-radius: 999px;
+  color: #9da7b3;
+  background: rgba(9, 13, 18, .92);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, .28);
+  font: 750 9px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  letter-spacing: .06em;
+}
+.terminal-latest:hover { color: #f0f6fc; border-color: rgba(121, 192, 255, .42); background: rgba(16, 21, 29, .96); }
 
 .terminal-footer {
   display: flex;
@@ -415,7 +434,7 @@ button.danger { border-color: #65404a; color: #efc2c2; background: #28181e; }
 @media (max-width: 560px) {
   .terminal-shell {
     grid-template-rows: auto minmax(0, 1fr) auto;
-    min-height: 340px;
+    min-height: 240px;
     max-height: none;
     border-radius: 16px;
   }
@@ -427,11 +446,12 @@ button.danger { border-color: #65404a; color: #efc2c2; background: #28181e; }
   .terminal-frame { min-height: 0; padding: 9px 8px 7px; }
   .terminal-output { min-height: 0; font-size: 11.5px; line-height: 1.32; }
   .terminal-footer { gap: 8px; min-height: 28px; padding-inline: 10px; font-size: 8px; }
+  .terminal-latest { right: 11px; bottom: 10px; }
   .action-status { width: 100%; }
 }
 
 @media (max-width: 390px) {
-  .terminal-shell { min-height: 320px; border-radius: 14px; }
+  .terminal-shell { min-height: 220px; border-radius: 14px; }
   .terminal-machine-row { gap: 8px; }
   .terminal-status { max-width: 92px; }
   .terminal-frame { padding-inline: 7px; }

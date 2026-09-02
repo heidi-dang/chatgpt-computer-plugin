@@ -1,7 +1,7 @@
 import { CPTR_APP_VERSION } from "./version.js";
 
 export const MCP_CONTRACT_VERSION = CPTR_APP_VERSION;
-export const MCP_CONTRACT_TOOL_COUNT = 63;
+export const MCP_CONTRACT_TOOL_COUNT = 70;
 export const CPTR_PLUGIN_VERSION = CPTR_APP_VERSION;
 export const CPTR_PLUGIN_SCHEMA_REVISION = CPTR_APP_VERSION;
 
@@ -32,10 +32,13 @@ export function currentPluginUpdateManifest(env: NodeJS.ProcessEnv = process.env
     contract_version: MCP_CONTRACT_VERSION,
     tool_count: MCP_CONTRACT_TOOL_COUNT,
     release_sha: env.GIT_COMMIT_SHA ?? env.RAILWAY_GIT_COMMIT_SHA ?? env.CPTR_WORKBENCH_BUILD_ID ?? null,
-    released_at: "2026-08-28",
-    summary: "CPTR Computer v1.2.0 introduces ChatGPT-native parallel Direct Coding Workers and FDX-first repository intelligence, delivering faster isolated execution, clearer multi-worker visibility, and safer integration without delegating reasoning away from ChatGPT.",
+    released_at: "2026-09-02",
+    summary: "CPTR Computer v1.3.0 closes the dedicated-terminal parity gap with first-class PTY controls, LSP lifecycle access, structured stdout/stderr streaming, bounded burst backpressure, and durable command transcript recovery while preserving FDX-first Direct Coding.",
     changes: [
-      `Releases CPTR Computer ${CPTR_APP_VERSION} with 63 core control tools and 69 total registered MCP actions including FDX, browser, SSH, and update auxiliaries.`,
+      `Releases CPTR Computer ${CPTR_APP_VERSION} with 70 core control tools and 76 total registered MCP actions including PTY controls, LSP, FDX, browser, SSH, and update auxiliaries.`,
+      "Adds first-class PTY command controls for initial stdin, ongoing stdin, resize, Ctrl+C-style interrupt, terminate, and process-tree kill while preserving bounded Direct Coding policy.",
+      "Adds workspace-scoped LSP discovery, start, bounded JSON-RPC requests, and graceful stop with administrator-controlled server registries and owner/workspace isolation.",
+      "Preserves stdout/stderr stream identity for non-PTY commands, adds bounded secondary burst buffering and pressure telemetry, and recovers completed or interrupted command transcripts from durable JSONL after registry/process restart.",
       "Adds six model-free Direct Coding Worker lifecycle actions and optional worker targeting across direct file, workspace-intelligence, Git, test, and command tools.",
       "Adds one structured cptr_fdx_intelligence action as the preferred first repository-intelligence entry point, with native FDX protocol negotiation, persistent daemon reuse, worker-aware worktree binding, bounded/redacted output, and normal CPTR fallback semantics.",
       "Runs worker commands without raw live-terminal binding; lightweight worker activity remains visible while terminal tails are loaded only on demand.",

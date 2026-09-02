@@ -193,6 +193,20 @@ test("renders sanitized terminal lifecycle rows and rejects duplicate sequences"
 });
 
 
+test("marks compact multi-line terminal batches for the safe Overflow effect without reordering text", () => {
+  const state = reduceWorkbenchEvent(initialWorkbenchState(), {
+    event_id: "overflow-batch",
+    sequence: 1,
+    timestamp: "2026-09-02T00:00:00Z",
+    type: "terminal.chunk",
+    payload: { command_id: "cmd-1", stream: "stdout", text: "PASS first\rconst second = 2\nthird" },
+  });
+
+  assert.deepEqual(state.transcript.map((row) => row.text), ["PASS first", "const second = 2", "third"]);
+  assert.deepEqual(state.transcript.map((row) => row.effect), ["overflow", "overflow", "overflow"]);
+});
+
+
 test("keeps command and tool status scoped below the task lifecycle", () => {
   const running = reduceWorkbenchEvent(initialWorkbenchState(), {
     event_id: "task-started",
