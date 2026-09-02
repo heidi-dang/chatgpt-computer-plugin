@@ -114,8 +114,10 @@ test("terminal CSS preserves the reference desktop and mobile geometry", () => {
 
   assert.match(css, /\.terminal-workbench\s*\{[^}]*width:\s*100%[^}]*margin:\s*0[^}]*padding:\s*0/);
   assert.doesNotMatch(css, /\.terminal-workbench\s*\{[^}]*max-width:/);
-  assert.match(css, /\.terminal-shell\s*\{[\s\S]*grid-template-rows:\s*auto minmax\(140px, 1fr\) auto/);
+  assert.match(css, /\.terminal-shell\s*\{[\s\S]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto/);
+  assert.match(css, /\.terminal-shell\s*\{[\s\S]*height:\s*clamp\(260px, 36vw, 360px\)/);
   assert.match(css, /\.terminal-shell\s*\{[\s\S]*min-height:\s*260px/);
+  assert.match(css, /\.terminal-shell\s*\{[\s\S]*max-height:\s*360px/);
   assert.match(css, /\.terminal-shell\s*\{[\s\S]*border-radius:\s*20px/);
   assert.match(css, /\.terminal-output\s*\{[\s\S]*min-height:\s*134px/);
   assert.match(css, /\.terminal-output\s*\{[\s\S]*font-size:\s*12px/);
@@ -143,10 +145,11 @@ test("Workbench reports intrinsic height through both ChatGPT host sizing paths 
   const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
 
   assert.match(source, /new ResizeObserver\(schedule\)/);
-  assert.match(source, /window\.matchMedia\("\(max-width: 390px\)"\)/);
-  assert.match(source, /\? 220/);
-  assert.match(source, /\? 240/);
-  assert.match(source, /: 260/);
+  assert.match(source, /document\.querySelector<HTMLElement>\("\.terminal-workbench"\)/);
+  assert.match(source, /getBoundingClientRect\(\)\.height/);
+  assert.doesNotMatch(source, /document\.documentElement\.scrollHeight/);
+  assert.doesNotMatch(source, /document\.body\.scrollHeight/);
+  assert.match(source, /observer\?\.observe\(workbench\)/);
   assert.match(source, /notifyIntrinsicHeight\?\.\(height\)/);
   assert.match(source, /method: "ui\/notifications\/size-changed"/);
   assert.match(source, /params: \{ height \}/);
