@@ -115,6 +115,7 @@ button:focus-visible, .terminal-output:focus-visible { outline: 2px solid #7fb8f
   min-height: 140px;
   padding: 11px 10px 9px 11px;
   overflow: hidden;
+  contain: layout paint style;
   background: rgba(3, 5, 8, 0.72);
 }
 .terminal-output {
@@ -123,6 +124,7 @@ button:focus-visible, .terminal-output:focus-visible { outline: 2px solid #7fb8f
   min-height: 134px;
   margin: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   color: #d7e0ea;
   background: transparent;
   scrollbar-width: thin;
@@ -155,8 +157,8 @@ button:focus-visible, .terminal-output:focus-visible { outline: 2px solid #7fb8f
 .term-black { color: var(--tk); }
 .term-command, .term-error, .term-bold { font-weight: 700; }
 .term-comment { font-style: italic; }
-.term-overflow { position: relative; animation: overflow .18s steps(2, end); }
-@keyframes overflow { from { top: 1em; opacity: .45; } to { top: 0; opacity: 1; } }
+.term-overflow { display: inline-block; max-width: 100%; position: relative; animation: overflow .18s steps(2, end); }
+@keyframes overflow { from { transform: translate3d(0, .9em, 0); opacity: .45; } to { transform: translate3d(0, 0, 0); opacity: 1; } }
 .terminal-history-note { color: #484f58; font-style: italic; }
 .terminal-latest {
   position: absolute;
@@ -434,8 +436,9 @@ button.danger { border-color: #65404a; color: #efc2c2; background: #28181e; }
 @media (max-width: 560px) {
   .terminal-shell {
     grid-template-rows: auto minmax(0, 1fr) auto;
-    min-height: 240px;
-    max-height: none;
+    height: clamp(220px, 62vw, 280px);
+    min-height: 220px;
+    max-height: 280px;
     border-radius: 16px;
   }
   .terminal-header { padding: 12px 12px 10px; }
@@ -451,7 +454,12 @@ button.danger { border-color: #65404a; color: #efc2c2; background: #28181e; }
 }
 
 @media (max-width: 390px) {
-  .terminal-shell { min-height: 220px; border-radius: 14px; }
+  .terminal-shell {
+    height: clamp(210px, 62vw, 244px);
+    min-height: 210px;
+    max-height: 244px;
+    border-radius: 14px;
+  }
   .terminal-machine-row { gap: 8px; }
   .terminal-status { max-width: 92px; }
   .terminal-frame { padding-inline: 7px; }
