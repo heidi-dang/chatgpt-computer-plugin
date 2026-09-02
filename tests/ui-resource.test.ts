@@ -50,9 +50,9 @@ test("publishes production-safe external assets and a loop-safe reload channel",
   assert.match(html, /__cptr\/dev\/workbench\.css/);
   assert.match(html, /__cptr\/dev\/reload/);
   assert.match(html, /build-42/);
-  assert.match(html, /min-height:760px/);
-  assert.match(html, /min-height:680px/);
-  assert.match(html, /min-height:640px/);
+  assert.match(html, /min-height:380px/);
+  assert.match(html, /min-height:340px/);
+  assert.match(html, /min-height:320px/);
   assert.match(html, /sessionStorage\.setItem/);
   assert.match(html, /encodeURIComponent\(current\)/);
   assert.match(html, /source\.close\(\);location\.reload\(\)/);

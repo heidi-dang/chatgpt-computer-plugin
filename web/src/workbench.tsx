@@ -93,10 +93,10 @@ function useWorkbenchAutoSize() {
     const report = () => {
       frame = undefined;
       const minimumHeight = window.matchMedia("(max-width: 390px)").matches
-        ? 640
+        ? 320
         : window.matchMedia("(max-width: 560px)").matches
-          ? 680
-          : 760;
+          ? 340
+          : 380;
       const height = Math.ceil(Math.max(
         minimumHeight,
         document.documentElement.scrollHeight,

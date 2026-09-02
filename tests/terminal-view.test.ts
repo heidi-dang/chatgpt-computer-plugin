@@ -105,16 +105,16 @@ test("terminal CSS preserves the reference desktop and mobile geometry", () => {
 
   assert.match(css, /\.terminal-workbench\s*\{[^}]*width:\s*100%[^}]*margin:\s*0[^}]*padding:\s*0/);
   assert.doesNotMatch(css, /\.terminal-workbench\s*\{[^}]*max-width:/);
-  assert.match(css, /\.terminal-shell\s*\{[\s\S]*grid-template-rows:\s*auto minmax\(520px, 1fr\) auto/);
-  assert.match(css, /\.terminal-shell\s*\{[\s\S]*min-height:\s*760px/);
+  assert.match(css, /\.terminal-shell\s*\{[\s\S]*grid-template-rows:\s*auto minmax\(260px, 1fr\) auto/);
+  assert.match(css, /\.terminal-shell\s*\{[\s\S]*min-height:\s*380px/);
   assert.match(css, /\.terminal-shell\s*\{[\s\S]*border-radius:\s*20px/);
-  assert.match(css, /\.terminal-output\s*\{[\s\S]*min-height:\s*508px/);
+  assert.match(css, /\.terminal-output\s*\{[\s\S]*min-height:\s*254px/);
   assert.match(css, /\.terminal-output\s*\{[\s\S]*font-size:\s*12px/);
   assert.match(css, /\.terminal-output\s*\{[\s\S]*line-height:\s*1\.34/);
   assert.match(css, /\.term-overflow\s*\{[\s\S]*animation:\s*overflow \.18s steps\(2,end\)/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]*min-height:\s*680px/);
-  assert.match(css, /@media \(max-width: 390px\)[\s\S]*min-height:\s*640px/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*min-height:\s*340px/);
+  assert.match(css, /@media \(max-width: 390px\)[\s\S]*min-height:\s*320px/);
   assert.equal(css.includes("82vh"), false);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.terminal-output\s*\{[\s\S]*font-size:\s*11\.5px/);
   assert.match(css, /@media \(max-width: 390px\)[\s\S]*\.terminal-output\s*\{\s*font-size:\s*11px/);
@@ -129,9 +129,9 @@ test("Workbench reports intrinsic height through both ChatGPT host sizing paths 
 
   assert.match(source, /new ResizeObserver\(schedule\)/);
   assert.match(source, /window\.matchMedia\("\(max-width: 390px\)"\)/);
-  assert.match(source, /\? 640/);
-  assert.match(source, /\? 680/);
-  assert.match(source, /: 760/);
+  assert.match(source, /\? 320/);
+  assert.match(source, /\? 340/);
+  assert.match(source, /: 380/);
   assert.match(source, /notifyIntrinsicHeight\?\.\(height\)/);
   assert.match(source, /method: "ui\/notifications\/size-changed"/);
   assert.match(source, /params: \{ height \}/);

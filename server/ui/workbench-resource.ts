@@ -5,9 +5,9 @@ export const WORKBENCH_RESOURCE_URI = "ui://cptr/live-workbench.html";
 const CRITICAL_TERMINAL_GEOMETRY = `<style>
 html,body,#root{margin:0;width:100%;min-width:0;min-height:100%;background:transparent}
 .terminal-workbench{width:100%;min-width:0;margin:0;padding:0}
-.terminal-shell{box-sizing:border-box;display:grid;grid-template-rows:auto minmax(520px,1fr) auto;width:100%;min-height:760px;overflow:hidden}
-@media(max-width:560px){.terminal-shell{grid-template-rows:auto minmax(0,1fr) auto;min-height:680px;max-height:none}}
-@media(max-width:390px){.terminal-shell{min-height:640px}}
+.terminal-shell{box-sizing:border-box;display:grid;grid-template-rows:auto minmax(260px,1fr) auto;width:100%;min-height:380px;overflow:hidden}
+@media(max-width:560px){.terminal-shell{grid-template-rows:auto minmax(0,1fr) auto;min-height:340px;max-height:none}}
+@media(max-width:390px){.terminal-shell{min-height:320px}}
 </style>`;
 
 const STATIC_TERMINAL_SHELL = `<main class="terminal-workbench" aria-label="CPTR live workbench">
