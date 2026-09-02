@@ -5,6 +5,10 @@ export type TrafficClient = {
   id: string;
   label: string;
   version: string | null;
+  session_name: string | null;
+  model: string | null;
+  workspace_id: string | null;
+  workspace_name: string | null;
 };
 
 export type McpTrafficErrorCode =
@@ -106,6 +110,40 @@ export function normalizeMcpClient(input: { name?: unknown; version?: unknown } 
   return {
     ...known,
     version: boundedText(input?.version, 64),
+    session_name: null,
+    model: null,
+    workspace_id: null,
+    workspace_name: null,
+  };
+}
+
+export function enrichMcpClientSession(
+  client: TrafficClient,
+  input: {
+    sessionId?: unknown;
+    sessionName?: unknown;
+    model?: unknown;
+    workspaceId?: unknown;
+    workspaceName?: unknown;
+  },
+): TrafficClient {
+  if (client.id !== "chatgpt" && !client.id.startsWith("chatgpt-session-")) return client;
+  const sessionId = boundedText(input.sessionId, 96);
+  if (!sessionId) return client;
+  const sessionName = boundedText(input.sessionName, 160) ?? client.session_name;
+  const model = boundedText(input.model, 120) ?? client.model;
+  const workspaceId = boundedText(input.workspaceId, 200) ?? client.workspace_id;
+  const workspaceName = boundedText(input.workspaceName, 160) ?? client.workspace_name;
+  const sessionSlug = slug(sessionId).slice(0, 96);
+  const label = boundedText(sessionName ? `ChatGPT · ${sessionName}` : "ChatGPT", 80) ?? "ChatGPT";
+  return {
+    ...client,
+    id: `chatgpt-session-${sessionSlug}`,
+    label,
+    session_name: sessionName,
+    model,
+    workspace_id: workspaceId,
+    workspace_name: workspaceName,
   };
 }
 
@@ -131,6 +169,10 @@ function safeClient(client: TrafficClient): TrafficClient {
     id: (boundedText(client.id, 128) ?? "unknown-mcp-client").toLowerCase(),
     label: boundedText(client.label, 80) ?? "Unknown MCP Client",
     version: boundedText(client.version, 64),
+    session_name: boundedText(client.session_name, 160),
+    model: boundedText(client.model, 120),
+    workspace_id: boundedText(client.workspace_id, 200),
+    workspace_name: boundedText(client.workspace_name, 160),
   };
 }
 

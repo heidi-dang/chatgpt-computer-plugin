@@ -2,13 +2,14 @@ import { randomUUID } from "node:crypto";
 import type { TrafficClient } from "./mcp-traffic.js";
 
 export type McpActivityPhase = "started" | "complete" | "failed";
+export type McpActivityClient = Pick<TrafficClient, "id" | "label" | "version">;
 
 export type McpActivityEvent = {
   version: 1;
   event_id: string;
   sequence: number;
   timestamp_ms: number;
-  client: TrafficClient;
+  client: McpActivityClient;
   session_id: string | null;
   request_id: string | null;
   correlation_id: string | null;
@@ -86,7 +87,7 @@ function boundedPayload(value: unknown): string | null {
   return trimmed ? trimmed.slice(0, 13_000) : null;
 }
 
-function safeClient(client: TrafficClient): TrafficClient {
+function safeClient(client: TrafficClient | McpActivityClient): McpActivityClient {
   return {
     id: (boundedText(client.id, 128) ?? "unknown-mcp-client").toLowerCase(),
     label: boundedText(client.label, 80) ?? "Unknown MCP Client",

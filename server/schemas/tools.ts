@@ -55,7 +55,9 @@ export const taskExecutionPolicySchema = z.object({
 const workbenchSessionId = z.string().regex(/^wbs_[A-Za-z0-9_-]{16,80}$/);
 
 export const openWorkbenchSessionSchema = {
-  session_name: z.string().min(1).max(160).optional(),
+  session_name: z.string().min(1).max(160).optional().describe(
+    "ChatGPT callers: use the exact current ChatGPT conversation title when the host exposes it. Otherwise use a concise prompt-derived Workbench session label; do not present that fallback as the host title.",
+  ),
   workspace_id: z.string().min(1).max(200).optional(),
   resume_session_id: workbenchSessionId.optional(),
   delegation_authorization: z.literal("allow:delegate").optional().describe(

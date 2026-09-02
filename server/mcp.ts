@@ -10,9 +10,11 @@ import {
 } from "./mcp-usage.js";
 import {
   McpTrafficEmitter,
+  enrichMcpClientSession,
   mcpRequestContext,
   normalizeMcpClient,
   normalizeTrafficErrorCode,
+  type McpRequestContextValue,
 } from "./mcp-traffic.js";
 import { LiveTicketStore, type LiveTarget } from "./live-tickets.js";
 import { PromptTerminalStore } from "./prompt-terminal.js";
@@ -512,6 +514,51 @@ export function createMcpServer(
     return typeof id === "string" && id ? id : undefined;
   };
 
+  const recordFrom = (value: unknown): Record<string, unknown> =>
+    value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+  const workspaceNameFor = async (workspaceId: string | null): Promise<string | null> => {
+    if (!workspaceId) return null;
+    try {
+      const workspaces = await client.listWorkspaces(false);
+      return workspaces.workspaces.find((workspace) => workspace.workspace_id === workspaceId)?.name ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  const applyTrafficIdentity = async (
+    context: McpRequestContextValue | undefined,
+    toolName: string,
+    inputValue: unknown,
+    model: string | null,
+    resultValue?: unknown,
+  ): Promise<void> => {
+    if (!context?.sessionId) return;
+    const inputRecord = recordFrom(inputValue);
+    const resultRecord = recordFrom(resultValue);
+    const workspaceId = typeof resultRecord.workspace_id === "string"
+      ? resultRecord.workspace_id
+      : typeof inputRecord.workspace_id === "string"
+        ? inputRecord.workspace_id
+        : context.client.workspace_id;
+    const workspaceName = workspaceId && workspaceId !== context.client.workspace_id
+      ? await workspaceNameFor(workspaceId)
+      : context.client.workspace_name;
+    const sessionName = toolName === "cptr_open_live_workbench" && typeof resultRecord.name === "string"
+      ? resultRecord.name
+      : typeof inputRecord.session_name === "string"
+        ? inputRecord.session_name
+        : context.client.session_name;
+    Object.assign(context.client, enrichMcpClientSession(context.client, {
+      sessionId: context.sessionId,
+      sessionName,
+      model,
+      workspaceId,
+      workspaceName,
+    }));
+  };
+
   const publishWorkerResult = (input: unknown, value: unknown, summary: string) => {
     const resultValue = terminalToolResult(value);
     const inputRecord = input && typeof input === "object" && !Array.isArray(input)
@@ -584,7 +631,8 @@ export function createMcpServer(
         const inputWorkerId = workerIdFrom(input);
         const trafficContext = mcpRequestContext.getStore();
         const trafficStartedAt = Date.now();
-        const activityClient = trafficContext?.client ?? normalizeMcpClient(undefined);
+        await applyTrafficIdentity(trafficContext, name, input, normalizedModel.reported);
+        let activityClient = trafficContext?.client ?? normalizeMcpClient(undefined);
         const activityArgumentsJson = terminalJson(input);
         const modelGeneratedArguments = trafficContext?.rawToolArguments ?? originalInput;
         const emitUsage = (status: "complete" | "error", returnedEnvelope: unknown) => {
@@ -668,6 +716,8 @@ export function createMcpServer(
           const value = await handler(...(args.length ? [input, ...args.slice(1)] : args));
           const activityDurationMs = Date.now() - trafficStartedAt;
           const terminalValue = terminalToolResult(value);
+          await applyTrafficIdentity(trafficContext, name, input, normalizedModel.reported, terminalValue);
+          activityClient = trafficContext?.client ?? activityClient;
           const activityResultJson = terminalJson(terminalValue);
           const valueRecord = value && typeof value === "object" && !Array.isArray(value)
             ? value as Record<string, unknown>
@@ -886,7 +936,7 @@ export function createMcpServer(
     {
       title: "Prepare CPTR Live Workbench context",
       description:
-        "Call this first whenever the user explicitly invokes CPTR. This is the sole CPTR UI-producing tool: it opens exactly one Live Terminal for the current prompt before any target exists. All later task, monitor, command, status, and render/bind calls are data-only and update this existing terminal instead of creating another widget.",
+        "Call this first whenever the user explicitly invokes CPTR. Set session_name to the exact current ChatGPT conversation title when the host exposes it; otherwise use a concise prompt-derived Workbench session label and never claim it is the host title. This is the sole CPTR UI-producing tool: it opens exactly one Live Terminal for the current prompt before any target exists. All later task, monitor, command, status, and render/bind calls are data-only and update this existing terminal instead of creating another widget.",
       inputSchema: openWorkbenchSessionSchema,
       outputSchema: {
         session_id: z.string(),

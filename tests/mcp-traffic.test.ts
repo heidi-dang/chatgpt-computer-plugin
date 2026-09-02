@@ -6,6 +6,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ComputerClient } from "../server/client/computer-client.js";
 import {
   McpTrafficEmitter,
+  enrichMcpClientSession,
   mcpRequestContext,
   normalizeMcpClient,
   normalizeTrafficErrorCode,
@@ -19,6 +20,10 @@ test("MCP traffic normalizes known clients and preserves safe unknown labels", (
     id: "chatgpt",
     label: "ChatGPT",
     version: "1",
+    session_name: null,
+    model: null,
+    workspace_id: null,
+    workspace_name: null,
   });
   assert.equal(normalizeMcpClient({ name: "Claude Desktop" }).label, "Claude");
   assert.equal(normalizeMcpClient({ name: "gemini-cli" }).label, "Gemini");
@@ -26,6 +31,111 @@ test("MCP traffic normalizes known clients and preserves safe unknown labels", (
   assert.equal(normalizeMcpClient({ name: "My Internal MCP Client" }).label, "My Internal MCP Client");
   assert.equal(normalizeMcpClient({ name: "x".repeat(200) }).label.length, 80);
   assert.equal(normalizeMcpClient(undefined).label, "Unknown MCP Client");
+});
+
+test("MCP traffic enriches ChatGPT transport sessions with truthful model, workspace, and session identity", () => {
+  const enriched = enrichMcpClientSession(normalizeMcpClient({ name: "ChatGPT", version: "1" }), {
+    sessionId: "9dc95a95-9cf1-4b9b-a417-aa0300aee123",
+    sessionName: "MCP topology identity + 10 recent requests",
+    model: "GPT-5.6 Sol",
+    workspaceId: "workspace-123",
+    workspaceName: "Desktop",
+  });
+
+  assert.equal(enriched.id, "chatgpt-session-9dc95a95-9cf1-4b9b-a417-aa0300aee123");
+  assert.equal(enriched.label, "ChatGPT · MCP topology identity + 10 recent requests");
+  assert.equal(enriched.session_name, "MCP topology identity + 10 recent requests");
+  assert.equal(enriched.model, "GPT-5.6 Sol");
+  assert.equal(enriched.workspace_id, "workspace-123");
+  assert.equal(enriched.workspace_name, "Desktop");
+
+  const unknown = enrichMcpClientSession(normalizeMcpClient({ name: "Claude" }), {
+    sessionId: "session-claude",
+    sessionName: "Must not rewrite another client",
+    model: "Claude",
+    workspaceId: "workspace-123",
+    workspaceName: "Desktop",
+  });
+  assert.equal(unknown.id, "claude");
+  assert.equal(unknown.session_name, null);
+});
+
+test("MCP tool wrapper emits the enriched ChatGPT session identity", async () => {
+  const delivered: McpTrafficEvent[][] = [];
+  const emitter = new McpTrafficEmitter({
+    env: { CPTR_MCP_TRAFFIC_PLUGIN_BATCH_SIZE: "10", CPTR_MCP_TRAFFIC_PLUGIN_FLUSH_MS: "10000" },
+    deliver: async (events) => {
+      delivered.push(events);
+    },
+  });
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async (input, init) => {
+      const url = String(input);
+      if (url.includes("/workspaces?include_unavailable=false")) {
+        return new Response(JSON.stringify({
+          workspaces: [{ workspace_id: "workspace-123", name: "Desktop", available: true }],
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      if (url.endsWith("/workbench-sessions") && init?.method === "POST") {
+        return new Response(JSON.stringify({
+          session_id: "wbs_session_00000001",
+          name: "MCP topology identity",
+          workspace_id: "workspace-123",
+          status: "OPEN",
+          active_target_type: null,
+          active_target_id: null,
+          active_workspace_id: null,
+          event_count: 0,
+          created_at: 1,
+          updated_at: 1,
+          last_event_at: null,
+          archived_at: null,
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({}), { status: 200, headers: { "Content-Type": "application/json" } });
+    },
+  });
+  const server = createMcpServer(computer, { traffic: emitter });
+  const sdkClient = new Client({ name: "ChatGPT", version: "1" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), sdkClient.connect(clientTransport)]);
+
+  const context: McpRequestContextValue = {
+    requestId: "request-session-identity",
+    correlationId: "corr-session-identity",
+    sessionId: "mcp-session-1",
+    client: normalizeMcpClient({ name: "ChatGPT", version: "1" }),
+    method: "tools/call",
+    startedAt: Date.now(),
+    requestBytes: 120,
+    outcome: { failed: false, errorCode: null },
+  };
+  const response = await mcpRequestContext.run(context, () =>
+    sdkClient.callTool({
+      name: "cptr_open_live_workbench",
+      arguments: {
+        session_name: "MCP topology identity",
+        workspace_id: "workspace-123",
+        client_model: "GPT-5.6 Sol",
+      },
+    }),
+  );
+  assert.equal(response.isError, undefined);
+  await emitter.flush();
+  await Promise.all([sdkClient.close(), server.close()]);
+  await emitter.close();
+
+  const events = delivered.flat().filter((event) => event.tool_name === "cptr_open_live_workbench");
+  assert.deepEqual(events.map((event) => event.event_type), ["tool_started", "tool_finished"]);
+  for (const event of events) {
+    assert.equal(event.client.id, "chatgpt-session-mcp-session-1");
+    assert.equal(event.client.session_name, "MCP topology identity");
+    assert.equal(event.client.model, "GPT-5.6 Sol");
+    assert.equal(event.client.workspace_id, "workspace-123");
+    assert.equal(event.client.workspace_name, "Desktop");
+  }
 });
 
 test("MCP traffic error codes are normalized without exposing exception text", () => {
