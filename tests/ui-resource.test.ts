@@ -28,6 +28,11 @@ test("publishes the configured widget domain and bounded MCP Apps metadata", asy
   assert.deepEqual(metadata.ui?.csp?.connectDomains, ["https://mcp.example.test"]);
   assert.deepEqual(metadata.ui?.csp?.resourceDomains, []);
   assert.match(resource.contents[0].text, /console\.log/);
+  assert.match(resource.contents[0].text, /data-terminal-static-shell/);
+  assert.match(resource.contents[0].text, /CHATGPT LIVE TERMINAL/);
+  assert.match(resource.contents[0].text, /Terminal UI ready\./);
+  assert.match(resource.contents[0].text, /viewport-fit=cover/);
+  assert.doesNotMatch(resource.contents[0].text, /<div id="root"><\/div>/);
 });
 
 test("publishes production-safe external assets and a loop-safe reload channel", async () => {

@@ -85,6 +85,42 @@ function hostBridge(): HostBridge | undefined {
   return (window as Window & { openai?: HostBridge }).openai;
 }
 
+function useWorkbenchAutoSize() {
+  const lastHeight = useRef(0);
+
+  useEffect(() => {
+    let frame: number | undefined;
+    const report = () => {
+      frame = undefined;
+      const height = Math.ceil(Math.max(
+        document.documentElement.scrollHeight,
+        document.body.scrollHeight,
+      ));
+      if (height <= 0 || Math.abs(height - lastHeight.current) < 2) return;
+      lastHeight.current = height;
+      hostBridge()?.notifyIntrinsicHeight?.(height);
+      window.parent.postMessage({
+        jsonrpc: "2.0",
+        method: "ui/notifications/size-changed",
+        params: { height },
+      }, "*");
+    };
+    const schedule = () => {
+      if (frame !== undefined) return;
+      frame = window.requestAnimationFrame(report);
+    };
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(schedule);
+    observer?.observe(document.documentElement);
+    window.addEventListener("resize", schedule);
+    schedule();
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", schedule);
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+    };
+  }, []);
+}
+
 function findPromptMetadata(value: unknown): PromptMetadata | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
@@ -547,7 +583,6 @@ function OwnedWorkbench() {
   const connection = hasWorkers ? promptConnection : meta?.targetId ? targetConnection : promptConnection;
   const selectedWorker = selectedWorkerId ? state.workers[selectedWorkerId] : undefined;
   const visibleTarget = useRef<string | null>(null);
-  const autoPinAttempted = useRef(false);
   const isCommand = meta?.targetType === "command" && !!meta.targetId && !!meta.workspaceId;
   const canControl = !!meta?.targetType && ["RUNNING", "WORKING", "CONNECTING", "APPROVAL_REQUIRED"].includes(state.status);
   const displayStatus = meta?.targetType && meta.targetId
@@ -573,19 +608,7 @@ function OwnedWorkbench() {
     setActionStatus("");
   }, [meta?.targetType, meta?.targetId, meta?.workspaceId]);
 
-  useEffect(() => {
-    if (!liveStreamingEnabled || autoPinAttempted.current) return;
-    autoPinAttempted.current = true;
-    void requestHostDisplayMode(hostBridge(), "pip")
-      .then((granted) => {
-        if (granted === "pip") setActionStatus("terminal pinned");
-      })
-      .catch(() => undefined);
-  }, [liveStreamingEnabled]);
-
-  useEffect(() => {
-    hostBridge()?.notifyIntrinsicHeight?.(Math.min(760, Math.max(280, document.body.scrollHeight)));
-  }, [state.status, state.transcript.length, state.workerOrder.length, selectedWorkerTab, connection, actionStatus]);
+  useWorkbenchAutoSize();
 
   const stop = async () => {
     if (!meta?.targetType || !meta.targetId) return;

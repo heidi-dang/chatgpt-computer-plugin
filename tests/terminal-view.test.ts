@@ -103,6 +103,8 @@ test("terminal final command state exposes the real exit code in the compact foo
 test("terminal CSS preserves the reference desktop and mobile geometry", () => {
   const css = readFileSync(new URL("../web/src/workbench.css", import.meta.url), "utf8");
 
+  assert.match(css, /\.terminal-workbench\s*\{[^}]*width:\s*100%[^}]*margin:\s*0[^}]*padding:\s*0/);
+  assert.doesNotMatch(css, /\.terminal-workbench\s*\{[^}]*max-width:/);
   assert.match(css, /\.terminal-shell\s*\{[\s\S]*grid-template-rows:\s*auto minmax\(360px, 1fr\) auto/);
   assert.match(css, /\.terminal-shell\s*\{[\s\S]*min-height:\s*min\(680px, 82vh\)/);
   assert.match(css, /\.terminal-shell\s*\{[\s\S]*border-radius:\s*20px/);
@@ -117,4 +119,14 @@ test("terminal CSS preserves the reference desktop and mobile geometry", () => {
   for (const obsoleteSelector of [".terminal-card", ".terminal-meta", ".terminal-actions", ".terminal-mark", ".terminal-target", ".terminal-viewport"]) {
     assert.equal(css.includes(obsoleteSelector), false, `${obsoleteSelector} must not override the reference terminal surface`);
   }
+});
+
+test("Workbench reports intrinsic height through both ChatGPT host sizing paths and does not auto-pin", () => {
+  const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /new ResizeObserver\(schedule\)/);
+  assert.match(source, /notifyIntrinsicHeight\?\.\(height\)/);
+  assert.match(source, /method: "ui\/notifications\/size-changed"/);
+  assert.match(source, /params: \{ height \}/);
+  assert.doesNotMatch(source, /requestHostDisplayMode\(hostBridge\(\), "pip"\)[\s\S]*autoPinAttempted/);
 });

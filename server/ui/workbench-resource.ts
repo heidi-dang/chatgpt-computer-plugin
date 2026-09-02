@@ -2,6 +2,28 @@ import { resolveWorkbenchHotReload, type WorkbenchHotReload } from "../workbench
 
 export const WORKBENCH_RESOURCE_URI = "ui://cptr/live-workbench.html";
 
+const STATIC_TERMINAL_SHELL = `<main class="terminal-workbench" aria-label="CPTR live workbench">
+  <section class="terminal-shell" data-terminal-static-shell data-state="connecting" aria-label="CPTR live terminal">
+    <header class="terminal-header">
+      <div class="terminal-identity">
+        <div class="terminal-kicker">CHATGPT LIVE TERMINAL</div>
+        <div class="terminal-machine-row">
+          <span class="terminal-machine">CPTR Computer</span>
+          <span class="terminal-status" data-state="connecting" role="status" aria-live="polite">
+            <span class="state-dot" aria-hidden="true"></span><span>CONNECTING</span>
+          </span>
+        </div>
+        <div class="terminal-path">Ready for real CPTR activity</div>
+      </div>
+    </header>
+    <section class="terminal-frame" aria-label="Real-time ChatGPT terminal activity over SSE">
+      <pre class="terminal-output" tabindex="0" aria-label="Live terminal output" aria-live="polite" aria-relevant="additions text">Terminal UI ready.
+Waiting for terminal stream…</pre>
+    </section>
+    <footer class="terminal-footer"><span>shell</span><span>SSE CONNECTING</span></footer>
+  </section>
+</main>`;
+
 function isLoopbackHostname(hostname: string): boolean {
   const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   return normalized === "localhost" || normalized === "::1" || normalized === "127.0.0.1" || normalized.startsWith("127.");
@@ -41,8 +63,8 @@ export async function createWorkbenchResource(
     ? ""
     : `<style>${styles}</style><script type="module">${bundle}</script>`;
   const text = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CPTR Live Workbench</title>${assetMarkup}</head><body><div id="root"></div>${reloadScript}</body></html>`;
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="dark">
+<title>CPTR Live Workbench</title>${assetMarkup}</head><body><div id="root">${STATIC_TERMINAL_SHELL}</div>${reloadScript}</body></html>`;
   return {
     contents: [{
       uri: WORKBENCH_RESOURCE_URI,
