@@ -30,6 +30,9 @@ export { MCP_CONTRACT_TOOL_COUNT, MCP_CONTRACT_VERSION } from "./release.js";
 
 import {
   approveAutonomousSchema,
+  benchmarkLeaderboardSchema,
+  benchmarkRunSchema,
+  benchmarkStartSchema,
   directWorkerCreateSchema,
   directWorkerListSchema,
   directWorkerGetSchema,
@@ -271,6 +274,58 @@ const workbenchSessionOutputSchema = {
   archived_at: z.number().nullable(),
 };
 
+const benchmarkTaskOutputSchema = z.object({
+  id: z.string(),
+  file: z.string(),
+  points: z.number().int().nonnegative(),
+  instruction: z.string(),
+});
+const benchmarkCaseOutputSchema = z.object({
+  id: z.string(),
+  passed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+  points: z.number().int().nonnegative(),
+  max_points: z.number().int().nonnegative(),
+  error_kinds: z.array(z.string()),
+});
+const benchmarkRunOutputSchema = {
+  run_id: z.string(),
+  suite_id: z.string(),
+  suite_version: z.string(),
+  status: z.string(),
+  model_reported: z.string().nullable(),
+  model_canonical: z.string().nullable(),
+  workspace_id: z.string().nullable(),
+  score: z.number().int().nullable(),
+  max_score: z.number().int().nonnegative(),
+  case_results: z.array(benchmarkCaseOutputSchema),
+  error_summary: z.string().nullable(),
+  started_at_ms: z.number().int().nonnegative(),
+  completed_at_ms: z.number().int().nonnegative().nullable(),
+  duration_ms: z.number().int().nonnegative().nullable(),
+  comparable: z.literal(true),
+  comparability: z.literal("standardized_suite_only"),
+  tasks: z.array(benchmarkTaskOutputSchema),
+  grader_seed: z.string().optional(),
+};
+const benchmarkLeaderboardOutputSchema = {
+  comparable: z.literal(true),
+  comparability: z.literal("standardized_suite_only"),
+  suite_id: z.string(),
+  suite_version: z.string(),
+  max_score: z.number().int().nonnegative(),
+  models: z.array(z.object({
+    model_canonical: z.string(),
+    model_reported: z.string().nullable(),
+    attempts: z.number().int().nonnegative(),
+    best_score: z.number().int().nonnegative(),
+    average_score: z.number().nonnegative(),
+    perfect_runs: z.number().int().nonnegative(),
+    pass_rate: z.number().min(0).max(1),
+    median_duration_ms: z.number().int().nonnegative(),
+  })),
+};
+
 function initialWorkbenchResult<T extends Record<string, unknown>>(value: T, toolName: string) {
   return activityResult(
     value,
@@ -487,6 +542,7 @@ export function createMcpServer(
   const liveTerminalStreamingEnabled = options.liveTerminalStreamingEnabled ?? true;
   let activePromptTicket: string | null = null;
   const promptTicketContext = new AsyncLocalStorage<string | null>();
+  const clientModelContext = new AsyncLocalStorage<string | null>();
 
   const currentPromptTicket = (): string | null => {
     const contextual = promptTicketContext.getStore();
@@ -739,7 +795,10 @@ export function createMcpServer(
               "allow:delegate",
             );
           }
-          const value = await handler(...(args.length ? [input, ...args.slice(1)] : args));
+          const value = await clientModelContext.run(
+            normalizedModel.reported,
+            async () => handler(...(args.length ? [input, ...args.slice(1)] : args)),
+          );
           const activityDurationMs = Date.now() - trafficStartedAt;
           const terminalValue = terminalToolResult(value);
           await applyTrafficIdentity(trafficContext, name, input, normalizedModel.reported, terminalValue);
@@ -1125,6 +1184,79 @@ export function createMcpServer(
           : `ChatGPT checked CPTR Computer ${manifest.version} update status.`,
       );
     },
+  );
+
+  server.registerTool(
+    "cptr_benchmark_start",
+    {
+      title: "Start a standardized CPTR coding benchmark",
+      description:
+        "Create an owner-scoped disposable benchmark workspace for the versioned standardized coding suite. The hidden grader stays server-side; use normal ChatGPT Direct Coding tools in the returned workspace, then submit the run for objective grading.",
+      inputSchema: benchmarkStartSchema,
+      outputSchema: benchmarkRunOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async ({ suite_id }) => activityResult(
+      await client.startCodingBenchmark({
+        suite_id,
+        model_reported: clientModelContext.getStore() ?? null,
+      }),
+      "cptr_benchmark_start",
+      "ChatGPT started a standardized isolated coding benchmark.",
+    ),
+  );
+
+  server.registerTool(
+    "cptr_benchmark_submit",
+    {
+      title: "Submit a CPTR coding benchmark",
+      description:
+        "Run the server-owned hidden randomized grader for one owned benchmark run. Submission is idempotent after finalization and the model cannot provide or override its score.",
+      inputSchema: benchmarkRunSchema,
+      outputSchema: benchmarkRunOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async ({ run_id }) => activityResult(
+      await client.submitCodingBenchmark(run_id),
+      "cptr_benchmark_submit",
+      "ChatGPT submitted a standardized coding benchmark for objective grading.",
+    ),
+  );
+
+  server.registerTool(
+    "cptr_benchmark_get",
+    {
+      title: "Get a CPTR coding benchmark result",
+      description:
+        "Read one owned standardized benchmark run and its objective case evidence. Hidden grader inputs are not exposed before grading.",
+      inputSchema: benchmarkRunSchema,
+      outputSchema: benchmarkRunOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async ({ run_id }) => activityResult(
+      await client.getCodingBenchmark(run_id),
+      "cptr_benchmark_get",
+    ),
+  );
+
+  server.registerTool(
+    "cptr_benchmark_leaderboard",
+    {
+      title: "Compare standardized CPTR coding benchmark results",
+      description:
+        "Return the comparable model leaderboard for one versioned standardized suite. It contains only objectively graded standardized runs and never mixes observed real-work operational scores into the ranking.",
+      inputSchema: benchmarkLeaderboardSchema,
+      outputSchema: benchmarkLeaderboardOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async ({ suite_id }) => activityResult(
+      await client.getCodingBenchmarkLeaderboard(suite_id),
+      "cptr_benchmark_leaderboard",
+    ),
   );
 
   server.registerTool(

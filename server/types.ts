@@ -106,3 +106,60 @@ export type DirectSshCommand = DirectCommand & {
   workspace_id: string;
   alias: string;
 };
+
+export type CodingBenchmarkTask = {
+  id: string;
+  file: string;
+  points: number;
+  instruction: string;
+};
+
+export type CodingBenchmarkCaseResult = {
+  id: string;
+  passed: number;
+  total: number;
+  points: number;
+  max_points: number;
+  error_kinds: string[];
+};
+
+export type CodingBenchmarkRun = {
+  run_id: string;
+  suite_id: string;
+  suite_version: string;
+  status: string;
+  model_reported: string | null;
+  model_canonical: string | null;
+  workspace_id: string | null;
+  score: number | null;
+  max_score: number;
+  case_results: CodingBenchmarkCaseResult[];
+  error_summary: string | null;
+  started_at_ms: number;
+  completed_at_ms: number | null;
+  duration_ms: number | null;
+  comparable: true;
+  comparability: "standardized_suite_only";
+  tasks: CodingBenchmarkTask[];
+  grader_seed?: string;
+};
+
+export type CodingBenchmarkLeaderboardModel = {
+  model_canonical: string;
+  model_reported: string | null;
+  attempts: number;
+  best_score: number;
+  average_score: number;
+  perfect_runs: number;
+  pass_rate: number;
+  median_duration_ms: number;
+};
+
+export type CodingBenchmarkLeaderboard = {
+  comparable: true;
+  comparability: "standardized_suite_only";
+  suite_id: string;
+  suite_version: string;
+  max_score: number;
+  models: CodingBenchmarkLeaderboardModel[];
+};

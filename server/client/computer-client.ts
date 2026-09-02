@@ -1,4 +1,6 @@
 import type {
+  CodingBenchmarkLeaderboard,
+  CodingBenchmarkRun,
   CompletionIntegrity,
   DirectCommand,
   DirectFileRead,
@@ -776,6 +778,29 @@ export class ComputerClient {
     return this.request(
       `/workspaces/${encodeURIComponent(request.workspace_id)}/git/status${query.size ? `?${query}` : ""}`,
     );
+  }
+
+  async startCodingBenchmark(input: { suite_id?: string; model_reported?: string | null }): Promise<CodingBenchmarkRun> {
+    return this.request("/benchmarks/runs", {
+      method: "POST",
+      body: {
+        suite_id: input.suite_id ?? "cptr-python-core",
+        model_reported: input.model_reported ?? null,
+      },
+    });
+  }
+
+  async submitCodingBenchmark(runId: string): Promise<CodingBenchmarkRun> {
+    return this.request(`/benchmarks/runs/${encodeURIComponent(runId)}/submit`, { method: "POST" });
+  }
+
+  async getCodingBenchmark(runId: string): Promise<CodingBenchmarkRun> {
+    return this.request(`/benchmarks/runs/${encodeURIComponent(runId)}`);
+  }
+
+  async getCodingBenchmarkLeaderboard(suiteId = "cptr-python-core"): Promise<CodingBenchmarkLeaderboard> {
+    const query = new URLSearchParams({ suite_id: suiteId });
+    return this.request(`/benchmarks/leaderboard?${query}`);
   }
 
   async createWorkbenchSession(input: { name?: string; workspace_id?: string } = {}): Promise<WorkbenchSession> {

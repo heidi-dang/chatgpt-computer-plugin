@@ -1,7 +1,7 @@
 import { CPTR_APP_VERSION } from "./version.js";
 
 export const MCP_CONTRACT_VERSION = CPTR_APP_VERSION;
-export const MCP_CONTRACT_TOOL_COUNT = 70;
+export const MCP_CONTRACT_TOOL_COUNT = 74;
 export const CPTR_PLUGIN_VERSION = CPTR_APP_VERSION;
 export const CPTR_PLUGIN_SCHEMA_REVISION = CPTR_APP_VERSION;
 
@@ -33,9 +33,11 @@ export function currentPluginUpdateManifest(env: NodeJS.ProcessEnv = process.env
     tool_count: MCP_CONTRACT_TOOL_COUNT,
     release_sha: env.GIT_COMMIT_SHA ?? env.RAILWAY_GIT_COMMIT_SHA ?? env.CPTR_WORKBENCH_BUILD_ID ?? null,
     released_at: "2026-09-02",
-    summary: "CPTR Computer v1.3.0 closes the dedicated-terminal parity gap with first-class PTY controls, LSP lifecycle access, structured stdout/stderr streaming, bounded burst backpressure, and durable command transcript recovery while preserving FDX-first Direct Coding.",
+    summary: "CPTR Computer v1.4.0 adds an objectively graded hybrid coding benchmark and durable MCP model usage attribution while preserving the existing Direct Coding, PTY, LSP, FDX, browser, and SSH surfaces.",
     changes: [
-      `Releases CPTR Computer ${CPTR_APP_VERSION} with 70 core control tools and 76 total registered MCP actions including PTY controls, LSP, FDX, browser, SSH, and update auxiliaries.`,
+      `Releases CPTR Computer ${CPTR_APP_VERSION} with 74 core control tools and 80 total registered MCP actions including standardized benchmark lifecycle, PTY controls, LSP, FDX, browser, SSH, and update auxiliaries.`,
+      "Adds four direct benchmark actions to start isolated standardized coding work, submit it to the server-owned randomized grader, inspect objective case evidence, and compare a suite-versioned model leaderboard.",
+      "Forwards each benchmark start's exact self-reported ChatGPT client_model to the backend without allowing the model to provide or override its own score.",
       "Adds first-class PTY command controls for initial stdin, ongoing stdin, resize, Ctrl+C-style interrupt, terminate, and process-tree kill while preserving bounded Direct Coding policy.",
       "Adds workspace-scoped LSP discovery, start, bounded JSON-RPC requests, and graceful stop with administrator-controlled server registries and owner/workspace isolation.",
       "Preserves stdout/stderr stream identity for non-PTY commands, adds bounded secondary burst buffering and pressure telemetry, and recovers completed or interrupted command transcripts from durable JSONL after registry/process restart.",

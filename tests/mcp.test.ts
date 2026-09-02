@@ -88,6 +88,10 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_ssh_cancel_command",
       "cptr_chrome_browser",
       "cptr_plugin_update",
+      "cptr_benchmark_start",
+      "cptr_benchmark_submit",
+      "cptr_benchmark_get",
+      "cptr_benchmark_leaderboard",
       "cptr_list_workspaces",
       "cptr_get_workspace",
       "cptr_start_task",
@@ -180,7 +184,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_plugin_update")?.annotations?.openWorldHint, false);
   assert.match(CPTR_APP_VERSION, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
   assert.equal(MCP_CONTRACT_VERSION, CPTR_APP_VERSION);
-  assert.equal(MCP_CONTRACT_TOOL_COUNT, 70);
+  assert.equal(MCP_CONTRACT_TOOL_COUNT, 74);
   assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT + 6);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
@@ -314,13 +318,13 @@ test("reports plugin release status through the stable update action", async () 
     arguments: {
       action: "verify_server",
       expected_contract_version: CPTR_APP_VERSION,
-      expected_tool_count: 70,
+      expected_tool_count: 74,
     },
   });
   const value = response.structuredContent as Record<string, unknown> | undefined;
   assert.equal(response.isError, undefined);
   assert.equal(value?.version, CPTR_APP_VERSION);
-  assert.equal(value?.tool_count, 70);
+  assert.equal(value?.tool_count, 74);
   assert.equal(value?.contract_matches, true);
   assert.equal(value?.tool_count_matches, true);
   assert.deepEqual((value?.verification as { tool?: string } | undefined)?.tool, "cptr_plugin_update");

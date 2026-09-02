@@ -11,6 +11,10 @@ if (typeof expectedContractVersion !== "string" || !expectedContractVersion.trim
 const expectedTools = [
   "cptr_approve_autonomous",
   "cptr_archive_workbench_session",
+  "cptr_benchmark_get",
+  "cptr_benchmark_leaderboard",
+  "cptr_benchmark_start",
+  "cptr_benchmark_submit",
   "cptr_bind_live_workbench_session",
   "cptr_cancel_autonomous",
   "cptr_cancel_task",
@@ -91,7 +95,7 @@ const auxiliaryTools = new Set([
   "cptr_ssh_list_hosts", "cptr_ssh_run_command", "cptr_ssh_get_command", "cptr_ssh_cancel_command",
 ]);
 const expectedPlannedTools = expectedTools.filter((name) => !auxiliaryTools.has(name));
-const expectedRegisteredToolCount = 76;
+const expectedRegisteredToolCount = 80;
 const expectedResource = "ui://cptr/live-workbench.html";
 
 if (!endpoint || !token) {

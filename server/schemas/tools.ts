@@ -429,6 +429,15 @@ export const pluginUpdateSchema = {
   expected_tool_count: z.number().int().min(1).max(500).optional(),
 };
 
+const benchmarkRunId = z.string().regex(/^bench_[A-Za-z0-9_-]{8,80}$/);
+export const benchmarkStartSchema = {
+  suite_id: z.string().min(1).max(80).default("cptr-python-core"),
+};
+export const benchmarkRunSchema = { run_id: benchmarkRunId };
+export const benchmarkLeaderboardSchema = {
+  suite_id: z.string().min(1).max(80).default("cptr-python-core"),
+};
+
 export const chromeBrowserSchema = {
   workspace_id: z.string().min(1).max(200),
   action: z.enum([
