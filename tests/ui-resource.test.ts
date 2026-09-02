@@ -24,7 +24,7 @@ test("publishes the configured widget domain and bounded MCP Apps metadata", asy
   assert.equal(resource.contents[0].uri, "ui://cptr/live-workbench.html");
   assert.equal(resource.contents[0].mimeType, "text/html;profile=mcp-app");
   assert.equal(metadata.ui?.domain, "https://mcp.example.test");
-  assert.equal(metadata.ui?.prefersBorder, true);
+  assert.equal(metadata.ui?.prefersBorder, false);
   assert.deepEqual(metadata.ui?.csp?.connectDomains, ["https://mcp.example.test"]);
   assert.deepEqual(metadata.ui?.csp?.resourceDomains, []);
   assert.match(resource.contents[0].text, /console\.log/);
@@ -50,6 +50,9 @@ test("publishes production-safe external assets and a loop-safe reload channel",
   assert.match(html, /__cptr\/dev\/workbench\.css/);
   assert.match(html, /__cptr\/dev\/reload/);
   assert.match(html, /build-42/);
+  assert.match(html, /min-height:760px/);
+  assert.match(html, /min-height:680px/);
+  assert.match(html, /min-height:640px/);
   assert.match(html, /sessionStorage\.setItem/);
   assert.match(html, /encodeURIComponent\(current\)/);
   assert.match(html, /source\.close\(\);location\.reload\(\)/);

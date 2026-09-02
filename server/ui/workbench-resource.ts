@@ -2,6 +2,14 @@ import { resolveWorkbenchHotReload, type WorkbenchHotReload } from "../workbench
 
 export const WORKBENCH_RESOURCE_URI = "ui://cptr/live-workbench.html";
 
+const CRITICAL_TERMINAL_GEOMETRY = `<style>
+html,body,#root{margin:0;width:100%;min-width:0;min-height:100%;background:transparent}
+.terminal-workbench{width:100%;min-width:0;margin:0;padding:0}
+.terminal-shell{box-sizing:border-box;display:grid;grid-template-rows:auto minmax(520px,1fr) auto;width:100%;min-height:760px;overflow:hidden}
+@media(max-width:560px){.terminal-shell{grid-template-rows:auto minmax(0,1fr) auto;min-height:680px;max-height:none}}
+@media(max-width:390px){.terminal-shell{min-height:640px}}
+</style>`;
+
 const STATIC_TERMINAL_SHELL = `<main class="terminal-workbench" aria-label="CPTR live workbench">
   <section class="terminal-shell" data-terminal-static-shell data-state="connecting" aria-label="CPTR live terminal">
     <header class="terminal-header">
@@ -60,7 +68,7 @@ export async function createWorkbenchResource(
     ? `<script>(()=>{const embedded=${JSON.stringify(hotReload.buildId)};const key="cptr-workbench-build:v1";let current=embedded;try{current=sessionStorage.getItem(key)||embedded;sessionStorage.setItem(key,current);}catch{}const css=document.createElement("link");css.rel="stylesheet";css.href=${JSON.stringify(`${widgetDomain}/__cptr/dev/workbench.css`)}+"?build="+encodeURIComponent(current);document.head.appendChild(css);const script=document.createElement("script");script.type="module";script.src=${JSON.stringify(`${widgetDomain}/__cptr/dev/workbench.js`)}+"?build="+encodeURIComponent(current);document.body.appendChild(script);const source=new EventSource(${JSON.stringify(`${widgetDomain}/__cptr/dev/reload`)});source.onmessage=(event)=>{const next=event.data;if(!next||next===current)return;current=next;try{sessionStorage.setItem(key,next);}catch{}source.close();location.reload();};})()</script>`
     : "";
   const assetMarkup = hotReload.enabled
-    ? ""
+    ? CRITICAL_TERMINAL_GEOMETRY
     : `<style>${styles}</style><script type="module">${bundle}</script>`;
   const text = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="dark">
@@ -73,7 +81,7 @@ export async function createWorkbenchResource(
       _meta: {
         ui: {
           domain: widgetDomain,
-          prefersBorder: true,
+          prefersBorder: false,
           csp: {
             connectDomains: [widgetDomain],
             resourceDomains: hotReload.enabled ? [widgetDomain] : [],
