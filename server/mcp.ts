@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ComputerApiError, ComputerClient } from "./client/computer-client.js";
 import { McpActivityEmitter } from "./mcp-activity.js";
@@ -474,6 +475,18 @@ export function createMcpServer(
   const promptSessions = options.promptSessions ?? new PromptTerminalStore();
   const liveTerminalStreamingEnabled = options.liveTerminalStreamingEnabled ?? true;
   let activePromptTicket: string | null = null;
+  const promptTicketContext = new AsyncLocalStorage<string | null>();
+
+  const currentPromptTicket = (): string | null => {
+    const contextual = promptTicketContext.getStore();
+    return contextual === undefined ? activePromptTicket : contextual;
+  };
+
+  const workbenchSessionIdFrom = (value: unknown): string | undefined => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const id = (value as Record<string, unknown>).workbench_session_id;
+    return typeof id === "string" && id ? id : undefined;
+  };
 
   const publishActivity = (
     toolName: string,
@@ -487,7 +500,7 @@ export function createMcpServer(
       status,
       details,
     );
-    promptSessions.append(activePromptTicket, {
+    promptSessions.append(currentPromptTicket(), {
       type: "mcp.tool",
       payload: activity.payload,
     });
@@ -506,7 +519,7 @@ export function createMcpServer(
     changed_paths?: string[];
     active_command_ids?: string[];
     recent_command_ids?: string[];
-  }) => promptSessions.append(activePromptTicket, { type: "direct.worker", payload });
+  }) => promptSessions.append(currentPromptTicket(), { type: "direct.worker", payload });
 
   const workerIdFrom = (value: unknown): string | undefined => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -627,6 +640,8 @@ export function createMcpServer(
         const label = groupedConfig.title?.trim() || name;
         const originalInput = args.length ? args[0] : {};
         const { reported: reportedClientModel, handlerInput: input } = extractClientModel(originalInput);
+        const mappedPromptTicket = promptSessions.ticketForWorkbenchSession(workbenchSessionIdFrom(input));
+        promptTicketContext.enterWith(mappedPromptTicket ?? activePromptTicket);
         const normalizedModel = normalizeReportedModel(reportedClientModel);
         const inputWorkerId = workerIdFrom(input);
         const trafficContext = mcpRequestContext.getStore();
@@ -703,7 +718,7 @@ export function createMcpServer(
         try {
           if (
             requiresDelegationAuthorization(name, input) &&
-            !promptSessions.allowsDelegation(activePromptTicket)
+            !promptSessions.allowsDelegation(currentPromptTicket())
           ) {
             throw new ComputerApiError(
               403,
@@ -892,7 +907,7 @@ export function createMcpServer(
   ) => {
     if (liveTerminalStreamingEnabled) {
       const live = tickets.issue(target);
-      promptSessions.append(activePromptTicket, {
+      promptSessions.append(currentPromptTicket(), {
         type: "live.bind",
         payload: { live },
       });
@@ -958,12 +973,14 @@ export function createMcpServer(
         .catch(() => []);
       const prompt = promptSessions.open({ allowDelegate: delegationAllowed });
       activePromptTicket = prompt.ticket;
+      promptTicketContext.enterWith(prompt.ticket);
       const session = input.resume_session_id
         ? await client.getWorkbenchSession(input.resume_session_id)
         : await client.createWorkbenchSession({
             ...(input.session_name ? { name: input.session_name } : {}),
             ...(input.workspace_id ? { workspace_id: input.workspace_id } : {}),
           });
+      promptSessions.bindWorkbenchSession(prompt.ticket, session.session_id);
       const value = {
         session_id: session.session_id,
         name: session.name,

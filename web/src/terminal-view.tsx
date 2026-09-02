@@ -167,7 +167,7 @@ export function TerminalView({
         aria-relevant="additions text"
       >
         {rows.length ? rows.map((row) => <React.Fragment key={row.id}>
-          <span className={`terminal-line terminal-${row.tone} term-overflow`}>{richTerminalText(row.text)}</span>{"\n"}
+          <span className={`terminal-line terminal-${row.tone}`}>{richTerminalText(row.text)}</span>{"\n"}
         </React.Fragment>) : <>Terminal UI ready.{"\n"}Waiting for terminal stream…</>}
       </pre>
     </section>

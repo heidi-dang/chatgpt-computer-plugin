@@ -5,7 +5,7 @@ import type { WidgetStreamMetadata } from "./live-tickets.js";
 type Environment = Record<string, string | undefined>;
 
 export function resolveLiveTerminalStreaming(env: Environment = process.env): boolean {
-  return ["1", "true", "on", "yes"].includes(
+  return !["0", "false", "off", "no"].includes(
     (env.CPTR_LIVE_TERMINAL_STREAMING ?? "").trim().toLowerCase(),
   );
 }
@@ -91,6 +91,7 @@ type PromptStoreOptions = {
 
 export class PromptTerminalStore {
   private readonly sessions = new Map<string, PromptSession>();
+  private readonly workbenchTickets = new Map<string, string>();
   private readonly now: () => number;
   private readonly ttlMs: number;
   private readonly maxSessions: number;
@@ -147,6 +148,23 @@ export class PromptTerminalStore {
   allowsDelegation(ticket: string | null | undefined): boolean {
     if (!ticket) return false;
     return this.getSession(ticket)?.allowDelegate === true;
+  }
+
+  bindWorkbenchSession(ticket: string | null | undefined, workbenchSessionId: string | null | undefined): boolean {
+    if (!ticket || !workbenchSessionId || !this.getSession(ticket)) return false;
+    this.workbenchTickets.set(workbenchSessionId, ticket);
+    return true;
+  }
+
+  ticketForWorkbenchSession(workbenchSessionId: string | null | undefined): string | null {
+    if (!workbenchSessionId) return null;
+    const ticket = this.workbenchTickets.get(workbenchSessionId);
+    if (!ticket) return null;
+    if (!this.getSession(ticket)) {
+      this.workbenchTickets.delete(workbenchSessionId);
+      return null;
+    }
+    return ticket;
   }
 
   append(ticket: string | null | undefined, event: PendingPromptEvent): PromptTerminalEvent | null {
@@ -212,6 +230,9 @@ export class PromptTerminalStore {
     if (!session) return;
     session.listeners.clear();
     this.sessions.delete(ticket);
+    for (const [workbenchSessionId, mappedTicket] of this.workbenchTickets) {
+      if (mappedTicket === ticket) this.workbenchTickets.delete(workbenchSessionId);
+    }
   }
 }
 

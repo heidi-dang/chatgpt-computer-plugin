@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PromptTerminalStore, resolveLiveTerminalStreaming } from "../server/prompt-terminal.js";
 
-test("live terminal streaming is disabled unless explicitly enabled", () => {
-  assert.equal(resolveLiveTerminalStreaming({}), false);
+test("live terminal streaming is enabled by default with an explicit emergency kill switch", () => {
+  assert.equal(resolveLiveTerminalStreaming({}), true);
   assert.equal(resolveLiveTerminalStreaming({ CPTR_LIVE_TERMINAL_STREAMING: "0" }), false);
   assert.equal(resolveLiveTerminalStreaming({ CPTR_LIVE_TERMINAL_STREAMING: "false" }), false);
+  assert.equal(resolveLiveTerminalStreaming({ CPTR_LIVE_TERMINAL_STREAMING: "off" }), false);
+  assert.equal(resolveLiveTerminalStreaming({ CPTR_LIVE_TERMINAL_STREAMING: "no" }), false);
   assert.equal(resolveLiveTerminalStreaming({ CPTR_LIVE_TERMINAL_STREAMING: "1" }), true);
   assert.equal(resolveLiveTerminalStreaming({ CPTR_LIVE_TERMINAL_STREAMING: "TRUE" }), true);
   assert.equal(resolveLiveTerminalStreaming({ CPTR_LIVE_TERMINAL_STREAMING: " on " }), true);

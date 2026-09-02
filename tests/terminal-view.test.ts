@@ -45,7 +45,7 @@ test("default widget matches the ChatGPT Terminal live surface", () => {
   assert.match(html, /term-path/);
   assert.match(html, /term-number/);
   assert.match(html, /term-success/);
-  assert.match(html, /term-overflow/);
+  assert.equal(html.includes("term-overflow"), false);
   assert.equal(html.includes("terminal-seq"), false);
   assert.equal(html.includes(">Stop<"), false);
   assert.equal(html.includes(">Copy<"), false);
@@ -111,7 +111,8 @@ test("terminal CSS preserves the reference desktop and mobile geometry", () => {
   assert.match(css, /\.terminal-output\s*\{[\s\S]*min-height:\s*254px/);
   assert.match(css, /\.terminal-output\s*\{[\s\S]*font-size:\s*12px/);
   assert.match(css, /\.terminal-output\s*\{[\s\S]*line-height:\s*1\.34/);
-  assert.match(css, /\.term-overflow\s*\{[\s\S]*animation:\s*overflow \.18s steps\(2,end\)/);
+  assert.equal(css.includes(".term-overflow"), false);
+  assert.equal(css.includes("@keyframes overflow"), false);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*min-height:\s*340px/);
   assert.match(css, /@media \(max-width: 390px\)[\s\S]*min-height:\s*320px/);
