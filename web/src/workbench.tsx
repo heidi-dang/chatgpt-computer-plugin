@@ -89,18 +89,10 @@ function useWorkbenchAutoSize() {
 
   useEffect(() => {
     let frame: number | undefined;
+    const workbench = document.querySelector<HTMLElement>(".terminal-workbench");
     const report = () => {
       frame = undefined;
-      const minimumHeight = window.matchMedia("(max-width: 390px)").matches
-        ? 220
-        : window.matchMedia("(max-width: 560px)").matches
-          ? 240
-          : 260;
-      const height = Math.ceil(Math.max(
-        minimumHeight,
-        document.documentElement.scrollHeight,
-        document.body.scrollHeight,
-      ));
+      const height = Math.ceil(workbench?.getBoundingClientRect().height ?? 0);
       if (height <= 0 || Math.abs(height - lastHeight.current) < 2) return;
       lastHeight.current = height;
       hostBridge()?.notifyIntrinsicHeight?.(height);
@@ -115,7 +107,7 @@ function useWorkbenchAutoSize() {
       frame = window.requestAnimationFrame(report);
     };
     const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(schedule);
-    observer?.observe(document.documentElement);
+    if (workbench) observer?.observe(workbench);
     window.addEventListener("resize", schedule);
     schedule();
     return () => {

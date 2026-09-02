@@ -114,18 +114,24 @@ test("terminal CSS preserves the reference desktop and mobile geometry", () => {
 
   assert.match(css, /\.terminal-workbench\s*\{[^}]*width:\s*100%[^}]*margin:\s*0[^}]*padding:\s*0/);
   assert.doesNotMatch(css, /\.terminal-workbench\s*\{[^}]*max-width:/);
-  assert.match(css, /\.terminal-shell\s*\{[\s\S]*grid-template-rows:\s*auto minmax\(140px, 1fr\) auto/);
+  assert.match(css, /\.terminal-shell\s*\{[\s\S]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto/);
+  assert.match(css, /\.terminal-shell\s*\{[\s\S]*height:\s*clamp\(260px, 36vw, 360px\)/);
   assert.match(css, /\.terminal-shell\s*\{[\s\S]*min-height:\s*260px/);
+  assert.match(css, /\.terminal-shell\s*\{[\s\S]*max-height:\s*360px/);
   assert.match(css, /\.terminal-shell\s*\{[\s\S]*border-radius:\s*20px/);
   assert.match(css, /\.terminal-output\s*\{[\s\S]*min-height:\s*134px/);
   assert.match(css, /\.terminal-output\s*\{[\s\S]*font-size:\s*12px/);
   assert.match(css, /\.terminal-output\s*\{[\s\S]*line-height:\s*1\.34/);
-  assert.match(css, /\.term-overflow\s*\{[^}]*animation:\s*overflow \.18s steps\(2, end\)/);
-  assert.match(css, /@keyframes overflow/);
+  assert.match(css, /\.term-overflow\s*\{[^}]*display:\s*inline-block[^}]*max-width:\s*100%[^}]*animation:\s*overflow \.18s steps\(2, end\)/);
+  assert.match(css, /@keyframes overflow\s*\{[^}]*transform:\s*translate3d\(0, \.9em, 0\)[\s\S]*transform:\s*translate3d\(0, 0, 0\)/);
+  assert.match(css, /\.terminal-frame\s*\{[^}]*contain:\s*layout paint style/);
+  assert.match(css, /\.terminal-output\s*\{[\s\S]*overscroll-behavior:\s*contain/);
   assert.match(css, /\.terminal-latest\s*\{/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]*min-height:\s*240px/);
-  assert.match(css, /@media \(max-width: 390px\)[\s\S]*min-height:\s*220px/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*height:\s*clamp\(220px, 62vw, 280px\)/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*min-height:\s*220px/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*max-height:\s*280px/);
+  assert.match(css, /@media \(max-width: 390px\)[\s\S]*min-height:\s*210px/);
   assert.equal(css.includes("82vh"), false);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.terminal-output\s*\{[\s\S]*font-size:\s*11\.5px/);
   assert.match(css, /@media \(max-width: 390px\)[\s\S]*\.terminal-output\s*\{\s*font-size:\s*11px/);
@@ -139,10 +145,11 @@ test("Workbench reports intrinsic height through both ChatGPT host sizing paths 
   const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
 
   assert.match(source, /new ResizeObserver\(schedule\)/);
-  assert.match(source, /window\.matchMedia\("\(max-width: 390px\)"\)/);
-  assert.match(source, /\? 220/);
-  assert.match(source, /\? 240/);
-  assert.match(source, /: 260/);
+  assert.match(source, /document\.querySelector<HTMLElement>\("\.terminal-workbench"\)/);
+  assert.match(source, /getBoundingClientRect\(\)\.height/);
+  assert.doesNotMatch(source, /document\.documentElement\.scrollHeight/);
+  assert.doesNotMatch(source, /document\.body\.scrollHeight/);
+  assert.match(source, /observer\?\.observe\(workbench\)/);
   assert.match(source, /notifyIntrinsicHeight\?\.\(height\)/);
   assert.match(source, /method: "ui\/notifications\/size-changed"/);
   assert.match(source, /params: \{ height \}/);
@@ -155,8 +162,20 @@ test("Workbench reports intrinsic height through both ChatGPT host sizing paths 
 test("terminal view bounds rendered DOM rows and uses a dedicated connection live region", () => {
   const source = readFileSync(new URL("../web/src/terminal-view.tsx", import.meta.url), "utf8");
   assert.match(source, /MAX_RENDERED_ROWS\s*=\s*600/);
-  assert.match(source, /rows\.slice\(rows\.length - MAX_RENDERED_ROWS\)/);
+  assert.match(source, /MOBILE_RENDERED_ROWS\s*=\s*320/);
+  assert.match(source, /MOBILE_RENDER_QUERY\s*=\s*"\(max-width: 560px\)"/);
+  assert.match(source, /rows\.slice\(rows\.length - renderedRowLimit\)/);
+  assert.match(source, /matchMedia\(MOBILE_RENDER_QUERY\)/);
   assert.match(source, /className="terminal-latest"/);
   assert.match(source, /aria-live="off"/);
   assert.match(source, /terminal-status[^\n]*role="status" aria-live="polite"/);
+});
+
+test("terminal view memoizes stable rows and frame-coalesces follow scrolling", () => {
+  const source = readFileSync(new URL("../web/src/terminal-view.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /const TerminalLine = React\.memo\(/);
+  assert.match(source, /<TerminalLine key=\{row\.id\} row=\{row\} \/>/);
+  assert.match(source, /window\.requestAnimationFrame\(/);
+  assert.match(source, /window\.cancelAnimationFrame\(/);
 });

@@ -28,6 +28,13 @@ const TERM_KIND = ["", "prompt", "command", "comment", "error", "warning", "succ
 const ANSI_SGR_RE = /\u001b\[([0-9;]*)m/g;
 const ANSI_COLORS = ["black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"];
 const MAX_RENDERED_ROWS = 600;
+const MOBILE_RENDERED_ROWS = 320;
+const MOBILE_RENDER_QUERY = "(max-width: 560px)";
+
+function initialRenderedRowLimit(): number {
+  if (typeof window === "undefined") return MAX_RENDERED_ROWS;
+  return window.matchMedia(MOBILE_RENDER_QUERY).matches ? MOBILE_RENDERED_ROWS : MAX_RENDERED_ROWS;
+}
 
 /**
  * Byte-for-byte behavioral port of the ChatGPT Terminal UI text normalizer.
@@ -155,6 +162,14 @@ function richTerminalText(input: string): React.ReactNode[] {
   return nodes;
 }
 
+const TerminalLine = React.memo(function TerminalLine({ row }: { row: TerminalRow }) {
+  return <>
+    <span className={`terminal-line terminal-${row.tone}${row.effect === "overflow" ? " term-overflow" : ""}`}>
+      {richTerminalText(row.text)}
+    </span>{"\n"}
+  </>;
+});
+
 function displayState(status: string, connection: string): TerminalDisplayState {
   const normalizedStatus = status.toUpperCase();
   if (["FAILED", "BLOCKED", "REJECTED", "COMPLETE_WITH_TOOL_ERRORS"].includes(normalizedStatus)) return "failed";
@@ -188,25 +203,46 @@ export function TerminalView({
   targetLabel,
 }: TerminalViewProps) {
   const output = useRef<HTMLPreElement>(null);
+  const scrollFrame = useRef<number | null>(null);
   const [follow, setFollow] = useState(true);
+  const [renderedRowLimit, setRenderedRowLimit] = useState(initialRenderedRowLimit);
   const state = displayState(status, connection);
   const exitCode = exitCodeFromRows(rows);
-  const hiddenRowCount = Math.max(0, rows.length - MAX_RENDERED_ROWS);
+  const hiddenRowCount = Math.max(0, rows.length - renderedRowLimit);
   const visibleRows = useMemo(
-    () => hiddenRowCount ? rows.slice(rows.length - MAX_RENDERED_ROWS) : rows,
-    [hiddenRowCount, rows],
+    () => hiddenRowCount ? rows.slice(rows.length - renderedRowLimit) : rows,
+    [hiddenRowCount, renderedRowLimit, rows],
   );
 
   useEffect(() => {
+    const media = window.matchMedia(MOBILE_RENDER_QUERY);
+    const update = () => setRenderedRowLimit(media.matches ? MOBILE_RENDERED_ROWS : MAX_RENDERED_ROWS);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
     if (!follow) return;
-    const element = output.current;
-    if (element) element.scrollTop = element.scrollHeight;
+    const frame = window.requestAnimationFrame(() => {
+      const element = output.current;
+      if (element) element.scrollTop = element.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, [visibleRows, follow]);
 
+  useEffect(() => () => {
+    if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
+  }, []);
+
   const onScroll = () => {
-    const element = output.current;
-    if (!element) return;
-    setFollow(element.scrollHeight - element.scrollTop - element.clientHeight < 24);
+    if (scrollFrame.current !== null) return;
+    scrollFrame.current = window.requestAnimationFrame(() => {
+      scrollFrame.current = null;
+      const element = output.current;
+      if (!element) return;
+      setFollow(element.scrollHeight - element.scrollTop - element.clientHeight < 24);
+    });
   };
 
   return <section className="terminal-shell" data-state={state} aria-label="CPTR live terminal">
@@ -234,9 +270,7 @@ export function TerminalView({
         aria-live="off"
       >
         {hiddenRowCount > 0 && <span className="terminal-history-note">… {hiddenRowCount} earlier lines retained outside the render window{"\n"}</span>}
-        {visibleRows.length ? visibleRows.map((row) => <React.Fragment key={row.id}>
-          <span className={`terminal-line terminal-${row.tone}${row.effect === "overflow" ? " term-overflow" : ""}`}>{richTerminalText(row.text)}</span>{"\n"}
-        </React.Fragment>) : <>Terminal UI ready.{"\n"}Waiting for terminal stream…</>}
+        {visibleRows.length ? visibleRows.map((row) => <TerminalLine key={row.id} row={row} />) : <>Terminal UI ready.{"\n"}Waiting for terminal stream…</>}
       </pre>
       {!follow && <button className="terminal-latest" type="button" onClick={() => setFollow(true)}>Latest</button>}
     </section>
