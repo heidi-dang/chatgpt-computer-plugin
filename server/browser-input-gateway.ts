@@ -53,7 +53,7 @@ export class PromptBrowserInputGateway {
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const ticket = bearerValue(request);
     const url = new URL(request.url ?? "/", "http://localhost");
-    if (url.pathname !== "/live/prompt/browser-input" || request.method !== "POST" || !ticket) {
+    if (!["/live/prompt/browser-input", "/live/prompt/browser-return"].includes(url.pathname) || request.method !== "POST" || !ticket) {
       this.json(response, 404, { error: "browser input not found" });
       return;
     }
@@ -63,15 +63,28 @@ export class PromptBrowserInputGateway {
       return;
     }
     const sessionId = boundedId(body.session_id, 120);
-    const commandId = boundedId(body.command_id, 160);
-    const inputType = typeof body.input_type === "string" ? body.input_type : "";
     const expectedEpoch = body.expected_epoch;
-    if (!sessionId || !commandId || !ALLOWED_INPUT_TYPES.has(inputType) || !Number.isSafeInteger(expectedEpoch) || Number(expectedEpoch) < 0) {
+    if (!sessionId || !Number.isSafeInteger(expectedEpoch) || Number(expectedEpoch) < 0) {
       this.json(response, 400, { error: "invalid browser input request" });
       return;
     }
     if (!this.promptSessions.allowsBrowserSession(ticket, sessionId)) {
       this.json(response, 403, { error: "browser session is not bound to this prompt" });
+      return;
+    }
+    if (url.pathname === "/live/prompt/browser-return") {
+      try {
+        const result = await this.client.returnUserChromeToAgent(sessionId, Number(expectedEpoch));
+        this.json(response, 200, result);
+      } catch {
+        this.json(response, 502, { error: "browser return unavailable" });
+      }
+      return;
+    }
+    const commandId = boundedId(body.command_id, 160);
+    const inputType = typeof body.input_type === "string" ? body.input_type : "";
+    if (!commandId || !ALLOWED_INPUT_TYPES.has(inputType)) {
+      this.json(response, 400, { error: "invalid browser input request" });
       return;
     }
     if ((body.x !== undefined && !validNumber(body.x, 0, 1)) || (body.y !== undefined && !validNumber(body.y, 0, 1))) {

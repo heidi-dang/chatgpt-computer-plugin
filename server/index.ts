@@ -797,7 +797,8 @@ const httpServer = createServer(async (req, res) => {
     url.pathname === "/live/prompt/stream" ||
     url.pathname === "/live/prompt/snapshot" ||
     url.pathname === "/live/prompt/browser-frame" ||
-    url.pathname === "/live/prompt/browser-input"
+    url.pathname === "/live/prompt/browser-input" ||
+    url.pathname === "/live/prompt/browser-return"
   ) {
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
@@ -816,7 +817,7 @@ const httpServer = createServer(async (req, res) => {
       await liveGateway.handleRenew(req, res);
       return;
     }
-    if (url.pathname === "/live/prompt/browser-input") {
+    if (url.pathname === "/live/prompt/browser-input" || url.pathname === "/live/prompt/browser-return") {
       if (req.method !== "POST") {
         res.writeHead(405, { "cache-control": "no-store" }).end();
         return;

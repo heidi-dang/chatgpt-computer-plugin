@@ -1194,6 +1194,15 @@ export class ComputerClient {
     }
   }
 
+  async returnUserChromeToAgent(sessionId: string, expectedEpoch: number): Promise<Record<string, unknown>> {
+    if (!sessionId) throw new Error("browser session id is required");
+    if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch < 0) throw new Error("valid browser lease epoch is required");
+    return this.requestBrowserDevice(`/sessions/${encodeURIComponent(sessionId)}/return-to-agent`, {
+      method: "POST",
+      body: { expected_epoch: expectedEpoch },
+    });
+  }
+
   async sendUserChromeHumanInput(sessionId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (!sessionId) throw new Error("browser session id is required");
     return this.requestBrowserDevice(`/sessions/${encodeURIComponent(sessionId)}/human-input`, {

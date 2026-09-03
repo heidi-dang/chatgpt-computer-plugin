@@ -66,6 +66,7 @@ export function BrowserSurface({
   const moveInFlight = useRef(false);
   const pendingMove = useRef<HumanInputPayload | null>(null);
   const [hasFrame, setHasFrame] = useState(false);
+  const [returningControl, setReturningControl] = useState(false);
 
   const canHumanInput = active && mode === "HUMAN_CONTROL" && Boolean(inputUrl && ticket && sessionId && Number.isInteger(epoch));
 
@@ -88,6 +89,27 @@ export function BrowserSurface({
         ...payload,
       }),
     });
+  };
+
+  const returnToAgent = async (): Promise<void> => {
+    if (!canHumanInput || !inputUrl || !ticket || !sessionId || epoch === undefined || returningControl) return;
+    setReturningControl(true);
+    try {
+      const url = new URL("/live/prompt/browser-return", inputUrl);
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ticket}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        cache: "no-store",
+        body: JSON.stringify({ session_id: sessionId, expected_epoch: epoch }),
+      });
+      if (!response.ok) throw new Error(`browser return unavailable (${response.status})`);
+    } catch {
+      setReturningControl(false);
+    }
   };
 
   const flushMove = async (payload: HumanInputPayload): Promise<void> => {
@@ -272,7 +294,12 @@ export function BrowserSurface({
         }}
       />
       {!hasFrame ? <div className="browser-empty">Waiting for browser frame…</div> : null}
-      {mode === "HUMAN_CONTROL" ? <div className="browser-human-hint">Human control · touch, pointer, wheel and keyboard are live</div> : null}
+      {mode === "HUMAN_CONTROL" ? <div className="browser-human-hint">
+        <span>Human control · touch, pointer, wheel and keyboard are live</span>
+        <button type="button" disabled={returningControl} onClick={() => void returnToAgent()}>
+          {returningControl ? "Returning…" : "Return to agent"}
+        </button>
+      </div> : null}
     </div>
     <footer className="browser-footer">
       <span>{actionLabel}</span>
