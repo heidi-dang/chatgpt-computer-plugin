@@ -17,6 +17,7 @@ import {
 } from "./state.js";
 import { requestHostDisplayMode, type DisplayModeBridge } from "./display-mode.js";
 import { TerminalView } from "./terminal-view.js";
+import { BrowserSurface } from "./browser-surface.js";
 import { PluginUpdateCenter } from "./plugin-update.js";
 import { CPTR_APP_VERSION } from "./version.js";
 import "./workbench.css";
@@ -51,15 +52,27 @@ type PromptMetadata = {
   ticket?: string;
   streamUrl?: string;
   snapshotUrl?: string;
+  browserFrameUrl?: string;
+  browserInputUrl?: string;
   expiresAt?: number;
   streamingEnabled?: boolean;
+};
+
+type BrowserSurfaceState = {
+  action: string;
+  deviceId?: string;
+  sessionId?: string;
+  mode: "OBSERVING" | "AGENT_CONTROL" | "HANDOFF_REQUIRED" | "HUMAN_CONTROL" | "DISCONNECTED";
+  owner?: string;
+  epoch?: number;
+  hostname?: string;
 };
 
 type PromptEvent = {
   event_id: string;
   sequence: number;
   timestamp: string;
-  type: "mcp.tool" | "direct.worker" | "live.bind";
+  type: "mcp.tool" | "direct.worker" | "live.bind" | "browser.surface";
   payload?: {
     tool_name?: unknown;
     summary?: unknown;
@@ -77,6 +90,13 @@ type PromptEvent = {
     changed_paths?: unknown;
     active_command_ids?: unknown;
     recent_command_ids?: unknown;
+    action?: unknown;
+    device_id?: unknown;
+    session_id?: unknown;
+    state?: unknown;
+    owner?: unknown;
+    epoch?: unknown;
+    hostname?: unknown;
   };
 };
 
@@ -133,6 +153,8 @@ function findPromptMetadata(value: unknown): PromptMetadata | null {
 function usePromptActivity(
   setMeta: React.Dispatch<React.SetStateAction<LiveMetadata | null>>,
   setState: React.Dispatch<React.SetStateAction<WorkbenchState>>,
+  setBrowserSurface: React.Dispatch<React.SetStateAction<BrowserSurfaceState | null>>,
+  setSurfaceMode: React.Dispatch<React.SetStateAction<"terminal" | "browser">>,
   streamingEnabled: boolean,
 ) {
   const prompt = useRef<PromptMetadata | null>(findPromptMetadata(hostBridge()?.toolResponseMetadata));
@@ -199,6 +221,23 @@ function usePromptActivity(
         } as DirectWorkerActivity));
       } else if (event.type === "live.bind" && event.payload?.live) {
         setMeta(event.payload.live);
+      } else if (event.type === "browser.surface") {
+        const payload = event.payload ?? {};
+        const stateValue = typeof payload.state === "string" ? payload.state : "OBSERVING";
+        const mode = (["OBSERVING", "AGENT_CONTROL", "HANDOFF_REQUIRED", "HUMAN_CONTROL", "DISCONNECTED"] as const)
+          .includes(stateValue as BrowserSurfaceState["mode"])
+          ? stateValue as BrowserSurfaceState["mode"]
+          : "OBSERVING";
+        setBrowserSurface({
+          action: typeof payload.action === "string" ? payload.action : "unknown",
+          ...(typeof payload.device_id === "string" ? { deviceId: payload.device_id } : {}),
+          ...(typeof payload.session_id === "string" ? { sessionId: payload.session_id } : {}),
+          mode,
+          ...(typeof payload.owner === "string" ? { owner: payload.owner } : {}),
+          ...(typeof payload.epoch === "number" ? { epoch: payload.epoch } : {}),
+          ...(typeof payload.hostname === "string" ? { hostname: payload.hostname } : {}),
+        });
+        setSurfaceMode("browser");
       }
     };
 
@@ -548,7 +587,9 @@ function OwnedWorkbench() {
     ? new URL("/plugin/update", promptMetadata.streamUrl).toString()
     : undefined;
   const [meta, setMeta] = useState<LiveMetadata | null>(null);
-  const promptConnection = usePromptActivity(setMeta, setState, liveStreamingEnabled);
+  const [surfaceMode, setSurfaceMode] = useState<"terminal" | "browser">("terminal");
+  const [browserSurface, setBrowserSurface] = useState<BrowserSurfaceState | null>(null);
+  const promptConnection = usePromptActivity(setMeta, setState, setBrowserSurface, setSurfaceMode, liveStreamingEnabled);
   const targetConnection = useLiveSession(meta, setMeta, setState, liveStreamingEnabled);
   const connection = meta?.targetId && !isTerminalWorkbenchStatus(state.status) ? targetConnection : promptConnection;
   const visibleTarget = useRef<string | null>(null);
@@ -618,21 +659,38 @@ function OwnedWorkbench() {
 
   const updateCenter = <PluginUpdateCenter callTool={callTool} manifestUrl={updateManifestUrl} onStatus={setActionStatus} />;
 
-  return <main className="terminal-workbench" aria-label="CPTR live terminal">
-    <TerminalView
-      rows={state.transcript}
-      updateCenter={updateCenter}
-      status={displayStatus}
-      connection={connection}
-      machineLabel={meta?.targetId || promptConnection === "prompt live" ? "CPTR Computer" : "Connecting to computer"}
-      targetLabel={targetLabel(meta)}
-      actionStatus={actionStatus}
-      canStop={canControl}
-      onStop={() => void stop()}
-      onCopy={() => void copyTranscript()}
-      onPin={() => void pin()}
-      onExpand={() => void expand()}
-    />
+  return <main className="terminal-workbench" aria-label="CPTR live computer">
+    <div className="surface-switch" role="group" aria-label="Live computer surface">
+      <button type="button" aria-pressed={surfaceMode === "terminal"} onClick={() => setSurfaceMode("terminal")}>Terminal</button>
+      <button type="button" aria-pressed={surfaceMode === "browser"} onClick={() => setSurfaceMode("browser")}>Browser</button>
+    </div>
+    {surfaceMode === "browser"
+      ? <BrowserSurface
+          frameUrl={promptMetadata?.browserFrameUrl}
+          inputUrl={promptMetadata?.browserInputUrl}
+          ticket={promptMetadata?.ticket}
+          sessionId={browserSurface?.sessionId}
+          epoch={browserSurface?.epoch}
+          active={surfaceMode === "browser"}
+          connection={connection}
+          mode={browserSurface?.mode ?? "DISCONNECTED"}
+          hostname={browserSurface?.hostname ?? "CPTR User Chrome"}
+          actionLabel={actionStatus || browserSurface?.action || "Waiting for browser session"}
+        />
+      : <TerminalView
+          rows={state.transcript}
+          updateCenter={updateCenter}
+          status={displayStatus}
+          connection={connection}
+          machineLabel={meta?.targetId || promptConnection === "prompt live" ? "CPTR Computer" : "Connecting to computer"}
+          targetLabel={targetLabel(meta)}
+          actionStatus={actionStatus}
+          canStop={canControl}
+          onStop={() => void stop()}
+          onCopy={() => void copyTranscript()}
+          onPin={() => void pin()}
+          onExpand={() => void expand()}
+        />}
   </main>;
 }
 

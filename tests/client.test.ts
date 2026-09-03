@@ -75,6 +75,132 @@ test("routes managed Chrome control through the existing scoped Control API", as
   assert.equal(response.managed, true);
 });
 
+test("routes paired user Chrome through the dedicated browser-device API without exposing the MCP bearer", async () => {
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seen.push({ url: String(input), init });
+      return new Response(JSON.stringify({ accepted: true, command_id: "cmd-1" }), { status: 200 });
+    },
+  });
+
+  await client.controlUserChrome({
+    action: "command",
+    session_id: "brs-1",
+    command_id: "cmd-1",
+    browser_action: "click",
+    expected_epoch: 4,
+    payload: { ref: "ref_1" },
+  });
+
+  assert.equal(seen[0]?.url, "http://cptr.test/api/browser-device/v1/sessions/brs-1/command");
+  assert.equal((seen[0]?.init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+  const body = JSON.parse(String(seen[0]?.init?.body ?? "{}"));
+  assert.deepEqual(body, {
+    command_id: "cmd-1",
+    action: "click",
+    expected_epoch: 4,
+    wait_seconds: 15,
+    payload: { ref: "ref_1" },
+  });
+  assert.equal(JSON.stringify(body).includes("secret-token"), false);
+});
+
+test("requests a one-time paired user Chrome evaluate approval server-side", async () => {
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seen.push({ url: String(input), init });
+      return new Response(JSON.stringify({ approval_token: "approval_1", expires_in_seconds: 120 }), { status: 200 });
+    },
+  });
+
+  const result = await client.controlUserChrome({
+    action: "approve_evaluate",
+    session_id: "brs-1",
+    expression: "document.title",
+  });
+
+  assert.equal(seen[0]?.url, "http://cptr.test/api/browser-device/v1/sessions/brs-1/evaluate-approval");
+  assert.equal((seen[0]?.init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+  const body = JSON.parse(String(seen[0]?.init?.body ?? "{}"));
+  assert.deepEqual(body, { expression: "document.title" });
+  assert.equal(JSON.stringify(body).includes("secret-token"), false);
+  assert.equal(result.approval_token, "approval_1");
+});
+
+test("forwards paired user Chrome stream visibility server-side with the CPTR bearer", async () => {
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seen.push({ url: String(input), init });
+      return new Response(JSON.stringify({ configured: true }), { status: 200 });
+    },
+  });
+
+  await client.configureUserChromeStream("brs-1", { visible: false, max_fps: 0, max_width: 960, quality: 55 });
+
+  assert.equal(seen[0]?.url, "http://cptr.test/api/browser-device/v1/sessions/brs-1/stream-config");
+  assert.equal((seen[0]?.init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+  const body = JSON.parse(String(seen[0]?.init?.body ?? "{}"));
+  assert.deepEqual(body, { visible: false, max_fps: 0, max_width: 960, quality: 55 });
+});
+
+test("forwards paired user Chrome human input server-side with the CPTR bearer", async () => {
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seen.push({ url: String(input), init });
+      return new Response(JSON.stringify({ accepted: true, command_id: "human-1" }), { status: 200 });
+    },
+  });
+
+  await client.sendUserChromeHumanInput("brs-1", {
+    command_id: "human-1",
+    expected_epoch: 10,
+    input_type: "click",
+    x: 0.25,
+    y: 0.75,
+  });
+
+  assert.equal(seen[0]?.url, "http://cptr.test/api/browser-device/v1/sessions/brs-1/human-input");
+  assert.equal((seen[0]?.init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+  const body = JSON.parse(String(seen[0]?.init?.body ?? "{}"));
+  assert.equal(body.expected_epoch, 10);
+  assert.equal(body.input_type, "click");
+  assert.equal(JSON.stringify(body).includes("secret-token"), false);
+});
+
+test("fetches paired user Chrome frames server-side with the CPTR bearer", async () => {
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seen.push({ url: String(input), init });
+      return new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { "content-type": "image/jpeg", "x-cptr-frame-id": "frm_2" },
+      });
+    },
+  });
+
+  const response = await client.getUserChromeFrame("brs-1", "frm_1");
+
+  assert.equal(response.status, 200);
+  assert.equal(seen[0]?.url, "http://cptr.test/api/browser-device/v1/sessions/brs-1/frame?after_frame_id=frm_1");
+  assert.equal((seen[0]?.init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+  assert.equal((seen[0]?.init?.headers as Record<string, string>).Accept, "image/jpeg, image/webp");
+});
+
 test("routes the single FDX intelligence gateway with repository and worker scope", async () => {
   let seenUrl = "";
   let seenBody: Record<string, unknown> = {};

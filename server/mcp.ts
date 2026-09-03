@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ComputerApiError, ComputerClient } from "./client/computer-client.js";
+import { telemetryInputForTool } from "./browser-telemetry.js";
 import { McpActivityEmitter } from "./mcp-activity.js";
 import { McpDiagnosticsEmitter } from "./mcp-diagnostics.js";
 import {
@@ -55,6 +56,7 @@ import {
   codingSearchSchema,
   codingWriteSchema,
   chromeBrowserSchema,
+  userChromeSchema,
   executeTaskSchema,
   factoryApprovalSchema,
   factoryControlSchema,
@@ -612,6 +614,28 @@ export function createMcpServer(
     return activity;
   };
 
+  const publishBrowserSurface = (input: Record<string, unknown>, result: Record<string, unknown>) => {
+    const payload: {
+      action: string;
+      device_id?: string;
+      session_id?: string;
+      state?: string;
+      owner?: string;
+      epoch?: number;
+      hostname?: string;
+    } = {
+      action: typeof input.action === "string" ? input.action : "unknown",
+    };
+    const lease = recordFrom(result.lease);
+    for (const key of ["device_id", "session_id", "state", "owner", "hostname"] as const) {
+      const value = result[key] ?? (key === "owner" ? lease.owner : undefined) ?? input[key];
+      if (typeof value === "string" && value) payload[key] = value.slice(0, 200);
+    }
+    const epoch = result.epoch ?? lease.epoch ?? input.expected_epoch;
+    if (typeof epoch === "number" && Number.isInteger(epoch) && epoch >= 0) payload.epoch = epoch;
+    promptSessions.append(currentPromptTicket(), { type: "browser.surface", payload });
+  };
+
   const publishDirectWorker = (payload: {
     worker_id: string;
     workspace_id?: string;
@@ -753,7 +777,7 @@ export function createMcpServer(
         const trafficStartedAt = Date.now();
         await applyTrafficIdentity(trafficContext, name, input, normalizedModel.reported);
         let activityClient = trafficContext?.client ?? normalizeMcpClient(undefined);
-        const activityArgumentsJson = terminalJson(input);
+        const activityArgumentsJson = terminalJson(telemetryInputForTool(name, input));
         const modelGeneratedArguments = trafficContext?.rawToolArguments ?? originalInput;
         const emitUsage = (status: "complete" | "error", returnedEnvelope: unknown) => {
           if (!options.diagnostics) return;
@@ -2444,6 +2468,27 @@ export function createMcpServer(
         command,
         { targetType: "command", targetId: input.command_id, workspaceId: input.workspace_id },
         "cptr_ssh_cancel_command",
+      );
+    },
+  );
+
+  server.registerTool(
+    "cptr_user_chrome",
+    {
+      title: "Control paired user Chrome",
+      description:
+        "Control a user-approved Chrome extension connection through CPTR without changing the isolated cptr_chrome_browser tool. Use list_devices to discover paired devices, open_session to bind one real tab, command for browser actions, and transfer_lease for explicit agent/human ownership handoff. Mutating commands are fenced by the current lease epoch and the extension never receives the MCP bearer token.",
+      inputSchema: userChromeSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) => {
+      const result = await client.controlUserChrome(input);
+      publishBrowserSurface(input, result);
+      return activityResult(
+        result,
+        "cptr_user_chrome",
+        `ChatGPT used paired user Chrome action: ${input.action}.`,
       );
     },
   );

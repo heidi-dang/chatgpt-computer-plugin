@@ -19,6 +19,7 @@ const expectedTools = [
   "cptr_cancel_autonomous",
   "cptr_cancel_task",
   "cptr_chrome_browser",
+  "cptr_user_chrome",
   "cptr_code_apply_edits",
   "cptr_code_cancel_command",
   "cptr_code_create_directory",
@@ -100,11 +101,11 @@ const expectedTools = [
   "cptr_workspace_tree",
 ];
 const auxiliaryTools = new Set([
-  "cptr_plugin_update", "cptr_chrome_browser",
+  "cptr_plugin_update", "cptr_chrome_browser", "cptr_user_chrome",
   "cptr_ssh_list_hosts", "cptr_ssh_run_command", "cptr_ssh_get_command", "cptr_ssh_cancel_command",
 ]);
 const expectedPlannedTools = expectedTools.filter((name) => !auxiliaryTools.has(name));
-const expectedRegisteredToolCount = 89;
+const expectedRegisteredToolCount = 90;
 const expectedResource = "ui://cptr/live-workbench.html";
 
 if (!endpoint || !token) {

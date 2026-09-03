@@ -55,12 +55,30 @@ export type PromptLiveBindingEvent = {
   };
 };
 
-export type PromptTerminalEvent = PromptActivityEvent | PromptDirectWorkerEvent | PromptLiveBindingEvent;
+export type PromptBrowserSurfaceEvent = {
+  event_id: string;
+  sequence: number;
+  timestamp: string;
+  type: "browser.surface";
+  payload: {
+    action: string;
+    device_id?: string;
+    session_id?: string;
+    state?: string;
+    owner?: string;
+    epoch?: number;
+    hostname?: string;
+  };
+};
+
+export type PromptTerminalEvent = PromptActivityEvent | PromptDirectWorkerEvent | PromptLiveBindingEvent | PromptBrowserSurfaceEvent;
 
 export type PromptTerminalMetadata = {
   ticket: string;
   streamUrl: string;
   snapshotUrl: string;
+  browserFrameUrl: string;
+  browserInputUrl: string;
   expiresAt: number;
   streamingEnabled: boolean;
 };
@@ -68,7 +86,8 @@ export type PromptTerminalMetadata = {
 type PendingPromptEvent =
   | Omit<PromptActivityEvent, "event_id" | "sequence" | "timestamp">
   | Omit<PromptDirectWorkerEvent, "event_id" | "sequence" | "timestamp">
-  | Omit<PromptLiveBindingEvent, "event_id" | "sequence" | "timestamp">;
+  | Omit<PromptLiveBindingEvent, "event_id" | "sequence" | "timestamp">
+  | Omit<PromptBrowserSurfaceEvent, "event_id" | "sequence" | "timestamp">;
 
 type PromptSession = {
   ticket: string;
@@ -77,6 +96,7 @@ type PromptSession = {
   events: PromptTerminalEvent[];
   listeners: Set<(event: PromptTerminalEvent) => void>;
   allowDelegate: boolean;
+  browserSessionIds: Set<string>;
 };
 
 type PromptStoreOptions = {
@@ -86,6 +106,8 @@ type PromptStoreOptions = {
   maxEvents?: number;
   streamUrl?: string;
   snapshotUrl?: string;
+  browserFrameUrl?: string;
+  browserInputUrl?: string;
   streamingEnabled?: boolean;
 };
 
@@ -98,6 +120,8 @@ export class PromptTerminalStore {
   private readonly maxEvents: number;
   private readonly streamUrl: string;
   private readonly snapshotUrl: string;
+  private readonly browserFrameUrl: string;
+  private readonly browserInputUrl: string;
   private readonly streamingEnabledValue: boolean;
 
   constructor(options: PromptStoreOptions = {}) {
@@ -107,6 +131,8 @@ export class PromptTerminalStore {
     this.maxEvents = Math.max(16, options.maxEvents ?? 2_000);
     this.streamUrl = options.streamUrl ?? "/live/prompt/stream";
     this.snapshotUrl = options.snapshotUrl ?? "/live/prompt/snapshot";
+    this.browserFrameUrl = options.browserFrameUrl ?? "/live/prompt/browser-frame";
+    this.browserInputUrl = options.browserInputUrl ?? "/live/prompt/browser-input";
     this.streamingEnabledValue = options.streamingEnabled ?? true;
   }
 
@@ -135,12 +161,15 @@ export class PromptTerminalStore {
       events: [],
       listeners: new Set(),
       allowDelegate: options.allowDelegate === true,
+      browserSessionIds: new Set(),
     });
     return {
       ticket,
       expiresAt,
       streamUrl: this.streamUrl,
       snapshotUrl: this.snapshotUrl,
+      browserFrameUrl: this.browserFrameUrl,
+      browserInputUrl: this.browserInputUrl,
       streamingEnabled: this.streamingEnabledValue,
     };
   }
@@ -160,6 +189,8 @@ export class PromptTerminalStore {
       expiresAt: session.expiresAt,
       streamUrl: this.streamUrl,
       snapshotUrl: this.snapshotUrl,
+      browserFrameUrl: this.browserFrameUrl,
+      browserInputUrl: this.browserInputUrl,
       streamingEnabled: this.streamingEnabledValue,
     };
   }
@@ -167,6 +198,14 @@ export class PromptTerminalStore {
   allowsDelegation(ticket: string | null | undefined): boolean {
     if (!ticket) return false;
     return this.getSession(ticket)?.allowDelegate === true;
+  }
+
+  allowsBrowserSession(ticket: string | null | undefined, sessionId: string): boolean {
+    if (!ticket || !sessionId) return false;
+    const session = this.getSession(ticket);
+    if (!session) return false;
+    session.expiresAt = this.now() + this.ttlMs;
+    return session.browserSessionIds.has(sessionId);
   }
 
   bindWorkbenchSession(ticket: string | null | undefined, workbenchSessionId: string | null | undefined): boolean {
@@ -190,6 +229,17 @@ export class PromptTerminalStore {
     if (!this.streamingEnabledValue || !ticket) return null;
     const session = this.getSession(ticket);
     if (!session) return null;
+    if (event.type === "browser.surface") {
+      const sessionId = event.payload.session_id;
+      if (typeof sessionId === "string" && sessionId) {
+        session.browserSessionIds.add(sessionId);
+        while (session.browserSessionIds.size > 16) {
+          const oldest = session.browserSessionIds.values().next().value;
+          if (typeof oldest !== "string") break;
+          session.browserSessionIds.delete(oldest);
+        }
+      }
+    }
     session.lastSequence += 1;
     const fullEvent = {
       ...event,
@@ -208,6 +258,7 @@ export class PromptTerminalStore {
   replay(ticket: string, after = 0): { events: PromptTerminalEvent[]; last_sequence: number; expires_at: number } | null {
     const session = this.getSession(ticket);
     if (!session) return null;
+    session.expiresAt = this.now() + this.ttlMs;
     return {
       events: session.events.filter((event) => event.sequence > after),
       last_sequence: session.lastSequence,
@@ -219,6 +270,7 @@ export class PromptTerminalStore {
     if (!this.streamingEnabledValue) return null;
     const session = this.getSession(ticket);
     if (!session) return null;
+    session.expiresAt = this.now() + this.ttlMs;
     session.listeners.add(listener);
     return () => session.listeners.delete(listener);
   }

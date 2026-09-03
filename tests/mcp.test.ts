@@ -87,6 +87,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_ssh_get_command",
       "cptr_ssh_cancel_command",
       "cptr_chrome_browser",
+      "cptr_user_chrome",
       "cptr_plugin_update",
       "cptr_benchmark_start",
       "cptr_benchmark_submit",
@@ -157,6 +158,9 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_ssh_run_command")?.annotations?.openWorldHint, true);
   assert.equal(tools.get("cptr_ssh_get_command")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_ssh_cancel_command")?.annotations?.destructiveHint, true);
+  assert.equal(tools.get("cptr_user_chrome")?.annotations?.readOnlyHint, false);
+  assert.equal(tools.get("cptr_user_chrome")?.annotations?.openWorldHint, true);
+  assert.notEqual(tools.get("cptr_user_chrome")?.inputSchema.properties?.action, undefined);
   assert.equal(tools.get("cptr_chrome_browser")?.annotations?.readOnlyHint, false);
   assert.equal(tools.get("cptr_chrome_browser")?.annotations?.openWorldHint, true);
   assert.notEqual(tools.get("cptr_chrome_browser")?.inputSchema.properties?.action, undefined);
@@ -167,6 +171,14 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
     | { properties?: Record<string, { maximum?: number }> }
     | undefined;
   assert.equal(directInputSchema?.properties?.wait_seconds?.maximum, 60);
+  const commandInputSchema = tools.get("cptr_code_run_command")?.inputSchema as
+    | { properties?: Record<string, { maximum?: number }> }
+    | undefined;
+  const commandStatusSchema = tools.get("cptr_code_get_command")?.inputSchema as
+    | { properties?: Record<string, { maximum?: number }> }
+    | undefined;
+  assert.equal(commandInputSchema?.properties?.wait_seconds?.maximum, 3600);
+  assert.equal(commandStatusSchema?.properties?.wait_seconds?.maximum, 3600);
   assert.notEqual(tools.get("cptr_start_task")?.inputSchema.properties?.execution_policy, undefined);
   assert.notEqual(tools.get("cptr_execute_task")?.inputSchema.properties?.execution_policy, undefined);
   assert.notEqual(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.execution_policy, undefined);
@@ -221,7 +233,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.match(CPTR_APP_VERSION, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
   assert.equal(MCP_CONTRACT_VERSION, CPTR_APP_VERSION);
   assert.equal(MCP_CONTRACT_TOOL_COUNT, 83);
-  assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT + 6);
+  assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT + 7);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
   }
@@ -564,6 +576,42 @@ test("invokes managed Chrome control through the ChatGPT-visible MCP tool", asyn
   await server.close();
 });
 
+test("invokes paired user Chrome through the separate ChatGPT-visible MCP tool", async () => {
+  const seen: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async (input, init) => {
+      seen.push({
+        url: String(input),
+        body: init?.body ? JSON.parse(String(init.body)) : {},
+      });
+      return new Response(JSON.stringify({ devices: [] }), { status: 200 });
+    },
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const response = await client.callTool({
+    name: "cptr_user_chrome",
+    arguments: { action: "list_devices" },
+  });
+
+  assert.equal(response.isError, undefined);
+  assert.deepEqual((response.structuredContent as { devices?: unknown[] } | undefined)?.devices, []);
+  assert.deepEqual(seen, [
+    {
+      url: "http://cptr.test/api/browser-device/v1/devices",
+      body: {},
+    },
+  ]);
+
+  await client.close();
+  await server.close();
+});
+
 test("invokes every direct-coding tool through MCP without a CPTR model input", async () => {
   const seen: Array<{ url: string; init?: RequestInit }> = [];
   const sha = "a".repeat(64);
@@ -869,6 +917,40 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
     assert.match(completedEvent.payload.result_json ?? "", /\"id\": \"task-1\"/);
     assert.equal((completedEvent.payload.result_json ?? "").includes("server-only-token"), false);
   }
+  const browserResponse = await client.callTool({
+    name: "cptr_user_chrome",
+    arguments: {
+      action: "command",
+      session_id: "brs-1",
+      command_id: "browser-1",
+      browser_action: "evaluate",
+      expected_epoch: 4,
+      expression: "document.cookie + ' top-secret-browser-expression'",
+      payload: {
+        expression: "document.cookie + ' top-secret-browser-expression'",
+        approval_token: "approval-secret-token",
+        text: "correct horse battery staple",
+        ref: "ref_1",
+      },
+    },
+  });
+  assert.equal(browserResponse.isError, undefined);
+  const browserReplay = promptSessions.replay(promptTicket, 0);
+  assert.ok(browserReplay);
+  const browserStarted = browserReplay.events.find((event) =>
+    event.type === "mcp.tool" && event.payload.tool_name === "cptr_user_chrome" && event.payload.status === "STARTED"
+  );
+  assert.equal(browserStarted?.type, "mcp.tool");
+  if (browserStarted?.type === "mcp.tool") {
+    const argumentsJson = browserStarted.payload.arguments_json ?? "";
+    assert.match(argumentsJson, /\"session_id\": \"brs-1\"/);
+    assert.match(argumentsJson, /\"ref\": \"ref_1\"/);
+    assert.equal(argumentsJson.includes("top-secret-browser-expression"), false);
+    assert.equal(argumentsJson.includes("approval-secret-token"), false);
+    assert.equal(argumentsJson.includes("correct horse battery staple"), false);
+    assert.match(argumentsJson, /REDACTED_BROWSER/);
+  }
+
   const taskBind = taskReplay.events.find((event) => event.type === "live.bind");
   assert.equal(taskBind?.type, "live.bind");
   if (taskBind?.type === "live.bind") {

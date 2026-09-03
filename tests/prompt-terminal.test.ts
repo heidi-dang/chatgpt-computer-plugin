@@ -49,6 +49,32 @@ test("live terminal streaming implementation remains available when enabled", ()
   assert.equal(store.replay(metadata.ticket, 0)?.events.length, 1);
 });
 
+test("browser surface activity reuses the prompt stream without credential fields", () => {
+  const store = new PromptTerminalStore({ streamingEnabled: true });
+  const metadata = store.open();
+  assert.match(metadata.browserFrameUrl, /\/live\/prompt\/browser-frame$/);
+  assert.match(metadata.browserInputUrl, /\/live\/prompt\/browser-input$/);
+  const appended = store.append(metadata.ticket, {
+    type: "browser.surface",
+    payload: {
+      action: "open_session",
+      device_id: "bdv_1",
+      session_id: "brs_1",
+      state: "OBSERVING",
+      owner: "none",
+      epoch: 0,
+      hostname: "Heidi Chrome",
+    },
+  });
+
+  assert.equal(appended?.type, "browser.surface");
+  const payload = appended?.payload as Record<string, unknown> | undefined;
+  assert.equal(payload?.session_id, "brs_1");
+  assert.equal(store.allowsBrowserSession(metadata.ticket, "brs_1"), true);
+  assert.equal(store.allowsBrowserSession(metadata.ticket, "brs_other"), false);
+  assert.equal(JSON.stringify(payload).includes("credential"), false);
+});
+
 
 test("reuses and renews a workbench prompt stream while resetting per-turn delegation", () => {
   let now = 1_000;
@@ -63,4 +89,19 @@ test("reuses and renews a workbench prompt stream while resetting per-turn deleg
   assert.equal(resumed.ticket, first.ticket, "the already-open widget must keep its prompt SSE ticket");
   assert.ok(resumed.expiresAt > first.expiresAt, "resuming a live task must renew the prompt stream lease");
   assert.equal(store.allowsDelegation(first.ticket), false, "delegation authorization must not leak into the next user turn");
+});
+
+test("refreshes prompt-session expiry on successful snapshot/stream activity so long tasks do not lose the persistent widget", () => {
+  let now = 1_000;
+  const store = new PromptTerminalStore({ streamingEnabled: true, ttlMs: 60_000, now: () => now });
+  const first = store.open();
+  assert.equal(store.bindWorkbenchSession(first.ticket, "wbs-long-running"), true);
+
+  now += 50_000;
+  const replay = store.replay(first.ticket, 0);
+  assert.ok(replay);
+  assert.ok(replay.expires_at > first.expiresAt, "successful activity must extend the prompt-session lease");
+
+  now += 50_000;
+  assert.equal(store.ticketForWorkbenchSession("wbs-long-running"), first.ticket, "active prompt stream must remain bound across long execution windows");
 });
