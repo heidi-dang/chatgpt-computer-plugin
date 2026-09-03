@@ -2479,6 +2479,7 @@ export function createMcpServer(
       description:
         "Control a user-approved Chrome extension connection through CPTR without changing the isolated cptr_chrome_browser tool. Use list_devices to discover paired devices, open_session to bind one real tab, command for browser actions, and transfer_lease for explicit agent/human ownership handoff. Mutating commands are fenced by the current lease epoch and the extension never receives the MCP bearer token.",
       inputSchema: userChromeSchema,
+      outputSchema: z.object({}).passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       _meta: workbenchToolMetadata,
     },

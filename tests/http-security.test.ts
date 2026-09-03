@@ -36,6 +36,26 @@ test("normalizes configured HTTP origins and allows only listed browser origins"
   assert.deepEqual(corsHeaders("https://evil.example", allowed), {});
 });
 
+test("allows only explicitly configured Chrome extension origins", () => {
+  const extensionOrigin = "chrome-extension://jgffclmbhhlgoloondkchodehenicfbl";
+  const allowed = resolveAllowedOrigins({ MCP_ALLOWED_ORIGINS: `https://chatgpt.com, ${extensionOrigin}` });
+
+  assert.equal(isAllowedBrowserOrigin(extensionOrigin, allowed), true);
+  assert.equal(isAllowedBrowserOrigin("chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", allowed), false);
+  assert.deepEqual(corsHeaders(extensionOrigin, allowed), {
+    "Access-Control-Allow-Origin": extensionOrigin,
+    Vary: "Origin",
+  });
+  assert.throws(
+    () => resolveAllowedOrigins({ MCP_ALLOWED_ORIGINS: "chrome-extension://not-an-extension-id" }),
+    /32-character-id/i,
+  );
+  assert.throws(
+    () => resolveAllowedOrigins({ MCP_ALLOWED_ORIGINS: `${extensionOrigin}/options.html` }),
+    /exact chrome-extension/i,
+  );
+});
+
 test("allows the ChatGPT Apps SDK sandbox only for Workbench browser traffic", () => {
   const allowed = resolveAllowedOrigins({ MCP_ALLOWED_ORIGINS: "https://chatgpt.com" });
   const widgetOrigin = "https://mcp-example-com.web-sandbox.oaiusercontent.com";
