@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { ComputerApiError, ComputerClient } from "./client/computer-client.js";
+import { telemetryInputForTool } from "./browser-telemetry.js";
 import { McpActivityEmitter } from "./mcp-activity.js";
 import { McpDiagnosticsEmitter } from "./mcp-diagnostics.js";
 import {
@@ -739,7 +740,7 @@ export function createMcpServer(
         const trafficStartedAt = Date.now();
         await applyTrafficIdentity(trafficContext, name, input, normalizedModel.reported);
         let activityClient = trafficContext?.client ?? normalizeMcpClient(undefined);
-        const activityArgumentsJson = terminalJson(input);
+        const activityArgumentsJson = terminalJson(telemetryInputForTool(name, input));
         const modelGeneratedArguments = trafficContext?.rawToolArguments ?? originalInput;
         const emitUsage = (status: "complete" | "error", returnedEnvelope: unknown) => {
           if (!options.diagnostics) return;

@@ -731,6 +731,40 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
     assert.match(completedEvent.payload.result_json ?? "", /\"id\": \"task-1\"/);
     assert.equal((completedEvent.payload.result_json ?? "").includes("server-only-token"), false);
   }
+  const browserResponse = await client.callTool({
+    name: "cptr_user_chrome",
+    arguments: {
+      action: "command",
+      session_id: "brs-1",
+      command_id: "browser-1",
+      browser_action: "evaluate",
+      expected_epoch: 4,
+      expression: "document.cookie + ' top-secret-browser-expression'",
+      payload: {
+        expression: "document.cookie + ' top-secret-browser-expression'",
+        approval_token: "approval-secret-token",
+        text: "correct horse battery staple",
+        ref: "ref_1",
+      },
+    },
+  });
+  assert.equal(browserResponse.isError, undefined);
+  const browserReplay = promptSessions.replay(promptTicket, 0);
+  assert.ok(browserReplay);
+  const browserStarted = browserReplay.events.find((event) =>
+    event.type === "mcp.tool" && event.payload.tool_name === "cptr_user_chrome" && event.payload.status === "STARTED"
+  );
+  assert.equal(browserStarted?.type, "mcp.tool");
+  if (browserStarted?.type === "mcp.tool") {
+    const argumentsJson = browserStarted.payload.arguments_json ?? "";
+    assert.match(argumentsJson, /\"session_id\": \"brs-1\"/);
+    assert.match(argumentsJson, /\"ref\": \"ref_1\"/);
+    assert.equal(argumentsJson.includes("top-secret-browser-expression"), false);
+    assert.equal(argumentsJson.includes("approval-secret-token"), false);
+    assert.equal(argumentsJson.includes("correct horse battery staple"), false);
+    assert.match(argumentsJson, /REDACTED_BROWSER/);
+  }
+
   const taskBind = taskReplay.events.find((event) => event.type === "live.bind");
   assert.equal(taskBind?.type, "live.bind");
   if (taskBind?.type === "live.bind") {
