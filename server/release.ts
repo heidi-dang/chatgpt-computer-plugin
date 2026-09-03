@@ -33,8 +33,12 @@ export function currentPluginUpdateManifest(env: NodeJS.ProcessEnv = process.env
     tool_count: MCP_CONTRACT_TOOL_COUNT,
     release_sha: env.GIT_COMMIT_SHA ?? env.RAILWAY_GIT_COMMIT_SHA ?? env.CPTR_WORKBENCH_BUILD_ID ?? null,
     released_at: "2026-09-03",
-    summary: "CPTR Computer v1.4.2 restores the paired-Chrome live card and makes real Chrome tab selection bootstrappable while hardening browser reconnect and managed-browser interaction.",
+    summary: `CPTR Computer v${CPTR_APP_VERSION} reconciles the paired-Chrome live card with authoritative browser-frame health, prompt ownership, and debugger-session lifecycle.`,
     changes: [
+      "Makes the browser card report CONNECTING, LIVE, RECONNECTING, OFFLINE, and RELEASED from actual frame/session health instead of treating the prompt SSE connection as proof that a browser frame is live.",
+      "Routes browser surface updates back to the prompt that owns the browser session so later commands and lease release cannot strand an older ChatGPT card in AGENT_CONTROL.",
+      "Closes agent-to-none browser leases as DISCONNECTED, clears cached visual frames, stops frame polling after release, and permits clean tab reuse without stale OBSERVING sessions.",
+      "Adds a compact released-state card that explicitly reports Chrome debugger detachment instead of leaving a black reconnecting canvas after browser work ends.",
       "Adds owner-scoped pre-session tab discovery and lets open_session automatically bind the active Chrome tab when tab_id is omitted, eliminating the circular session-bootstrap dependency.",
       "Prevents device discovery and pairing activity from switching the persistent Workbench into an unrenderable blank browser canvas before a real browser session exists.",
       "Stops malformed internal browser audit-event replay from driving the extension into reconnect loops; durable extension session/lease recovery remains authoritative and interrupted commands retry explicitly.",
