@@ -438,6 +438,28 @@ export const benchmarkLeaderboardSchema = {
   suite_id: z.string().min(1).max(80).default("cptr-python-core"),
 };
 
+export const userChromeSchema = {
+  action: z.enum([
+    "list_devices",
+    "open_session",
+    "command",
+    "transfer_lease",
+  ]),
+  device_id: z.string().min(1).max(120).optional(),
+  session_id: z.string().min(1).max(120).optional(),
+  tab_id: z.number().int().min(0).max(2_147_483_647).optional(),
+  workbench_session_id: workbenchSessionId.optional(),
+  surface_id: z.string().min(1).max(200).optional(),
+  command_id: z.string().min(1).max(160).optional(),
+  browser_action: z.string().min(1).max(120).optional(),
+  expected_epoch: z.number().int().min(0).optional(),
+  expected_owner: z.enum(["none", "agent", "human"]).optional(),
+  new_owner: z.enum(["none", "agent", "human"]).optional(),
+  fresh_snapshot_id: z.string().min(1).max(200).optional(),
+  wait_seconds: z.number().min(0.1).max(60).default(15),
+  payload: z.record(z.unknown()).default({}),
+};
+
 export const chromeBrowserSchema = {
   workspace_id: z.string().min(1).max(200),
   action: z.enum([

@@ -75,6 +75,39 @@ test("routes managed Chrome control through the existing scoped Control API", as
   assert.equal(response.managed, true);
 });
 
+test("routes paired user Chrome through the dedicated browser-device API without exposing the MCP bearer", async () => {
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seen.push({ url: String(input), init });
+      return new Response(JSON.stringify({ accepted: true, command_id: "cmd-1" }), { status: 200 });
+    },
+  });
+
+  await client.controlUserChrome({
+    action: "command",
+    session_id: "brs-1",
+    command_id: "cmd-1",
+    browser_action: "click",
+    expected_epoch: 4,
+    payload: { ref: "ref_1" },
+  });
+
+  assert.equal(seen[0]?.url, "http://cptr.test/api/browser-device/v1/sessions/brs-1/command");
+  assert.equal((seen[0]?.init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+  const body = JSON.parse(String(seen[0]?.init?.body ?? "{}"));
+  assert.deepEqual(body, {
+    command_id: "cmd-1",
+    action: "click",
+    expected_epoch: 4,
+    wait_seconds: 15,
+    payload: { ref: "ref_1" },
+  });
+  assert.equal(JSON.stringify(body).includes("secret-token"), false);
+});
+
 test("routes the single FDX intelligence gateway with repository and worker scope", async () => {
   let seenUrl = "";
   let seenBody: Record<string, unknown> = {};

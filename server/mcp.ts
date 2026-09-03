@@ -55,6 +55,7 @@ import {
   codingSearchSchema,
   codingWriteSchema,
   chromeBrowserSchema,
+  userChromeSchema,
   executeTaskSchema,
   messageSchema,
   monitorAutonomousSchema,
@@ -2289,6 +2290,25 @@ export function createMcpServer(
         "cptr_ssh_cancel_command",
       );
     },
+  );
+
+  server.registerTool(
+    "cptr_user_chrome",
+    {
+      title: "Control paired user Chrome",
+      description:
+        "Control a user-approved Chrome extension connection through CPTR without changing the isolated cptr_chrome_browser tool. Use list_devices to discover paired devices, open_session to bind one real tab, command for browser actions, and transfer_lease for explicit agent/human ownership handoff. Mutating commands are fenced by the current lease epoch and the extension never receives the MCP bearer token.",
+      inputSchema: userChromeSchema,
+      outputSchema: z.record(z.unknown()),
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      _meta: workbenchToolMetadata,
+    },
+    async (input) =>
+      activityResult(
+        await client.controlUserChrome(input),
+        "cptr_user_chrome",
+        `ChatGPT used paired user Chrome action: ${input.action}.`,
+      ),
   );
 
   server.registerTool(

@@ -87,6 +87,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_ssh_get_command",
       "cptr_ssh_cancel_command",
       "cptr_chrome_browser",
+      "cptr_user_chrome",
       "cptr_plugin_update",
       "cptr_benchmark_start",
       "cptr_benchmark_submit",
@@ -148,6 +149,9 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_ssh_run_command")?.annotations?.openWorldHint, true);
   assert.equal(tools.get("cptr_ssh_get_command")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_ssh_cancel_command")?.annotations?.destructiveHint, true);
+  assert.equal(tools.get("cptr_user_chrome")?.annotations?.readOnlyHint, false);
+  assert.equal(tools.get("cptr_user_chrome")?.annotations?.openWorldHint, true);
+  assert.notEqual(tools.get("cptr_user_chrome")?.inputSchema.properties?.action, undefined);
   assert.equal(tools.get("cptr_chrome_browser")?.annotations?.readOnlyHint, false);
   assert.equal(tools.get("cptr_chrome_browser")?.annotations?.openWorldHint, true);
   assert.notEqual(tools.get("cptr_chrome_browser")?.inputSchema.properties?.action, undefined);
@@ -379,6 +383,42 @@ test("invokes managed Chrome control through the ChatGPT-visible MCP tool", asyn
         amount: 3,
         allow_network: false,
       },
+    },
+  ]);
+
+  await client.close();
+  await server.close();
+});
+
+test("invokes paired user Chrome through the separate ChatGPT-visible MCP tool", async () => {
+  const seen: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async (input, init) => {
+      seen.push({
+        url: String(input),
+        body: init?.body ? JSON.parse(String(init.body)) : {},
+      });
+      return new Response(JSON.stringify({ devices: [] }), { status: 200 });
+    },
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const response = await client.callTool({
+    name: "cptr_user_chrome",
+    arguments: { action: "list_devices" },
+  });
+
+  assert.equal(response.isError, undefined);
+  assert.deepEqual((response.structuredContent as { devices?: unknown[] } | undefined)?.devices, []);
+  assert.deepEqual(seen, [
+    {
+      url: "http://cptr.test/api/browser-device/v1/devices",
+      body: {},
     },
   ]);
 
