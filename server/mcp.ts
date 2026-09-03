@@ -588,11 +588,12 @@ export function createMcpServer(
     } = {
       action: typeof input.action === "string" ? input.action : "unknown",
     };
+    const lease = recordFrom(result.lease);
     for (const key of ["device_id", "session_id", "state", "owner", "hostname"] as const) {
-      const value = result[key] ?? input[key];
+      const value = result[key] ?? (key === "owner" ? lease.owner : undefined) ?? input[key];
       if (typeof value === "string" && value) payload[key] = value.slice(0, 200);
     }
-    const epoch = result.epoch ?? input.expected_epoch;
+    const epoch = result.epoch ?? lease.epoch ?? input.expected_epoch;
     if (typeof epoch === "number" && Number.isInteger(epoch) && epoch >= 0) payload.epoch = epoch;
     promptSessions.append(currentPromptTicket(), { type: "browser.surface", payload });
   };

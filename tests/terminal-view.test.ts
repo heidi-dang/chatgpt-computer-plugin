@@ -184,6 +184,13 @@ test("terminal view memoizes stable rows and frame-coalesces follow scrolling", 
   assert.match(source, /window\.cancelAnimationFrame\(/);
 });
 
+test("paired Chrome open_session publishes the authoritative nested lease", () => {
+  const mcpSource = readFileSync(new URL("../server/mcp.ts", import.meta.url), "utf8");
+  assert.match(mcpSource, /const lease = recordFrom\(result\.lease\)/);
+  assert.match(mcpSource, /key === "owner" \? lease\.owner/);
+  assert.match(mcpSource, /result\.epoch \?\? lease\.epoch \?\? input\.expected_epoch/);
+});
+
 test("Workbench switches terminal and browser inside one persistent root", () => {
   const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
   const browserSource = readFileSync(new URL("../web/src/browser-surface.tsx", import.meta.url), "utf8");
