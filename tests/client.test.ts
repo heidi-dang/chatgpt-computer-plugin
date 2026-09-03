@@ -108,6 +108,25 @@ test("routes paired user Chrome through the dedicated browser-device API without
   assert.equal(JSON.stringify(body).includes("secret-token"), false);
 });
 
+test("forwards paired user Chrome stream visibility server-side with the CPTR bearer", async () => {
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seen.push({ url: String(input), init });
+      return new Response(JSON.stringify({ configured: true }), { status: 200 });
+    },
+  });
+
+  await client.configureUserChromeStream("brs-1", { visible: false, max_fps: 0, max_width: 960, quality: 55 });
+
+  assert.equal(seen[0]?.url, "http://cptr.test/api/browser-device/v1/sessions/brs-1/stream-config");
+  assert.equal((seen[0]?.init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+  const body = JSON.parse(String(seen[0]?.init?.body ?? "{}"));
+  assert.deepEqual(body, { visible: false, max_fps: 0, max_width: 960, quality: 55 });
+});
+
 test("forwards paired user Chrome human input server-side with the CPTR bearer", async () => {
   const seen: Array<{ url: string; init?: RequestInit }> = [];
   const client = new ComputerClient({

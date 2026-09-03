@@ -65,6 +65,7 @@ export function BrowserSurface({
   const commandSequence = useRef(0);
   const moveInFlight = useRef(false);
   const pendingMove = useRef<HumanInputPayload | null>(null);
+  const lastStreamVisible = useRef<boolean | null>(null);
   const [hasFrame, setHasFrame] = useState(false);
   const [returningControl, setReturningControl] = useState(false);
 
@@ -173,6 +174,29 @@ export function BrowserSurface({
 
     const pageHidden = () => document.visibilityState === "hidden";
 
+    const configureSourceVisibility = (visible: boolean) => {
+      if (lastStreamVisible.current === visible || !inputUrl || !ticket || !sessionId || epoch === undefined) return;
+      lastStreamVisible.current = visible;
+      const url = new URL("/live/prompt/browser-stream", inputUrl);
+      void fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${ticket}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        cache: "no-store",
+        body: JSON.stringify({
+          session_id: sessionId,
+          expected_epoch: epoch,
+          visible,
+          max_fps: visible ? 10 : 0,
+          max_width: visible ? 1280 : 960,
+          quality: visible ? 68 : 55,
+        }),
+      }).catch(() => undefined);
+    };
+
     const poll = async () => {
       if (running || stopped || !intersecting || pageHidden()) return;
       running = true;
@@ -203,7 +227,9 @@ export function BrowserSurface({
     };
 
     const updateVisibility = () => {
-      if (!intersecting || pageHidden()) {
+      const visible = intersecting && !pageHidden();
+      configureSourceVisibility(visible);
+      if (!visible) {
         controller?.abort();
         controller = null;
         return;
@@ -218,15 +244,17 @@ export function BrowserSurface({
         }, { threshold: 0.01 });
     observer?.observe(shell);
     document.addEventListener("visibilitychange", updateVisibility);
+    configureSourceVisibility(intersecting && !pageHidden());
     void poll();
 
     return () => {
+      configureSourceVisibility(false);
       stopped = true;
       controller?.abort();
       observer?.disconnect();
       document.removeEventListener("visibilitychange", updateVisibility);
     };
-  }, [active, frameUrl, sessionId, ticket]);
+  }, [active, epoch, frameUrl, inputUrl, sessionId, ticket]);
 
   const state = connection.toLowerCase().includes("reconnect")
     ? "reconnecting"

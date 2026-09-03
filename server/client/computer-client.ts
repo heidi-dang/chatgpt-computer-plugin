@@ -1194,6 +1194,14 @@ export class ComputerClient {
     }
   }
 
+  async configureUserChromeStream(sessionId: string, input: { visible: boolean; max_fps: number; max_width: number; quality: number }): Promise<Record<string, unknown>> {
+    if (!sessionId) throw new Error("browser session id is required");
+    return this.requestBrowserDevice(`/sessions/${encodeURIComponent(sessionId)}/stream-config`, {
+      method: "POST",
+      body: input,
+    });
+  }
+
   async returnUserChromeToAgent(sessionId: string, expectedEpoch: number): Promise<Record<string, unknown>> {
     if (!sessionId) throw new Error("browser session id is required");
     if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch < 0) throw new Error("valid browser lease epoch is required");

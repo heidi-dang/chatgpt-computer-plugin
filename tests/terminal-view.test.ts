@@ -207,6 +207,9 @@ test("Workbench switches terminal and browser inside one persistent root", () =>
   assert.match(browserSource, /document\.visibilityState === "hidden"/);
   assert.match(browserSource, /controller\?\.abort\(\)/);
   assert.match(browserSource, /createImageBitmap\(blob\)/);
+  assert.match(browserSource, /\/live\/prompt\/browser-stream/);
+  assert.match(browserSource, /max_fps:\s*visible \? 10 : 0/);
+  assert.match(browserSource, /configureSourceVisibility\(false\)/);
   assert.match(browserSource, /mode === "HUMAN_CONTROL"/);
   assert.match(browserSource, /expected_epoch:\s*epoch/);
   assert.match(browserSource, /clamp01\(/);

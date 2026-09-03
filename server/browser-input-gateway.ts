@@ -53,7 +53,7 @@ export class PromptBrowserInputGateway {
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const ticket = bearerValue(request);
     const url = new URL(request.url ?? "/", "http://localhost");
-    if (!["/live/prompt/browser-input", "/live/prompt/browser-return"].includes(url.pathname) || request.method !== "POST" || !ticket) {
+    if (!["/live/prompt/browser-input", "/live/prompt/browser-return", "/live/prompt/browser-stream"].includes(url.pathname) || request.method !== "POST" || !ticket) {
       this.json(response, 404, { error: "browser input not found" });
       return;
     }
@@ -78,6 +78,33 @@ export class PromptBrowserInputGateway {
         this.json(response, 200, result);
       } catch {
         this.json(response, 502, { error: "browser return unavailable" });
+      }
+      return;
+    }
+    if (url.pathname === "/live/prompt/browser-stream") {
+      const visible = body.visible;
+      const maxFps = body.max_fps;
+      const maxWidth = body.max_width;
+      const quality = body.quality;
+      if (
+        typeof visible !== "boolean" ||
+        !Number.isSafeInteger(maxFps) || Number(maxFps) < 0 || Number(maxFps) > 12 ||
+        !Number.isSafeInteger(maxWidth) || Number(maxWidth) < 320 || Number(maxWidth) > 3_840 ||
+        !Number.isSafeInteger(quality) || Number(quality) < 20 || Number(quality) > 90
+      ) {
+        this.json(response, 400, { error: "invalid browser stream configuration" });
+        return;
+      }
+      try {
+        const result = await this.client.configureUserChromeStream(sessionId, {
+          visible,
+          max_fps: Number(maxFps),
+          max_width: Number(maxWidth),
+          quality: Number(quality),
+        });
+        this.json(response, 200, result);
+      } catch {
+        this.json(response, 502, { error: "browser stream configuration unavailable" });
       }
       return;
     }
