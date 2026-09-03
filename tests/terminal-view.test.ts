@@ -183,3 +183,20 @@ test("terminal view memoizes stable rows and frame-coalesces follow scrolling", 
   assert.match(source, /window\.requestAnimationFrame\(/);
   assert.match(source, /window\.cancelAnimationFrame\(/);
 });
+
+test("Workbench switches terminal and browser inside one persistent root", () => {
+  const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+  const browserSource = readFileSync(new URL("../web/src/browser-surface.tsx", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../web/src/workbench.css", import.meta.url), "utf8");
+
+  assert.match(source, /useState<"terminal" \| "browser">\("terminal"\)/);
+  assert.match(source, /<BrowserSurface/);
+  assert.match(source, /<TerminalView/);
+  assert.match(source, /createRoot\(root\)\.render\(<Workbench \/>\)/);
+  assert.equal((source.match(/createRoot\(/g) ?? []).length, 1);
+  assert.match(browserSource, /canvasRef/);
+  assert.match(browserSource, /context\.drawImage\(/);
+  assert.doesNotMatch(browserSource, /setState\([^)]*frame/);
+  assert.match(css, /\.browser-canvas\s*\{[^}]*touch-action:\s*none/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.browser-shell/);
+});

@@ -17,6 +17,7 @@ import {
 } from "./state.js";
 import { requestHostDisplayMode, type DisplayModeBridge } from "./display-mode.js";
 import { TerminalView } from "./terminal-view.js";
+import { BrowserSurface, type BrowserFrame } from "./browser-surface.js";
 import { PluginUpdateCenter } from "./plugin-update.js";
 import { CPTR_APP_VERSION } from "./version.js";
 import "./workbench.css";
@@ -616,23 +617,37 @@ function OwnedWorkbench() {
     }
   };
 
+  const [surfaceMode, setSurfaceMode] = useState<"terminal" | "browser">("terminal");
+  const [browserFrame] = useState<BrowserFrame | null>(null);
   const updateCenter = <PluginUpdateCenter callTool={callTool} manifestUrl={updateManifestUrl} onStatus={setActionStatus} />;
 
-  return <main className="terminal-workbench" aria-label="CPTR live terminal">
-    <TerminalView
-      rows={state.transcript}
-      updateCenter={updateCenter}
-      status={displayStatus}
-      connection={connection}
-      machineLabel={meta?.targetId || promptConnection === "prompt live" ? "CPTR Computer" : "Connecting to computer"}
-      targetLabel={targetLabel(meta)}
-      actionStatus={actionStatus}
-      canStop={canControl}
-      onStop={() => void stop()}
-      onCopy={() => void copyTranscript()}
-      onPin={() => void pin()}
-      onExpand={() => void expand()}
-    />
+  return <main className="terminal-workbench" aria-label="CPTR live computer">
+    <div className="surface-switch" role="group" aria-label="Live computer surface">
+      <button type="button" aria-pressed={surfaceMode === "terminal"} onClick={() => setSurfaceMode("terminal")}>Terminal</button>
+      <button type="button" aria-pressed={surfaceMode === "browser"} onClick={() => setSurfaceMode("browser")}>Browser</button>
+    </div>
+    {surfaceMode === "browser"
+      ? <BrowserSurface
+          frame={browserFrame}
+          connection={connection}
+          mode="OBSERVING"
+          hostname="CPTR User Chrome"
+          actionLabel={actionStatus || "Waiting for browser session"}
+        />
+      : <TerminalView
+          rows={state.transcript}
+          updateCenter={updateCenter}
+          status={displayStatus}
+          connection={connection}
+          machineLabel={meta?.targetId || promptConnection === "prompt live" ? "CPTR Computer" : "Connecting to computer"}
+          targetLabel={targetLabel(meta)}
+          actionStatus={actionStatus}
+          canStop={canControl}
+          onStop={() => void stop()}
+          onCopy={() => void copyTranscript()}
+          onPin={() => void pin()}
+          onExpand={() => void expand()}
+        />}
   </main>;
 }
 
