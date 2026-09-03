@@ -108,6 +108,33 @@ test("routes paired user Chrome through the dedicated browser-device API without
   assert.equal(JSON.stringify(body).includes("secret-token"), false);
 });
 
+test("forwards paired user Chrome human input server-side with the CPTR bearer", async () => {
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seen.push({ url: String(input), init });
+      return new Response(JSON.stringify({ accepted: true, command_id: "human-1" }), { status: 200 });
+    },
+  });
+
+  await client.sendUserChromeHumanInput("brs-1", {
+    command_id: "human-1",
+    expected_epoch: 10,
+    input_type: "click",
+    x: 0.25,
+    y: 0.75,
+  });
+
+  assert.equal(seen[0]?.url, "http://cptr.test/api/browser-device/v1/sessions/brs-1/human-input");
+  assert.equal((seen[0]?.init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+  const body = JSON.parse(String(seen[0]?.init?.body ?? "{}"));
+  assert.equal(body.expected_epoch, 10);
+  assert.equal(body.input_type, "click");
+  assert.equal(JSON.stringify(body).includes("secret-token"), false);
+});
+
 test("fetches paired user Chrome frames server-side with the CPTR bearer", async () => {
   const seen: Array<{ url: string; init?: RequestInit }> = [];
   const client = new ComputerClient({

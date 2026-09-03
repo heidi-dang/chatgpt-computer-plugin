@@ -2,8 +2,10 @@ import React, { useEffect, useRef, useState } from "react";
 
 export type BrowserSurfaceProps = {
   frameUrl?: string;
+  inputUrl?: string;
   ticket?: string;
   sessionId?: string;
+  epoch?: number;
   active: boolean;
   connection: string;
   mode: "OBSERVING" | "AGENT_CONTROL" | "HANDOFF_REQUIRED" | "HUMAN_CONTROL" | "DISCONNECTED";
@@ -11,10 +13,46 @@ export type BrowserSurfaceProps = {
   actionLabel?: string;
 };
 
+type HumanInputPayload = {
+  input_type: string;
+  x?: number;
+  y?: number;
+  delta_x?: number;
+  delta_y?: number;
+  button?: string;
+  key?: string;
+  code?: string;
+  text?: string;
+  modifiers?: string[];
+  pointer_id?: number;
+  width?: number;
+  height?: number;
+  sensitive?: boolean;
+};
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function modifiers(event: Pick<KeyboardEvent | PointerEvent | WheelEvent, "altKey" | "ctrlKey" | "metaKey" | "shiftKey">): string[] {
+  const values: string[] = [];
+  if (event.altKey) values.push("Alt");
+  if (event.ctrlKey) values.push("Control");
+  if (event.metaKey) values.push("Meta");
+  if (event.shiftKey) values.push("Shift");
+  return values;
+}
+
+function buttonName(button: number): string {
+  return ["left", "middle", "right", "back", "forward"][button] ?? "none";
+}
+
 export function BrowserSurface({
   frameUrl,
+  inputUrl,
   ticket,
   sessionId,
+  epoch,
   active,
   connection,
   mode,
@@ -24,7 +62,61 @@ export function BrowserSurface({
   const shellRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const lastFrameId = useRef<string | null>(null);
+  const commandSequence = useRef(0);
+  const moveInFlight = useRef(false);
+  const pendingMove = useRef<HumanInputPayload | null>(null);
   const [hasFrame, setHasFrame] = useState(false);
+
+  const canHumanInput = active && mode === "HUMAN_CONTROL" && Boolean(inputUrl && ticket && sessionId && Number.isInteger(epoch));
+
+  const postInput = async (payload: HumanInputPayload): Promise<void> => {
+    if (!canHumanInput || !inputUrl || !ticket || !sessionId || epoch === undefined) return;
+    commandSequence.current += 1;
+    const commandId = `human_${Date.now().toString(36)}_${commandSequence.current.toString(36)}`;
+    await fetch(inputUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ticket}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      cache: "no-store",
+      body: JSON.stringify({
+        session_id: sessionId,
+        command_id: commandId,
+        expected_epoch: epoch,
+        ...payload,
+      }),
+    });
+  };
+
+  const flushMove = async (payload: HumanInputPayload): Promise<void> => {
+    if (moveInFlight.current) {
+      pendingMove.current = payload;
+      return;
+    }
+    moveInFlight.current = true;
+    try {
+      let next: HumanInputPayload | null = payload;
+      while (next) {
+        await postInput(next).catch(() => undefined);
+        next = pendingMove.current;
+        pendingMove.current = null;
+      }
+    } finally {
+      moveInFlight.current = false;
+    }
+  };
+
+  const normalizedPoint = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const width = Math.max(1, rect.width);
+    const height = Math.max(1, rect.height);
+    return {
+      x: clamp01((event.clientX - rect.left) / width),
+      y: clamp01((event.clientY - rect.top) / height),
+    };
+  };
 
   useEffect(() => {
     const shell = shellRef.current;
@@ -135,8 +227,52 @@ export function BrowserSurface({
       <span className="browser-mode">{mode.replaceAll("_", " ")}</span>
     </header>
     <div className="browser-frame" aria-live="off">
-      <canvas ref={canvasRef} className="browser-canvas" />
+      <canvas
+        ref={canvasRef}
+        className="browser-canvas"
+        tabIndex={canHumanInput ? 0 : -1}
+        aria-label={canHumanInput ? "Chrome browser, human control active" : "Chrome browser preview"}
+        onPointerMove={(event) => {
+          if (!canHumanInput) return;
+          void flushMove({ input_type: "pointer_move", ...normalizedPoint(event), pointer_id: event.pointerId, modifiers: modifiers(event.nativeEvent) });
+        }}
+        onPointerDown={(event) => {
+          if (!canHumanInput) return;
+          event.currentTarget.setPointerCapture?.(event.pointerId);
+          event.currentTarget.focus();
+          void postInput({ input_type: "pointer_down", ...normalizedPoint(event), pointer_id: event.pointerId, button: buttonName(event.button), modifiers: modifiers(event.nativeEvent) }).catch(() => undefined);
+        }}
+        onPointerUp={(event) => {
+          if (!canHumanInput) return;
+          void postInput({ input_type: "pointer_up", ...normalizedPoint(event), pointer_id: event.pointerId, button: buttonName(event.button), modifiers: modifiers(event.nativeEvent) }).catch(() => undefined);
+        }}
+        onDoubleClick={(event) => {
+          if (!canHumanInput) return;
+          void postInput({ input_type: "double_click", ...normalizedPoint(event), button: buttonName(event.button), modifiers: modifiers(event.nativeEvent) }).catch(() => undefined);
+        }}
+        onWheel={(event) => {
+          if (!canHumanInput) return;
+          event.preventDefault();
+          void postInput({ input_type: "wheel", ...normalizedPoint(event), delta_x: event.deltaX, delta_y: event.deltaY, modifiers: modifiers(event.nativeEvent) }).catch(() => undefined);
+        }}
+        onKeyDown={(event) => {
+          if (!canHumanInput) return;
+          if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+            void postInput({ input_type: "text_input", text: event.key, sensitive: false }).catch(() => undefined);
+            event.preventDefault();
+            return;
+          }
+          void postInput({ input_type: "key_down", key: event.key, code: event.code, modifiers: modifiers(event.nativeEvent) }).catch(() => undefined);
+          event.preventDefault();
+        }}
+        onKeyUp={(event) => {
+          if (!canHumanInput || event.key.length === 1) return;
+          void postInput({ input_type: "key_up", key: event.key, code: event.code, modifiers: modifiers(event.nativeEvent) }).catch(() => undefined);
+          event.preventDefault();
+        }}
+      />
       {!hasFrame ? <div className="browser-empty">Waiting for browser frame…</div> : null}
+      {mode === "HUMAN_CONTROL" ? <div className="browser-human-hint">Human control · touch, pointer, wheel and keyboard are live</div> : null}
     </div>
     <footer className="browser-footer">
       <span>{actionLabel}</span>

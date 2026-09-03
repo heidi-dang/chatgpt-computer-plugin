@@ -53,6 +53,7 @@ test("browser surface activity reuses the prompt stream without credential field
   const store = new PromptTerminalStore({ streamingEnabled: true });
   const metadata = store.open();
   assert.match(metadata.browserFrameUrl, /\/live\/prompt\/browser-frame$/);
+  assert.match(metadata.browserInputUrl, /\/live\/prompt\/browser-input$/);
   const appended = store.append(metadata.ticket, {
     type: "browser.surface",
     payload: {

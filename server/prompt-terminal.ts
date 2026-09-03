@@ -78,6 +78,7 @@ export type PromptTerminalMetadata = {
   streamUrl: string;
   snapshotUrl: string;
   browserFrameUrl: string;
+  browserInputUrl: string;
   expiresAt: number;
   streamingEnabled: boolean;
 };
@@ -106,6 +107,7 @@ type PromptStoreOptions = {
   streamUrl?: string;
   snapshotUrl?: string;
   browserFrameUrl?: string;
+  browserInputUrl?: string;
   streamingEnabled?: boolean;
 };
 
@@ -119,6 +121,7 @@ export class PromptTerminalStore {
   private readonly streamUrl: string;
   private readonly snapshotUrl: string;
   private readonly browserFrameUrl: string;
+  private readonly browserInputUrl: string;
   private readonly streamingEnabledValue: boolean;
 
   constructor(options: PromptStoreOptions = {}) {
@@ -129,6 +132,7 @@ export class PromptTerminalStore {
     this.streamUrl = options.streamUrl ?? "/live/prompt/stream";
     this.snapshotUrl = options.snapshotUrl ?? "/live/prompt/snapshot";
     this.browserFrameUrl = options.browserFrameUrl ?? "/live/prompt/browser-frame";
+    this.browserInputUrl = options.browserInputUrl ?? "/live/prompt/browser-input";
     this.streamingEnabledValue = options.streamingEnabled ?? true;
   }
 
@@ -165,6 +169,7 @@ export class PromptTerminalStore {
       streamUrl: this.streamUrl,
       snapshotUrl: this.snapshotUrl,
       browserFrameUrl: this.browserFrameUrl,
+      browserInputUrl: this.browserInputUrl,
       streamingEnabled: this.streamingEnabledValue,
     };
   }
@@ -185,6 +190,7 @@ export class PromptTerminalStore {
       streamUrl: this.streamUrl,
       snapshotUrl: this.snapshotUrl,
       browserFrameUrl: this.browserFrameUrl,
+      browserInputUrl: this.browserInputUrl,
       streamingEnabled: this.streamingEnabledValue,
     };
   }

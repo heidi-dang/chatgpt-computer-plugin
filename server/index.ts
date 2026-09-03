@@ -30,6 +30,7 @@ import { LiveGateway } from "./live-gateway.js";
 import { LiveTicketStore } from "./live-tickets.js";
 import { PromptTerminalGateway, PromptTerminalStore, resolveLiveTerminalStreaming } from "./prompt-terminal.js";
 import { PromptBrowserFrameGateway } from "./browser-frame-gateway.js";
+import { PromptBrowserInputGateway } from "./browser-input-gateway.js";
 import { loadWorkbenchAssets, resolveWorkbenchHotReload } from "./workbench-assets.js";
 import {
   corsHeaders,
@@ -164,12 +165,14 @@ const promptSessions = new PromptTerminalStore({
   streamUrl: `${publicOrigin}/live/prompt/stream`,
   snapshotUrl: `${publicOrigin}/live/prompt/snapshot`,
   browserFrameUrl: `${publicOrigin}/live/prompt/browser-frame`,
+  browserInputUrl: `${publicOrigin}/live/prompt/browser-input`,
   // Prompt activity is intentionally lightweight and remains available even
   // when raw live-terminal streaming is disabled for chat/UI performance.
   streamingEnabled: true,
 });
 const promptGateway = new PromptTerminalGateway(promptSessions);
 const browserFrameGateway = new PromptBrowserFrameGateway(client, promptSessions);
+const browserInputGateway = new PromptBrowserInputGateway(client, promptSessions);
 
 function currentWorkbenchAssets() {
   return loadWorkbenchAssets();
@@ -793,7 +796,8 @@ const httpServer = createServer(async (req, res) => {
     url.pathname === "/live/renew" ||
     url.pathname === "/live/prompt/stream" ||
     url.pathname === "/live/prompt/snapshot" ||
-    url.pathname === "/live/prompt/browser-frame"
+    url.pathname === "/live/prompt/browser-frame" ||
+    url.pathname === "/live/prompt/browser-input"
   ) {
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
@@ -810,6 +814,14 @@ const httpServer = createServer(async (req, res) => {
         return;
       }
       await liveGateway.handleRenew(req, res);
+      return;
+    }
+    if (url.pathname === "/live/prompt/browser-input") {
+      if (req.method !== "POST") {
+        res.writeHead(405, { "cache-control": "no-store" }).end();
+        return;
+      }
+      await browserInputGateway.handle(req, res);
       return;
     }
     if (req.method !== "GET") {

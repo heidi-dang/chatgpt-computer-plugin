@@ -53,6 +53,7 @@ type PromptMetadata = {
   streamUrl?: string;
   snapshotUrl?: string;
   browserFrameUrl?: string;
+  browserInputUrl?: string;
   expiresAt?: number;
   streamingEnabled?: boolean;
 };
@@ -666,8 +667,10 @@ function OwnedWorkbench() {
     {surfaceMode === "browser"
       ? <BrowserSurface
           frameUrl={promptMetadata?.browserFrameUrl}
+          inputUrl={promptMetadata?.browserInputUrl}
           ticket={promptMetadata?.ticket}
           sessionId={browserSurface?.sessionId}
+          epoch={browserSurface?.epoch}
           active={surfaceMode === "browser"}
           connection={connection}
           mode={browserSurface?.mode ?? "DISCONNECTED"}

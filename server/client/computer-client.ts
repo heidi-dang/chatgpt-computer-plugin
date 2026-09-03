@@ -1194,6 +1194,14 @@ export class ComputerClient {
     }
   }
 
+  async sendUserChromeHumanInput(sessionId: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+    if (!sessionId) throw new Error("browser session id is required");
+    return this.requestBrowserDevice(`/sessions/${encodeURIComponent(sessionId)}/human-input`, {
+      method: "POST",
+      body: input,
+    });
+  }
+
   async getUserChromeFrame(sessionId: string, afterFrameId?: string): Promise<Response> {
     if (!sessionId) throw new Error("browser session id is required");
     const query = new URLSearchParams();
