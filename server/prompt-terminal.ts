@@ -114,6 +114,7 @@ type PromptStoreOptions = {
 export class PromptTerminalStore {
   private readonly sessions = new Map<string, PromptSession>();
   private readonly workbenchTickets = new Map<string, string>();
+  private readonly browserSessionTickets = new Map<string, string>();
   private readonly now: () => number;
   private readonly ttlMs: number;
   private readonly maxSessions: number;
@@ -225,6 +226,18 @@ export class PromptTerminalStore {
     return ticket;
   }
 
+  ticketForBrowserSession(browserSessionId: string | null | undefined): string | null {
+    if (!browserSessionId) return null;
+    const ticket = this.browserSessionTickets.get(browserSessionId);
+    if (!ticket) return null;
+    const session = this.getSession(ticket);
+    if (!session || !session.browserSessionIds.has(browserSessionId)) {
+      this.browserSessionTickets.delete(browserSessionId);
+      return null;
+    }
+    return ticket;
+  }
+
   append(ticket: string | null | undefined, event: PendingPromptEvent): PromptTerminalEvent | null {
     if (!this.streamingEnabledValue || !ticket) return null;
     const session = this.getSession(ticket);
@@ -233,10 +246,12 @@ export class PromptTerminalStore {
       const sessionId = event.payload.session_id;
       if (typeof sessionId === "string" && sessionId) {
         session.browserSessionIds.add(sessionId);
+        this.browserSessionTickets.set(sessionId, ticket);
         while (session.browserSessionIds.size > 16) {
           const oldest = session.browserSessionIds.values().next().value;
           if (typeof oldest !== "string") break;
           session.browserSessionIds.delete(oldest);
+          if (this.browserSessionTickets.get(oldest) === ticket) this.browserSessionTickets.delete(oldest);
         }
       }
     }
@@ -303,6 +318,9 @@ export class PromptTerminalStore {
     this.sessions.delete(ticket);
     for (const [workbenchSessionId, mappedTicket] of this.workbenchTickets) {
       if (mappedTicket === ticket) this.workbenchTickets.delete(workbenchSessionId);
+    }
+    for (const [browserSessionId, mappedTicket] of this.browserSessionTickets) {
+      if (mappedTicket === ticket) this.browserSessionTickets.delete(browserSessionId);
     }
   }
 }

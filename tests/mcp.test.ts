@@ -160,6 +160,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_ssh_cancel_command")?.annotations?.destructiveHint, true);
   assert.equal(tools.get("cptr_user_chrome")?.annotations?.readOnlyHint, false);
   assert.equal(tools.get("cptr_user_chrome")?.annotations?.openWorldHint, true);
+  assert.match(tools.get("cptr_user_chrome")?.description ?? "", /MUST transfer_lease from agent to none before the final response/);
   assert.notEqual(tools.get("cptr_user_chrome")?.inputSchema.properties?.action, undefined);
   assert.equal(tools.get("cptr_chrome_browser")?.annotations?.readOnlyHint, false);
   assert.equal(tools.get("cptr_chrome_browser")?.annotations?.openWorldHint, true);

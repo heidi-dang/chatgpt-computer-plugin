@@ -7,6 +7,7 @@ export type BrowserSurfaceProps = {
   sessionId?: string;
   epoch?: number;
   active: boolean;
+  released?: boolean;
   connection: string;
   mode: "OBSERVING" | "AGENT_CONTROL" | "HANDOFF_REQUIRED" | "HUMAN_CONTROL" | "DISCONNECTED";
   hostname?: string;
@@ -54,6 +55,7 @@ export function BrowserSurface({
   sessionId,
   epoch,
   active,
+  released = false,
   connection,
   mode,
   hostname = "Chrome",
@@ -68,9 +70,11 @@ export function BrowserSurface({
   const lastStreamVisible = useRef<boolean | null>(null);
   const [hasFrame, setHasFrame] = useState(false);
   const [frameStatus, setFrameStatus] = useState("Waiting for browser frame…");
+  const [frameHealth, setFrameHealth] = useState<"waiting" | "live" | "reconnecting" | "released">("waiting");
   const [returningControl, setReturningControl] = useState(false);
+  const browserReleased = Boolean(sessionId) && (released || mode === "DISCONNECTED");
 
-  const canHumanInput = active && mode === "HUMAN_CONTROL" && Boolean(inputUrl && ticket && sessionId && Number.isInteger(epoch));
+  const canHumanInput = active && !browserReleased && mode === "HUMAN_CONTROL" && Boolean(inputUrl && ticket && sessionId && Number.isInteger(epoch));
 
   const postInput = async (payload: HumanInputPayload): Promise<void> => {
     if (!canHumanInput || !inputUrl || !ticket || !sessionId || epoch === undefined) return;
@@ -145,9 +149,20 @@ export function BrowserSurface({
   useEffect(() => {
     setHasFrame(false);
     lastFrameId.current = null;
-    setFrameStatus(sessionId ? "Waiting for browser frame…" : "No Chrome session is attached yet.");
+    if (!sessionId) {
+      setFrameHealth("waiting");
+      setFrameStatus("No Chrome session is attached yet.");
+      return;
+    }
+    if (browserReleased) {
+      setFrameHealth("released");
+      setFrameStatus("Browser control released. Chrome debugger is detached.");
+      return;
+    }
+    setFrameHealth("waiting");
+    setFrameStatus("Waiting for the first browser frame…");
     const shell = shellRef.current;
-    if (!shell || !active || !frameUrl || !ticket || !sessionId) return;
+    if (!shell || !active || !frameUrl || !ticket) return;
     let intersecting = true;
     let stopped = false;
     let controller: AbortController | null = null;
@@ -171,6 +186,7 @@ export function BrowserSurface({
         context.drawImage(bitmap, 0, 0, width, height);
         lastFrameId.current = frameId;
         setHasFrame(true);
+        setFrameHealth("live");
         setFrameStatus("");
       } finally {
         bitmap.close();
@@ -217,13 +233,20 @@ export function BrowserSurface({
             cache: "no-store",
           });
           controller = null;
-          if (response.status === 204) continue;
+          if (response.status === 204) {
+            if (!lastFrameId.current) {
+              setFrameHealth("waiting");
+              setFrameStatus("Waiting for the first browser frame…");
+            }
+            continue;
+          }
           if (!response.ok) throw new Error(`browser frame unavailable (${response.status})`);
           await drawFrame(response);
         }
       } catch (error) {
         if (!stopped && !(error instanceof DOMException && error.name === "AbortError")) {
-          setFrameStatus("Browser frame unavailable — reconnecting…");
+          setFrameHealth("reconnecting");
+          setFrameStatus("Browser preview interrupted — reconnecting…");
           await new Promise((resolve) => window.setTimeout(resolve, 750));
         }
       } finally {
@@ -260,15 +283,33 @@ export function BrowserSurface({
       observer?.disconnect();
       document.removeEventListener("visibilitychange", updateVisibility);
     };
-  }, [active, epoch, frameUrl, inputUrl, sessionId, ticket]);
+  }, [active, browserReleased, epoch, frameUrl, inputUrl, sessionId, ticket]);
 
-  const state = connection.toLowerCase().includes("reconnect")
+  const promptState = connection.toLowerCase().includes("reconnect")
     ? "reconnecting"
     : connection.toLowerCase().includes("live")
       ? "live"
       : "offline";
+  const state = browserReleased
+    ? "offline"
+    : frameHealth === "live"
+      ? "live"
+      : frameHealth === "reconnecting" || promptState === "reconnecting"
+        ? "reconnecting"
+        : promptState === "offline"
+          ? "offline"
+          : "connecting";
+  const statusLabel = browserReleased
+    ? "RELEASED"
+    : frameHealth === "live"
+      ? "LIVE"
+      : frameHealth === "reconnecting"
+        ? "RECONNECTING"
+        : promptState === "offline"
+          ? "OFFLINE"
+          : "CONNECTING";
 
-  return <section ref={shellRef} className="browser-shell" data-state={state} aria-label="CPTR live browser">
+  return <section ref={shellRef} className="browser-shell" data-state={state} data-released={browserReleased ? "true" : "false"} aria-label="CPTR live browser">
     <header className="browser-header">
       <div className="browser-identity">
         <div className="browser-kicker">CPTR LIVE COMPUTER · BROWSER</div>
@@ -276,11 +317,11 @@ export function BrowserSurface({
           <span className="browser-machine">{hostname}</span>
           <span className="browser-status" data-state={state} role="status" aria-live="polite">
             <span className="state-dot" aria-hidden="true" />
-            <span>{state.toUpperCase()}</span>
+            <span>{statusLabel}</span>
           </span>
         </div>
       </div>
-      <span className="browser-mode">{mode.replaceAll("_", " ")}</span>
+      <span className="browser-mode">{browserReleased ? "DISCONNECTED" : mode.replaceAll("_", " ")}</span>
     </header>
     <div className="browser-frame" aria-live="off">
       <canvas
@@ -327,8 +368,16 @@ export function BrowserSurface({
           event.preventDefault();
         }}
       />
-      {!hasFrame ? <div className="browser-empty">{frameStatus || "Waiting for browser frame…"}</div> : null}
-      {mode === "HUMAN_CONTROL" ? <div className="browser-human-hint">
+      {!hasFrame ? <div className="browser-empty" data-state={frameHealth}>
+        <strong>{frameStatus || "Waiting for browser frame…"}</strong>
+        <span>{browserReleased
+          ? "This browser session is finished and no frame polling is running."
+          : frameHealth === "reconnecting"
+            ? "Control stays safe while the preview transport reconnects."
+            : "The preview will appear here when Chrome publishes its first frame."}</span>
+      </div> : null}
+      {hasFrame && frameHealth === "reconnecting" ? <div className="browser-frame-badge">Preview reconnecting…</div> : null}
+      {mode === "HUMAN_CONTROL" && !browserReleased ? <div className="browser-human-hint">
         <span>Human control · touch, pointer, wheel and keyboard are live</span>
         <button type="button" disabled={returningControl} onClick={() => void returnToAgent()}>
           {returningControl ? "Returning…" : "Return to agent"}
@@ -336,9 +385,9 @@ export function BrowserSurface({
       </div> : null}
     </div>
     <footer className="browser-footer">
-      <span>{actionLabel}</span>
-      <span>{mode}</span>
-      <span className="browser-connection">{connection.toUpperCase()}</span>
+      <span>{browserReleased ? "browser session released" : actionLabel}</span>
+      <span>{browserReleased ? "DISCONNECTED" : mode}</span>
+      <span className="browser-connection" data-state={promptState}>{connection.toUpperCase()}</span>
     </footer>
   </section>;
 }

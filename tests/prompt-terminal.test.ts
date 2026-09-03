@@ -72,7 +72,11 @@ test("browser surface activity reuses the prompt stream without credential field
   assert.equal(payload?.session_id, "brs_1");
   assert.equal(store.allowsBrowserSession(metadata.ticket, "brs_1"), true);
   assert.equal(store.allowsBrowserSession(metadata.ticket, "brs_other"), false);
+  assert.equal(store.ticketForBrowserSession("brs_1"), metadata.ticket);
   assert.equal(JSON.stringify(payload).includes("credential"), false);
+
+  store.revoke(metadata.ticket);
+  assert.equal(store.ticketForBrowserSession("brs_1"), null, "revoking a prompt must clear its browser-session routing");
 });
 
 

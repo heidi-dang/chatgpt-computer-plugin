@@ -615,7 +615,11 @@ export function createMcpServer(
   };
 
   const publishBrowserSurface = (input: Record<string, unknown>, result: Record<string, unknown>) => {
-    const lease = recordFrom(result.lease);
+    const commandResult = recordFrom(result.result);
+    const commandPayload = recordFrom(commandResult.payload);
+    const topLevelLease = recordFrom(result.lease);
+    const nestedLease = recordFrom(commandPayload.lease);
+    const lease = Object.keys(topLevelLease).length > 0 ? topLevelLease : nestedLease;
     const sessionId = result.session_id ?? input.session_id ?? lease.session_id;
     // Device discovery and pairing are not browser surfaces. Publishing a
     // browser.surface before a real session exists switches the Workbench to
@@ -633,13 +637,35 @@ export function createMcpServer(
       action: typeof input.action === "string" ? input.action : "unknown",
       session_id: sessionId.slice(0, 200),
     };
-    for (const key of ["device_id", "state", "owner", "hostname"] as const) {
-      const value = result[key] ?? (key === "owner" ? lease.owner : undefined) ?? input[key];
+    const action = typeof input.action === "string" ? input.action : "unknown";
+    const semanticOwner = result.owner
+      ?? lease.owner
+      ?? ((action === "command" || action === "approve_evaluate") ? "agent" : input.expected_owner);
+    const semanticState = result.state
+      ?? lease.state
+      ?? (semanticOwner === "agent"
+        ? "AGENT_CONTROL"
+        : semanticOwner === "human"
+          ? "HUMAN_CONTROL"
+          : semanticOwner === "none"
+            ? "DISCONNECTED"
+            : undefined);
+    for (const [key, value] of [
+      ["device_id", result.device_id ?? input.device_id],
+      ["state", semanticState],
+      ["owner", semanticOwner],
+      ["hostname", result.hostname ?? input.hostname],
+    ] as const) {
       if (typeof value === "string" && value) payload[key] = value.slice(0, 200);
     }
     const epoch = result.epoch ?? lease.epoch ?? input.expected_epoch;
     if (typeof epoch === "number" && Number.isInteger(epoch) && epoch >= 0) payload.epoch = epoch;
-    promptSessions.append(currentPromptTicket(), { type: "browser.surface", payload });
+    // Once a browser session has been rendered into one prompt, all later
+    // command/handoff events must return to that same card. Falling back to the
+    // process-wide active prompt can strand an older widget in AGENT_CONTROL
+    // when another ChatGPT prompt becomes active between browser calls.
+    const promptTicket = promptSessions.ticketForBrowserSession(sessionId) ?? currentPromptTicket();
+    promptSessions.append(promptTicket, { type: "browser.surface", payload });
   };
 
   const publishDirectWorker = (payload: {
@@ -2483,7 +2509,7 @@ export function createMcpServer(
     {
       title: "Control paired user Chrome",
       description:
-        "Control a user-approved Chrome extension connection through CPTR without changing the isolated cptr_chrome_browser tool. Use approve_pairing with the exact opaque pairing ID shown by the extension before the user claims it. pairing_code is optional for compatible hosts, but should be omitted when the host blocks OTP-like six-digit values. Start with list_devices, use list_tabs with device_id to inspect sanitized live tabs, or call open_session with only device_id to bind the active tab automatically; an explicit tab_id may still be supplied. Use command for browser actions and transfer_lease for explicit agent/human ownership handoff. Pairing inputs are redacted from telemetry, mutating commands are fenced by the current lease epoch, and the extension never receives the MCP bearer token.",
+        "Control a user-approved Chrome extension connection through CPTR without changing the isolated cptr_chrome_browser tool. Use approve_pairing with the exact opaque pairing ID shown by the extension before the user claims it. pairing_code is optional for compatible hosts, but should be omitted when the host blocks OTP-like six-digit values. Start with list_devices, use list_tabs with device_id to inspect sanitized live tabs, or call open_session with only device_id to bind the active tab automatically; an explicit tab_id may still be supplied. Use command for browser actions and transfer_lease for explicit agent/human ownership handoff. When browser work is complete and the agent still owns the lease, MUST transfer_lease from agent to none before the final response unless the user explicitly asked to keep browser control active; this ends the scoped Chrome debugger attachment and removes Chrome's debugging banner. Pairing inputs are redacted from telemetry, mutating commands are fenced by the current lease epoch, and the extension never receives the MCP bearer token.",
       inputSchema: userChromeSchema,
       outputSchema: z.object({}).passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },

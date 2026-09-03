@@ -184,11 +184,14 @@ test("terminal view memoizes stable rows and frame-coalesces follow scrolling", 
   assert.match(source, /window\.cancelAnimationFrame\(/);
 });
 
-test("paired Chrome open_session publishes the authoritative nested lease", () => {
+test("paired Chrome surface publishing preserves authoritative lease and command ownership", () => {
   const mcpSource = readFileSync(new URL("../server/mcp.ts", import.meta.url), "utf8");
-  assert.match(mcpSource, /const lease = recordFrom\(result\.lease\)/);
-  assert.match(mcpSource, /key === "owner" \? lease\.owner/);
+  assert.match(mcpSource, /const nestedLease = recordFrom\(commandPayload\.lease\)/);
+  assert.match(mcpSource, /Object\.keys\(topLevelLease\)\.length > 0 \? topLevelLease : nestedLease/);
+  assert.match(mcpSource, /action === "command" \|\| action === "approve_evaluate"/);
+  assert.match(mcpSource, /semanticOwner === "agent"[\s\S]*\? "AGENT_CONTROL"/);
   assert.match(mcpSource, /result\.epoch \?\? lease\.epoch \?\? input\.expected_epoch/);
+  assert.match(mcpSource, /ticketForBrowserSession\(sessionId\) \?\? currentPromptTicket\(\)/);
 });
 
 test("Workbench switches terminal and browser inside one persistent root", () => {
@@ -199,6 +202,8 @@ test("Workbench switches terminal and browser inside one persistent root", () =>
   assert.match(source, /useState<"terminal" \| "browser">\("terminal"\)/);
   assert.match(source, /<BrowserSurface/);
   assert.match(source, /if \(!sessionId\) return/);
+  assert.match(source, /owner === "none"[\s\S]*\? "DISCONNECTED"/);
+  assert.match(source, /released=\{browserSurface\?\.owner === "none"/);
   assert.match(source, /<TerminalView/);
   assert.match(source, /createRoot\(root\)\.render\(<Workbench \/>\)/);
   assert.equal((source.match(/createRoot\(/g) ?? []).length, 1);
@@ -209,7 +214,10 @@ test("Workbench switches terminal and browser inside one persistent root", () =>
   assert.match(browserSource, /controller\?\.abort\(\)/);
   assert.match(browserSource, /createImageBitmap\(blob\)/);
   assert.match(browserSource, /No Chrome session is attached yet/);
-  assert.match(browserSource, /Browser frame unavailable — reconnecting/);
+  assert.match(browserSource, /Browser control released\. Chrome debugger is detached/);
+  assert.match(browserSource, /Browser preview interrupted — reconnecting/);
+  assert.match(browserSource, /response\.status === 204[\s\S]*setFrameHealth\("waiting"\)/);
+  assert.match(browserSource, /frameHealth === "live"[\s\S]*\? "LIVE"/);
   assert.match(browserSource, /\/live\/prompt\/browser-stream/);
   assert.match(browserSource, /max_fps:\s*visible \? 10 : 0/);
   assert.match(browserSource, /configureSourceVisibility\(false\)/);
@@ -223,5 +231,7 @@ test("Workbench switches terminal and browser inside one persistent root", () =>
   assert.doesNotMatch(source, /useState<BrowserFrame/);
   assert.doesNotMatch(browserSource, /frame:\s*BrowserFrame/);
   assert.match(css, /\.browser-canvas\s*\{[^}]*touch-action:\s*none/);
+  assert.match(css, /\.browser-status\[data-state="connecting"\]/);
+  assert.match(css, /\.browser-shell\[data-released="true"\]/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.browser-shell/);
 });

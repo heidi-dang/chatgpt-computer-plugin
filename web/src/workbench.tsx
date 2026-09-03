@@ -228,16 +228,19 @@ function usePromptActivity(
         // the terminal visible until CPTR has bound a real browser session.
         if (!sessionId) return;
         const stateValue = typeof payload.state === "string" ? payload.state : "OBSERVING";
-        const mode = (["OBSERVING", "AGENT_CONTROL", "HANDOFF_REQUIRED", "HUMAN_CONTROL", "DISCONNECTED"] as const)
-          .includes(stateValue as BrowserSurfaceState["mode"])
-          ? stateValue as BrowserSurfaceState["mode"]
-          : "OBSERVING";
+        const owner = typeof payload.owner === "string" ? payload.owner : undefined;
+        const mode = owner === "none"
+          ? "DISCONNECTED"
+          : (["OBSERVING", "AGENT_CONTROL", "HANDOFF_REQUIRED", "HUMAN_CONTROL", "DISCONNECTED"] as const)
+              .includes(stateValue as BrowserSurfaceState["mode"])
+            ? stateValue as BrowserSurfaceState["mode"]
+            : "OBSERVING";
         setBrowserSurface({
           action: typeof payload.action === "string" ? payload.action : "unknown",
           ...(typeof payload.device_id === "string" ? { deviceId: payload.device_id } : {}),
           sessionId,
           mode,
-          ...(typeof payload.owner === "string" ? { owner: payload.owner } : {}),
+          ...(owner ? { owner } : {}),
           ...(typeof payload.epoch === "number" ? { epoch: payload.epoch } : {}),
           ...(typeof payload.hostname === "string" ? { hostname: payload.hostname } : {}),
         });
@@ -676,6 +679,7 @@ function OwnedWorkbench() {
           sessionId={browserSurface?.sessionId}
           epoch={browserSurface?.epoch}
           active={surfaceMode === "browser"}
+          released={browserSurface?.owner === "none" || browserSurface?.mode === "DISCONNECTED"}
           connection={connection}
           mode={browserSurface?.mode ?? "DISCONNECTED"}
           hostname={browserSurface?.hostname ?? "CPTR User Chrome"}
