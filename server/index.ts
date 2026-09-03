@@ -674,6 +674,10 @@ const httpServer = createServer(async (req, res) => {
     url.pathname === "/live/renew" ||
     url.pathname === "/live/prompt/stream" ||
     url.pathname === "/live/prompt/snapshot" ||
+    url.pathname === "/live/prompt/browser-frame" ||
+    url.pathname === "/live/prompt/browser-input" ||
+    url.pathname === "/live/prompt/browser-return" ||
+    url.pathname === "/live/prompt/browser-stream" ||
     url.pathname.startsWith("/__cptr/dev/");
   const browserOriginAllowed = workbenchBrowserRequest
     ? isAllowedWorkbenchBrowserOrigin(requestOrigin, allowedBrowserOrigins)

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   corsHeaders,
@@ -69,6 +70,20 @@ test("allows the ChatGPT Apps SDK sandbox only for Workbench browser traffic", (
     "Access-Control-Allow-Origin": widgetOrigin,
     Vary: "Origin",
   });
+});
+
+test("routes live browser frame and input traffic through Workbench sandbox origin policy", () => {
+  const indexSource = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
+  const classification = indexSource.match(/const workbenchBrowserRequest =([\s\S]*?);\n  const browserOriginAllowed/);
+  assert.ok(classification, "workbench browser request classifier must exist");
+  for (const path of [
+    "/live/prompt/browser-frame",
+    "/live/prompt/browser-input",
+    "/live/prompt/browser-return",
+    "/live/prompt/browser-stream",
+  ]) {
+    assert.match(classification[1], new RegExp(path.replaceAll("/", "\\/")), `${path} must use Workbench sandbox origin policy`);
+  }
 });
 
 test("permits a localhost public origin only outside production", () => {
