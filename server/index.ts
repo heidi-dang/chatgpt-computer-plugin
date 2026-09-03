@@ -31,6 +31,12 @@ import { LiveTicketStore } from "./live-tickets.js";
 import { PromptTerminalGateway, PromptTerminalStore, resolveLiveTerminalStreaming } from "./prompt-terminal.js";
 import { PromptBrowserFrameGateway } from "./browser-frame-gateway.js";
 import { PromptBrowserInputGateway } from "./browser-input-gateway.js";
+import {
+  isBrowserDevicePath,
+  proxyBrowserDeviceHttp,
+  proxyBrowserDeviceUpgrade,
+  rejectBrowserDeviceUpgrade,
+} from "./browser-device-proxy.js";
 import { loadWorkbenchAssets, resolveWorkbenchHotReload } from "./workbench-assets.js";
 import {
   corsHeaders,
@@ -47,6 +53,7 @@ const mcpPath = "/mcp";
 const mcpAccessToken = process.env.MCP_ACCESS_TOKEN;
 const publicOrigin = resolvePublicOrigin(process.env, host, port);
 const allowedBrowserOrigins = resolveAllowedOrigins(process.env);
+const cptrBaseUrl = process.env.CPTR_BASE_URL ?? "";
 const oauthResource = process.env.MCP_OAUTH_RESOURCE ?? `${publicOrigin}${mcpPath}`;
 const oauthIssuer = process.env.CLOUDFLARE_ACCESS_ISSUER;
 const oauthAudience = process.env.CLOUDFLARE_ACCESS_AUDIENCE;
@@ -681,6 +688,24 @@ const httpServer = createServer(async (req, res) => {
     : corsHeaders(requestOrigin, allowedBrowserOrigins);
   for (const [header, value] of Object.entries(originHeaders)) res.setHeader(header, value);
 
+  if (isBrowserDevicePath(url.pathname)) {
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, {
+        ...originHeaders,
+        "access-control-allow-headers": "Content-Type, Accept",
+        "access-control-allow-methods": "GET, POST, OPTIONS",
+        "cache-control": "no-store",
+      }).end();
+      return;
+    }
+    if (!req.method || !["GET", "POST"].includes(req.method)) {
+      res.writeHead(405, { "cache-control": "no-store" }).end();
+      return;
+    }
+    await proxyBrowserDeviceHttp(req, res, cptrBaseUrl);
+    return;
+  }
+
   const hotReload = currentWorkbenchHotReload();
   if (hotReload.enabled && req.method === "GET" && url.pathname === "/__cptr/dev/workbench.js") {
     const assets = currentWorkbenchAssets();
@@ -949,6 +974,22 @@ const httpServer = createServer(async (req, res) => {
     console.error("MCP request failed", error instanceof Error ? error.message : "unknown error");
     if (!res.headersSent) writeJson(res, malformedJson ? 400 : oversized ? 413 : 500, { error: malformedJson ? "Malformed JSON" : oversized ? "Request body too large" : "Internal server error" });
   }
+});
+
+httpServer.on("upgrade", (req, socket, head) => {
+  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? `${host}:${port}`}`);
+  if (!isBrowserDevicePath(url.pathname)) {
+    socket.destroy();
+    return;
+  }
+  const requestOrigin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+  // Device WebSockets are browser-only and always require the exact configured
+  // extension origin in addition to the device credential sent in the first frame.
+  if (!requestOrigin || !isAllowedBrowserOrigin(requestOrigin, allowedBrowserOrigins)) {
+    rejectBrowserDeviceUpgrade(socket);
+    return;
+  }
+  proxyBrowserDeviceUpgrade(req, socket, head, cptrBaseUrl);
 });
 
 const sessionPruner = setInterval(() => {

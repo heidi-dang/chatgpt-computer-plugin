@@ -189,7 +189,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.match(CPTR_APP_VERSION, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
   assert.equal(MCP_CONTRACT_VERSION, CPTR_APP_VERSION);
   assert.equal(MCP_CONTRACT_TOOL_COUNT, 74);
-  assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT + 6);
+  assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT + 7);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
   }

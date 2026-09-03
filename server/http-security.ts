@@ -1,6 +1,6 @@
 type Environment = Record<string, string | undefined>;
 
-function normalizedOrigin(value: string, name: string): string {
+function normalizedHttpOrigin(value: string, name: string): string {
   let url: URL;
   try {
     url = new URL(value.trim());
@@ -13,10 +13,37 @@ function normalizedOrigin(value: string, name: string): string {
   return url.origin;
 }
 
+function normalizedAllowedOrigin(value: string, name: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith("chrome-extension://")) {
+    let url: URL;
+    try {
+      url = new URL(trimmed);
+    } catch {
+      throw new Error(`${name} contains an invalid Chrome extension origin`);
+    }
+    const extensionId = url.hostname.toLowerCase();
+    if (
+      url.protocol !== "chrome-extension:" ||
+      !/^[a-p]{32}$/.test(extensionId) ||
+      url.username ||
+      url.password ||
+      url.port ||
+      (url.pathname !== "" && url.pathname !== "/") ||
+      url.search ||
+      url.hash
+    ) {
+      throw new Error(`${name} Chrome extension entries must be exact chrome-extension://<32-character-id> origins`);
+    }
+    return `chrome-extension://${extensionId}`;
+  }
+  return normalizedHttpOrigin(trimmed, name);
+}
+
 export function resolvePublicOrigin(env: Environment, host: string, port: number): string {
   const configured = env.PUBLIC_ORIGIN?.trim();
   if (configured) {
-    const origin = normalizedOrigin(configured, "PUBLIC_ORIGIN");
+    const origin = normalizedHttpOrigin(configured, "PUBLIC_ORIGIN");
     if (env.NODE_ENV === "production") {
       const url = new URL(origin);
       const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
@@ -30,7 +57,7 @@ export function resolvePublicOrigin(env: Environment, host: string, port: number
   if (env.NODE_ENV === "production") {
     throw new Error("PUBLIC_ORIGIN is required when NODE_ENV=production");
   }
-  return normalizedOrigin(`http://${host}:${port}`, "local PUBLIC_ORIGIN");
+  return normalizedHttpOrigin(`http://${host}:${port}`, "local PUBLIC_ORIGIN");
 }
 
 export function resolveAllowedOrigins(env: Environment): Set<string> {
@@ -38,7 +65,7 @@ export function resolveAllowedOrigins(env: Environment): Set<string> {
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean)
-    .map((value) => normalizedOrigin(value, "MCP_ALLOWED_ORIGINS"));
+    .map((value) => normalizedAllowedOrigin(value, "MCP_ALLOWED_ORIGINS"));
   if (env.NODE_ENV === "production" && configured.length === 0) {
     throw new Error("MCP_ALLOWED_ORIGINS is required when NODE_ENV=production");
   }

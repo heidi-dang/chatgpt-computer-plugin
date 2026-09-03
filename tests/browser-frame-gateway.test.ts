@@ -7,7 +7,7 @@ import { PromptTerminalStore } from "../server/prompt-terminal.js";
 class FakeResponse extends EventEmitter {
   statusCode = 0;
   headers: Record<string, string> = {};
-  body = Buffer.alloc(0);
+  body: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   writableEnded = false;
   destroyed = false;
   writeHead(status: number, headers: Record<string, string> = {}) {
