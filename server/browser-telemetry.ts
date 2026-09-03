@@ -2,6 +2,7 @@ export function telemetryInputForTool(toolName: string, value: unknown): unknown
   if (toolName !== "cptr_user_chrome" || !value || typeof value !== "object" || Array.isArray(value)) return value;
   const input = value as Record<string, unknown>;
   const safe: Record<string, unknown> = { ...input };
+  if (typeof safe.pairing_code === "string") safe.pairing_code = "[REDACTED_PAIRING_CODE]";
   if (typeof safe.expression === "string") safe.expression = "[REDACTED_BROWSER_EXPRESSION]";
   const payload = input.payload;
   if (payload && typeof payload === "object" && !Array.isArray(payload)) {

@@ -487,12 +487,15 @@ export const benchmarkLeaderboardSchema = {
 
 export const userChromeSchema = {
   action: z.enum([
+    "approve_pairing",
     "list_devices",
     "open_session",
     "approve_evaluate",
     "command",
     "transfer_lease",
   ]),
+  pairing_id: z.string().min(1).max(120).optional(),
+  pairing_code: z.string().regex(/^\d{6}$/).optional(),
   device_id: z.string().min(1).max(120).optional(),
   session_id: z.string().min(1).max(120).optional(),
   tab_id: z.number().int().min(0).max(2_147_483_647).optional(),
