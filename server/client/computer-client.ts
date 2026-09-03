@@ -1235,12 +1235,15 @@ export class ComputerClient {
   }): Promise<Record<string, unknown>> {
     switch (input.action) {
       case "approve_pairing": {
-        if (!input.pairing_id || !input.pairing_code) {
-          throw new Error("approve_pairing requires pairing_id and pairing_code");
+        if (!input.pairing_id) {
+          throw new Error("approve_pairing requires pairing_id");
         }
         return this.requestBrowserDevice("/pairing/approve", {
           method: "POST",
-          body: { pairing_id: input.pairing_id, code: input.pairing_code },
+          body: {
+            pairing_id: input.pairing_id,
+            ...(input.pairing_code ? { code: input.pairing_code } : {}),
+          },
         });
       }
       case "list_devices":

@@ -612,7 +612,7 @@ test("invokes paired user Chrome through the separate ChatGPT-visible MCP tool",
   await server.close();
 });
 
-test("approves a Chrome pairing challenge through authenticated CPTR", async () => {
+test("approves a Chrome pairing challenge by opaque ID without forwarding an OTP-like code", async () => {
   const seen: Array<{ url: string; body: Record<string, unknown>; authorization?: string }> = [];
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
@@ -633,7 +633,7 @@ test("approves a Chrome pairing challenge through authenticated CPTR", async () 
 
   const response = await client.callTool({
     name: "cptr_user_chrome",
-    arguments: { action: "approve_pairing", pairing_id: "pair_test", pairing_code: "039185" },
+    arguments: { action: "approve_pairing", pairing_id: "pair_test" },
   });
 
   assert.equal(response.isError, undefined);
@@ -641,7 +641,7 @@ test("approves a Chrome pairing challenge through authenticated CPTR", async () 
   assert.deepEqual(seen, [
     {
       url: "http://cptr.test/api/browser-device/v1/pairing/approve",
-      body: { pairing_id: "pair_test", code: "039185" },
+      body: { pairing_id: "pair_test" },
       authorization: "Bearer test-token",
     },
   ]);
