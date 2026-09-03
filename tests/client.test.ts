@@ -108,6 +108,31 @@ test("routes paired user Chrome through the dedicated browser-device API without
   assert.equal(JSON.stringify(body).includes("secret-token"), false);
 });
 
+test("requests a one-time paired user Chrome evaluate approval server-side", async () => {
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seen.push({ url: String(input), init });
+      return new Response(JSON.stringify({ approval_token: "approval_1", expires_in_seconds: 120 }), { status: 200 });
+    },
+  });
+
+  const result = await client.controlUserChrome({
+    action: "approve_evaluate",
+    session_id: "brs-1",
+    expression: "document.title",
+  });
+
+  assert.equal(seen[0]?.url, "http://cptr.test/api/browser-device/v1/sessions/brs-1/evaluate-approval");
+  assert.equal((seen[0]?.init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+  const body = JSON.parse(String(seen[0]?.init?.body ?? "{}"));
+  assert.deepEqual(body, { expression: "document.title" });
+  assert.equal(JSON.stringify(body).includes("secret-token"), false);
+  assert.equal(result.approval_token, "approval_1");
+});
+
 test("forwards paired user Chrome stream visibility server-side with the CPTR bearer", async () => {
   const seen: Array<{ url: string; init?: RequestInit }> = [];
   const client = new ComputerClient({

@@ -1130,7 +1130,7 @@ export class ComputerClient {
   }
 
   async controlUserChrome(input: {
-    action: "list_devices" | "open_session" | "command" | "transfer_lease";
+    action: "list_devices" | "open_session" | "approve_evaluate" | "command" | "transfer_lease";
     device_id?: string;
     session_id?: string;
     tab_id?: number;
@@ -1138,6 +1138,7 @@ export class ComputerClient {
     surface_id?: string;
     command_id?: string;
     browser_action?: string;
+    expression?: string;
     expected_epoch?: number;
     expected_owner?: "none" | "agent" | "human";
     new_owner?: "none" | "agent" | "human";
@@ -1160,6 +1161,15 @@ export class ComputerClient {
             ...(input.workbench_session_id ? { workbench_session_id: input.workbench_session_id } : {}),
             ...(input.surface_id ? { surface_id: input.surface_id } : {}),
           },
+        });
+      }
+      case "approve_evaluate": {
+        if (!input.session_id || !input.expression) {
+          throw new Error("approve_evaluate requires session_id and expression");
+        }
+        return this.requestBrowserDevice(`/sessions/${encodeURIComponent(input.session_id)}/evaluate-approval`, {
+          method: "POST",
+          body: { expression: input.expression },
         });
       }
       case "command": {

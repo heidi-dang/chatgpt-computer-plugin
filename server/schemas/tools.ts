@@ -442,6 +442,7 @@ export const userChromeSchema = {
   action: z.enum([
     "list_devices",
     "open_session",
+    "approve_evaluate",
     "command",
     "transfer_lease",
   ]),
@@ -452,6 +453,7 @@ export const userChromeSchema = {
   surface_id: z.string().min(1).max(200).optional(),
   command_id: z.string().min(1).max(160).optional(),
   browser_action: z.string().min(1).max(120).optional(),
+  expression: z.string().min(1).max(20_000).optional(),
   expected_epoch: z.number().int().min(0).optional(),
   expected_owner: z.enum(["none", "agent", "human"]).optional(),
   new_owner: z.enum(["none", "agent", "human"]).optional(),
