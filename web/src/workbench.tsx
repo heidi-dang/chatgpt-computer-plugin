@@ -550,7 +550,7 @@ function OwnedWorkbench() {
   const [meta, setMeta] = useState<LiveMetadata | null>(null);
   const promptConnection = usePromptActivity(setMeta, setState, liveStreamingEnabled);
   const targetConnection = useLiveSession(meta, setMeta, setState, liveStreamingEnabled);
-  const connection = meta?.targetId ? targetConnection : promptConnection;
+  const connection = meta?.targetId && !isTerminalWorkbenchStatus(state.status) ? targetConnection : promptConnection;
   const visibleTarget = useRef<string | null>(null);
   const isCommand = meta?.targetType === "command" && !!meta.targetId && !!meta.workspaceId;
   const canControl = !!meta?.targetType && ["RUNNING", "WORKING", "CONNECTING", "APPROVAL_REQUIRED"].includes(state.status);

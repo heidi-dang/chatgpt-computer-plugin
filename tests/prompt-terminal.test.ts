@@ -48,3 +48,19 @@ test("live terminal streaming implementation remains available when enabled", ()
   assert.equal(appended?.type, "mcp.tool");
   assert.equal(store.replay(metadata.ticket, 0)?.events.length, 1);
 });
+
+
+test("reuses and renews a workbench prompt stream while resetting per-turn delegation", () => {
+  let now = 1_000;
+  const store = new PromptTerminalStore({ streamingEnabled: true, ttlMs: 60_000, now: () => now });
+  const first = store.open({ allowDelegate: true });
+  assert.equal(store.bindWorkbenchSession(first.ticket, "wbs-persistent"), true);
+  assert.equal(store.allowsDelegation(first.ticket), true);
+
+  now += 30_000;
+  const resumed = store.resumeWorkbenchSession("wbs-persistent", { allowDelegate: false });
+  assert.ok(resumed);
+  assert.equal(resumed.ticket, first.ticket, "the already-open widget must keep its prompt SSE ticket");
+  assert.ok(resumed.expiresAt > first.expiresAt, "resuming a live task must renew the prompt stream lease");
+  assert.equal(store.allowsDelegation(first.ticket), false, "delegation authorization must not leak into the next user turn");
+});

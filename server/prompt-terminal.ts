@@ -145,6 +145,25 @@ export class PromptTerminalStore {
     };
   }
 
+  resumeWorkbenchSession(
+    workbenchSessionId: string | null | undefined,
+    options: { allowDelegate?: boolean } = {},
+  ): PromptTerminalMetadata | null {
+    const ticket = this.ticketForWorkbenchSession(workbenchSessionId);
+    if (!ticket) return null;
+    const session = this.getSession(ticket);
+    if (!session) return null;
+    session.expiresAt = this.now() + this.ttlMs;
+    session.allowDelegate = options.allowDelegate === true;
+    return {
+      ticket: session.ticket,
+      expiresAt: session.expiresAt,
+      streamUrl: this.streamUrl,
+      snapshotUrl: this.snapshotUrl,
+      streamingEnabled: this.streamingEnabledValue,
+    };
+  }
+
   allowsDelegation(ticket: string | null | undefined): boolean {
     if (!ticket) return false;
     return this.getSession(ticket)?.allowDelegate === true;
