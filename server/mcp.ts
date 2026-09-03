@@ -576,6 +576,27 @@ export function createMcpServer(
     return activity;
   };
 
+  const publishBrowserSurface = (input: Record<string, unknown>, result: Record<string, unknown>) => {
+    const payload: {
+      action: string;
+      device_id?: string;
+      session_id?: string;
+      state?: string;
+      owner?: string;
+      epoch?: number;
+      hostname?: string;
+    } = {
+      action: typeof input.action === "string" ? input.action : "unknown",
+    };
+    for (const key of ["device_id", "session_id", "state", "owner", "hostname"] as const) {
+      const value = result[key] ?? input[key];
+      if (typeof value === "string" && value) payload[key] = value.slice(0, 200);
+    }
+    const epoch = result.epoch ?? input.expected_epoch;
+    if (typeof epoch === "number" && Number.isInteger(epoch) && epoch >= 0) payload.epoch = epoch;
+    promptSessions.append(currentPromptTicket(), { type: "browser.surface", payload });
+  };
+
   const publishDirectWorker = (payload: {
     worker_id: string;
     workspace_id?: string;
@@ -2303,12 +2324,15 @@ export function createMcpServer(
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       _meta: workbenchToolMetadata,
     },
-    async (input) =>
-      activityResult(
-        await client.controlUserChrome(input),
+    async (input) => {
+      const result = await client.controlUserChrome(input);
+      publishBrowserSurface(input, result);
+      return activityResult(
+        result,
         "cptr_user_chrome",
         `ChatGPT used paired user Chrome action: ${input.action}.`,
-      ),
+      );
+    },
   );
 
   server.registerTool(

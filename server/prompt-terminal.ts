@@ -55,7 +55,23 @@ export type PromptLiveBindingEvent = {
   };
 };
 
-export type PromptTerminalEvent = PromptActivityEvent | PromptDirectWorkerEvent | PromptLiveBindingEvent;
+export type PromptBrowserSurfaceEvent = {
+  event_id: string;
+  sequence: number;
+  timestamp: string;
+  type: "browser.surface";
+  payload: {
+    action: string;
+    device_id?: string;
+    session_id?: string;
+    state?: string;
+    owner?: string;
+    epoch?: number;
+    hostname?: string;
+  };
+};
+
+export type PromptTerminalEvent = PromptActivityEvent | PromptDirectWorkerEvent | PromptLiveBindingEvent | PromptBrowserSurfaceEvent;
 
 export type PromptTerminalMetadata = {
   ticket: string;
@@ -68,7 +84,8 @@ export type PromptTerminalMetadata = {
 type PendingPromptEvent =
   | Omit<PromptActivityEvent, "event_id" | "sequence" | "timestamp">
   | Omit<PromptDirectWorkerEvent, "event_id" | "sequence" | "timestamp">
-  | Omit<PromptLiveBindingEvent, "event_id" | "sequence" | "timestamp">;
+  | Omit<PromptLiveBindingEvent, "event_id" | "sequence" | "timestamp">
+  | Omit<PromptBrowserSurfaceEvent, "event_id" | "sequence" | "timestamp">;
 
 type PromptSession = {
   ticket: string;

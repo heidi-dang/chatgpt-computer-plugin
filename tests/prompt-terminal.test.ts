@@ -49,6 +49,28 @@ test("live terminal streaming implementation remains available when enabled", ()
   assert.equal(store.replay(metadata.ticket, 0)?.events.length, 1);
 });
 
+test("browser surface activity reuses the prompt stream without credential fields", () => {
+  const store = new PromptTerminalStore({ streamingEnabled: true });
+  const metadata = store.open();
+  const appended = store.append(metadata.ticket, {
+    type: "browser.surface",
+    payload: {
+      action: "open_session",
+      device_id: "bdv_1",
+      session_id: "brs_1",
+      state: "OBSERVING",
+      owner: "none",
+      epoch: 0,
+      hostname: "Heidi Chrome",
+    },
+  });
+
+  assert.equal(appended?.type, "browser.surface");
+  const payload = appended?.payload as Record<string, unknown> | undefined;
+  assert.equal(payload?.session_id, "brs_1");
+  assert.equal(JSON.stringify(payload).includes("credential"), false);
+});
+
 
 test("reuses and renews a workbench prompt stream while resetting per-turn delegation", () => {
   let now = 1_000;
