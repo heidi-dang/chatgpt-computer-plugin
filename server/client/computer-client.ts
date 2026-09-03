@@ -1215,7 +1215,9 @@ export class ComputerClient {
   }
 
   async controlUserChrome(input: {
-    action: "list_devices" | "open_session" | "approve_evaluate" | "command" | "transfer_lease";
+    action: "approve_pairing" | "list_devices" | "open_session" | "approve_evaluate" | "command" | "transfer_lease";
+    pairing_id?: string;
+    pairing_code?: string;
     device_id?: string;
     session_id?: string;
     tab_id?: number;
@@ -1232,6 +1234,15 @@ export class ComputerClient {
     payload?: Record<string, unknown>;
   }): Promise<Record<string, unknown>> {
     switch (input.action) {
+      case "approve_pairing": {
+        if (!input.pairing_id || !input.pairing_code) {
+          throw new Error("approve_pairing requires pairing_id and pairing_code");
+        }
+        return this.requestBrowserDevice("/pairing/approve", {
+          method: "POST",
+          body: { pairing_id: input.pairing_id, code: input.pairing_code },
+        });
+      }
       case "list_devices":
         return this.requestBrowserDevice("/devices");
       case "open_session": {

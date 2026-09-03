@@ -7,6 +7,7 @@ test("redacts sensitive paired user Chrome inputs before activity telemetry", ()
     action: "command",
     session_id: "brs-1",
     command_id: "cmd-1",
+    pairing_code: "039185",
     expression: "document.cookie + ' top-secret-browser-expression'",
     payload: {
       ref: "ref_1",
@@ -20,6 +21,8 @@ test("redacts sensitive paired user Chrome inputs before activity telemetry", ()
   assert.match(json, /brs-1/);
   assert.match(json, /ref_1/);
   assert.match(json, /REDACTED_BROWSER/);
+  assert.match(json, /REDACTED_PAIRING_CODE/);
+  assert.equal(json.includes("039185"), false);
   assert.equal(json.includes("top-secret-browser-expression"), false);
   assert.equal(json.includes("approval-secret-token"), false);
   assert.equal(json.includes("correct horse battery staple"), false);
