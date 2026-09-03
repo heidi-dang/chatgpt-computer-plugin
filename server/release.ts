@@ -1,7 +1,7 @@
 import { CPTR_APP_VERSION } from "./version.js";
 
 export const MCP_CONTRACT_VERSION = CPTR_APP_VERSION;
-export const MCP_CONTRACT_TOOL_COUNT = 74;
+export const MCP_CONTRACT_TOOL_COUNT = 83;
 export const CPTR_PLUGIN_VERSION = CPTR_APP_VERSION;
 export const CPTR_PLUGIN_SCHEMA_REVISION = CPTR_APP_VERSION;
 
@@ -38,7 +38,8 @@ export function currentPluginUpdateManifest(env: NodeJS.ProcessEnv = process.env
       "Adds exact chrome-extension:// origin support to MCP_ALLOWED_ORIGINS without enabling wildcard extension origins; the production CPTR Live Computer ID is pinned by its manifest public key.",
       "Proxies only /api/browser-device/v1 HTTP and WebSocket traffic to CPTR_BASE_URL so the public MCP origin can host pairing/device channels while MCP bearer, cookies, and Cloudflare assertions are never forwarded to the browser-device backend.",
       "Keeps browser-device CORS authoritative at the public plugin boundary, strips upstream CORS and Set-Cookie headers, rejects wrong WebSocket origins, and couples both sides of proxied WebSocket shutdown to prevent leaked device connections.",
-      `Releases CPTR Computer ${CPTR_APP_VERSION} with 74 core control tools and 80 total registered MCP actions including standardized benchmark lifecycle, PTY controls, LSP, FDX, browser, SSH, and update auxiliaries.`,
+      `Releases CPTR Computer ${CPTR_APP_VERSION} with 83 core control tools and 90 total registered MCP actions including the durable Dark Factory control surface, standardized benchmark lifecycle, PTY controls, LSP, FDX, paired-user Chrome, managed browser, SSH, and update auxiliaries.`,
+      "Adds nine thin Dark Factory actions for start, status, events, evidence, message, pause, resume, approval, and quiescent stop while keeping transition, trust, gate, and Victory authority exclusively in the CPTR backend.",
       "Adds four direct benchmark actions to start isolated standardized coding work, submit it to the server-owned randomized grader, inspect objective case evidence, and compare a suite-versioned model leaderboard.",
       "Forwards each benchmark start's exact self-reported ChatGPT client_model to the backend without allowing the model to provide or override its own score.",
       "Adds first-class PTY command controls for initial stdin, ongoing stdin, resize, Ctrl+C-style interrupt, terminate, and process-tree kill while preserving bounded Direct Coding policy.",

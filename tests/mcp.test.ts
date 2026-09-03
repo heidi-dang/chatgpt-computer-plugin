@@ -95,6 +95,15 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_benchmark_leaderboard",
       "cptr_list_workspaces",
       "cptr_get_workspace",
+      "cptr_factory_start",
+      "cptr_factory_status",
+      "cptr_factory_events",
+      "cptr_factory_evidence",
+      "cptr_factory_message",
+      "cptr_factory_pause",
+      "cptr_factory_resume",
+      "cptr_factory_approve",
+      "cptr_factory_stop",
       "cptr_start_task",
       "cptr_execute_task",
       "cptr_monitor_autonomous",
@@ -162,6 +171,14 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
     | { properties?: Record<string, { maximum?: number }> }
     | undefined;
   assert.equal(directInputSchema?.properties?.wait_seconds?.maximum, 60);
+  const commandInputSchema = tools.get("cptr_code_run_command")?.inputSchema as
+    | { properties?: Record<string, { maximum?: number }> }
+    | undefined;
+  const commandStatusSchema = tools.get("cptr_code_get_command")?.inputSchema as
+    | { properties?: Record<string, { maximum?: number }> }
+    | undefined;
+  assert.equal(commandInputSchema?.properties?.wait_seconds?.maximum, 3600);
+  assert.equal(commandStatusSchema?.properties?.wait_seconds?.maximum, 3600);
   assert.notEqual(tools.get("cptr_start_task")?.inputSchema.properties?.execution_policy, undefined);
   assert.notEqual(tools.get("cptr_execute_task")?.inputSchema.properties?.execution_policy, undefined);
   assert.notEqual(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.execution_policy, undefined);
@@ -186,13 +203,182 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.action, undefined);
   assert.equal(tools.get("cptr_plugin_update")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_plugin_update")?.annotations?.openWorldHint, false);
+  assert.equal(tools.get("cptr_factory_status")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_factory_events")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_factory_evidence")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_factory_start")?.annotations?.readOnlyHint, false);
+  assert.equal(tools.get("cptr_factory_start")?.annotations?.openWorldHint, true);
+  assert.equal(tools.get("cptr_factory_approve")?.annotations?.destructiveHint, true);
+  assert.equal(tools.get("cptr_factory_approve")?.annotations?.openWorldHint, true);
+  assert.equal(tools.get("cptr_factory_stop")?.annotations?.destructiveHint, true);
+  assert.equal(tools.get("cptr_factory_stop")?.annotations?.openWorldHint, false);
+  const factoryInput = (name: string) => tools.get(name)?.inputSchema as
+    | { properties?: Record<string, { maxLength?: number; maxItems?: number; maximum?: number }> }
+    | undefined;
+  assert.equal(factoryInput("cptr_factory_start")?.properties?.mission?.maxLength, 100_000);
+  assert.equal(factoryInput("cptr_factory_start")?.properties?.acceptance_criteria?.maxItems, 100);
+  assert.equal(factoryInput("cptr_factory_events")?.properties?.limit?.maximum, 100);
+  assert.equal(factoryInput("cptr_factory_evidence")?.properties?.limit?.maximum, 100);
+  assert.equal(factoryInput("cptr_factory_message")?.properties?.content?.maxLength, 50_000);
+  assert.equal(factoryInput("cptr_factory_approve")?.properties?.note?.maxLength, 4_000);
+  assert.equal(factoryInput("cptr_factory_stop")?.properties?.timeout_ms?.maximum, 120_000);
+  for (const forbidden of [
+    "cptr_factory_transition",
+    "cptr_factory_set_gate",
+    "cptr_factory_set_trust",
+    "cptr_factory_victory",
+  ]) {
+    assert.equal(tools.has(forbidden), false, `${forbidden} must remain backend-internal`);
+  }
   assert.match(CPTR_APP_VERSION, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
   assert.equal(MCP_CONTRACT_VERSION, CPTR_APP_VERSION);
-  assert.equal(MCP_CONTRACT_TOOL_COUNT, 74);
+  assert.equal(MCP_CONTRACT_TOOL_COUNT, 83);
   assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT + 7);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
   }
+
+  await client.close();
+  await server.close();
+});
+
+test("forwards the compact Dark Factory tool surface without client-side state mutation", async () => {
+  const seen: Array<{ url: string; method: string; body: unknown }> = [];
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async (input, init) => {
+      const url = String(input);
+      const method = String(init?.method ?? "GET");
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      seen.push({ url, method, body });
+      if (url.endsWith("/factory/runs") && method === "POST") {
+        return new Response(JSON.stringify({ run_id: "factory-1", state: "MISSION" }), { status: 200 });
+      }
+      if (url.endsWith("/factory/runs/factory-1") && method === "GET") {
+        return new Response(JSON.stringify({
+          run_id: "factory-1",
+          workspace_id: "ws-1",
+          state: "MISSION",
+          current_cycle_id: null,
+          resumable_state: null,
+          next_action: null,
+          mission: "Repair the factory target",
+          acceptance_criteria: ["All machine gates pass"],
+          policy: { max_cycles: 1 },
+          budget: { max_repair_attempts_per_signature: 3 },
+          cycle: null,
+          progress: { cycle_ordinal: 0, required_gates: 0, passed_required_gates: 0 },
+          pending_approval: null,
+          gates: [],
+          created_at: 1,
+          updated_at: 1,
+          completed_at: null,
+        }), { status: 200 });
+      }
+      if (url.includes("/factory/runs/factory-1/events")) {
+        return new Response(JSON.stringify({ events: [], next_cursor: null, max_bytes: 262144, bytes_returned: 0, truncated: false }), { status: 200 });
+      }
+      if (url.includes("/factory/runs/factory-1/evidence")) {
+        return new Response(JSON.stringify({ evidence: [], next_cursor: null, max_bytes: 262144, bytes_returned: 0, truncated: false }), { status: 200 });
+      }
+      if (url.endsWith("/factory/runs/factory-1/messages")) {
+        return new Response(JSON.stringify({ event: { event_id: "event-1", sequence: 2 } }), { status: 200 });
+      }
+      if (url.endsWith("/factory/runs/factory-1/approve")) {
+        return new Response(JSON.stringify({ approval: { approval_id: "approval-1", status: "APPROVED" }, run: { run_id: "factory-1", state: "PUSHING" } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ run_id: "factory-1", state: method === "GET" ? "MISSION" : "PAUSED" }), { status: 200 });
+    },
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const calls = [
+    {
+      name: "cptr_factory_start",
+      arguments: {
+        workspace_id: "ws-1",
+        mission: "Repair the factory target",
+        acceptance_criteria: ["All machine gates pass"],
+        policy: { max_cycles: 1 },
+        budget: { max_repair_attempts_per_signature: 3 },
+        model_id: "configured-model",
+        idempotency_key: "start-1",
+      },
+    },
+    { name: "cptr_factory_status", arguments: { run_id: "factory-1" } },
+    { name: "cptr_factory_events", arguments: { run_id: "factory-1", cursor: "7", limit: 25 } },
+    { name: "cptr_factory_evidence", arguments: { run_id: "factory-1", cursor: "evidence-7", limit: 20 } },
+    { name: "cptr_factory_message", arguments: { run_id: "factory-1", content: "Focus on the regression", idempotency_key: "message-1" } },
+    { name: "cptr_factory_pause", arguments: { run_id: "factory-1", idempotency_key: "pause-1" } },
+    { name: "cptr_factory_resume", arguments: { run_id: "factory-1", idempotency_key: "resume-1" } },
+    { name: "cptr_factory_approve", arguments: { run_id: "factory-1", approval_id: "approval-1", approved: true, note: "Approve exact push", idempotency_key: "approve-1" } },
+    { name: "cptr_factory_stop", arguments: { run_id: "factory-1", idempotency_key: "stop-1", timeout_ms: 1500 } },
+  ];
+  for (const call of calls) {
+    const response = await client.callTool(call);
+    assert.equal(response.isError, undefined, `${call.name} should forward without an MCP error`);
+    const meta = response._meta as { ui?: unknown; "cptr/live"?: unknown } | undefined;
+    assert.equal(meta?.ui, undefined, `${call.name} must remain data-only`);
+    assert.equal(meta?.["cptr/live"], undefined, `${call.name} must not create another Live Workbench target`);
+  }
+
+  assert.deepEqual(seen.map(({ url, method, body }) => ({ url, method, body })), [
+    {
+      url: "http://cptr.test/api/control/v1/factory/runs",
+      method: "POST",
+      body: {
+        workspace_id: "ws-1",
+        mission: "Repair the factory target",
+        acceptance_criteria: ["All machine gates pass"],
+        policy: { max_cycles: 1 },
+        budget: { max_repair_attempts_per_signature: 3 },
+        model_id: "configured-model",
+        idempotency_key: "start-1",
+      },
+    },
+    { url: "http://cptr.test/api/control/v1/factory/runs/factory-1", method: "GET", body: undefined },
+    { url: "http://cptr.test/api/control/v1/factory/runs/factory-1/events?cursor=7&limit=25", method: "GET", body: undefined },
+    { url: "http://cptr.test/api/control/v1/factory/runs/factory-1/evidence?cursor=evidence-7&limit=20", method: "GET", body: undefined },
+    { url: "http://cptr.test/api/control/v1/factory/runs/factory-1/messages", method: "POST", body: { content: "Focus on the regression", idempotency_key: "message-1" } },
+    { url: "http://cptr.test/api/control/v1/factory/runs/factory-1/pause", method: "POST", body: { idempotency_key: "pause-1" } },
+    { url: "http://cptr.test/api/control/v1/factory/runs/factory-1/resume", method: "POST", body: { idempotency_key: "resume-1" } },
+    { url: "http://cptr.test/api/control/v1/factory/runs/factory-1/approve", method: "POST", body: { approval_id: "approval-1", approved: true, note: "Approve exact push", idempotency_key: "approve-1" } },
+    { url: "http://cptr.test/api/control/v1/factory/runs/factory-1/stop", method: "POST", body: { idempotency_key: "stop-1", timeout_ms: 1500 } },
+  ]);
+  for (const request of seen) {
+    const record = request.body as Record<string, unknown> | undefined;
+    assert.equal(record?.state, undefined);
+    assert.equal(record?.transition, undefined);
+    assert.equal(record?.gate_status, undefined);
+    assert.equal(record?.trust_status, undefined);
+    assert.equal(record?.victory, undefined);
+  }
+
+  await client.close();
+  await server.close();
+});
+
+test("keeps Dark Factory owner-safe backend errors bounded", async () => {
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async () => new Response(JSON.stringify({ detail: "factory run not found" }), { status: 404 }),
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const response = await client.callTool({ name: "cptr_factory_status", arguments: { run_id: "foreign-run" } });
+  assert.equal(response.isError, true);
+  const text = JSON.stringify(response.content);
+  assert.match(text, /factory run not found/);
+  assert.equal(text.includes("/home/"), false);
+  assert.equal(text.includes("foreign workspace"), false);
 
   await client.close();
   await server.close();
@@ -322,13 +508,13 @@ test("reports plugin release status through the stable update action", async () 
     arguments: {
       action: "verify_server",
       expected_contract_version: CPTR_APP_VERSION,
-      expected_tool_count: 74,
+      expected_tool_count: 83,
     },
   });
   const value = response.structuredContent as Record<string, unknown> | undefined;
   assert.equal(response.isError, undefined);
   assert.equal(value?.version, CPTR_APP_VERSION);
-  assert.equal(value?.tool_count, 74);
+  assert.equal(value?.tool_count, 83);
   assert.equal(value?.contract_matches, true);
   assert.equal(value?.tool_count_matches, true);
   assert.deepEqual((value?.verification as { tool?: string } | undefined)?.tool, "cptr_plugin_update");

@@ -1,6 +1,53 @@
 import { z } from "zod";
 
+const configuredCommandInlineWaitMax = Number.parseInt(
+  process.env.CPTR_COMMAND_INLINE_WAIT_MAX_SECONDS ?? "3600",
+  10,
+);
+export const commandInlineWaitMaxSeconds = Number.isFinite(configuredCommandInlineWaitMax)
+  ? Math.max(60, configuredCommandInlineWaitMax)
+  : 3600;
+
 export const workspaceIdSchema = { workspace_id: z.string().min(1).max(200) };
+
+const factoryRunId = z.string().min(1).max(200);
+const factoryIdempotencyKey = z.string().min(1).max(200);
+export const factoryRunIdSchema = { run_id: factoryRunId };
+export const factoryStartSchema = {
+  workspace_id: z.string().min(1).max(200),
+  mission: z.string().min(1).max(100_000),
+  acceptance_criteria: z.array(z.string().min(1).max(10_000)).min(1).max(100),
+  policy: z.record(z.string(), z.unknown()).default({}),
+  budget: z.record(z.string(), z.unknown()).default({}),
+  model_id: z.string().min(1).max(500).optional(),
+  idempotency_key: factoryIdempotencyKey.optional(),
+};
+export const factoryPageSchema = {
+  run_id: factoryRunId,
+  cursor: z.string().min(1).max(200).optional(),
+  limit: z.number().int().min(1).max(100).default(50),
+};
+export const factoryMessageSchema = {
+  run_id: factoryRunId,
+  content: z.string().min(1).max(50_000),
+  idempotency_key: factoryIdempotencyKey.optional(),
+};
+export const factoryControlSchema = {
+  run_id: factoryRunId,
+  idempotency_key: factoryIdempotencyKey,
+};
+export const factoryApprovalSchema = {
+  run_id: factoryRunId,
+  approval_id: z.string().min(1).max(200),
+  approved: z.boolean(),
+  note: z.string().max(4_000).optional(),
+  idempotency_key: factoryIdempotencyKey.optional(),
+};
+export const factoryStopSchema = {
+  run_id: factoryRunId,
+  idempotency_key: factoryIdempotencyKey,
+  timeout_ms: z.number().int().min(100).max(120_000).optional(),
+};
 const optionalWorkerTargetSchema = {
   worker_id: z.string().min(1).max(200).optional().describe(
     "Optional model-free Direct Coding Worker. When set, ChatGPT operates inside that worker's isolated Git worktree.",
@@ -305,7 +352,7 @@ export const workspaceTestTargetSchema = {
   target: z.enum(["python_pytest", "node_test", "node_vitest", "node_build"]),
   path: z.string().min(1).max(1_000).default("."),
   test_path: z.string().min(1).max(1_000).optional(),
-  wait_seconds: z.number().int().min(0).max(60).default(0),
+  wait_seconds: z.number().int().min(0).max(commandInlineWaitMaxSeconds).default(0),
   workbench_session_id: workbenchSessionId.optional(),
 };
 
@@ -314,7 +361,7 @@ export const codingCommandSchema = {
   ...optionalWorkerTargetSchema,
   command: z.string().min(1).max(20_000),
   cwd: z.string().min(1).max(1_000).default("."),
-  wait_seconds: z.number().int().min(0).max(60).default(0),
+  wait_seconds: z.number().int().min(0).max(commandInlineWaitMaxSeconds).default(0),
   allow_network: z.boolean().default(false),
   pty: z.boolean().default(false).describe("Run the command in a real PTY so stdin, resize, and terminal control signals are available."),
   rows: z.number().int().min(5).max(300).default(24),
@@ -329,7 +376,7 @@ export const codingCommandStatusSchema = {
   ...optionalWorkerTargetSchema,
   command_id: z.string().min(1).max(200),
   offset: z.number().int().min(0).max(100_000_000).default(0),
-  wait_seconds: z.number().int().min(0).max(60).default(0),
+  wait_seconds: z.number().int().min(0).max(commandInlineWaitMaxSeconds).default(0),
   tail_bytes: z.number().int().min(0).max(10_000_000).optional(),
 };
 
@@ -408,14 +455,14 @@ export const sshCommandSchema = {
   workspace_id: z.string().min(1).max(200),
   alias: z.string().min(1).max(128),
   command: z.string().min(1).max(20_000),
-  wait_seconds: z.number().int().min(0).max(60).default(0),
+  wait_seconds: z.number().int().min(0).max(commandInlineWaitMaxSeconds).default(0),
 };
 
 export const sshCommandStatusSchema = {
   workspace_id: z.string().min(1).max(200),
   command_id: z.string().min(1).max(200),
   offset: z.number().int().min(0).max(100_000_000).default(0),
-  wait_seconds: z.number().int().min(0).max(60).default(0),
+  wait_seconds: z.number().int().min(0).max(commandInlineWaitMaxSeconds).default(0),
 };
 
 export const sshCommandCancelSchema = {
