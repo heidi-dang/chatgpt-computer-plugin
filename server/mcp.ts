@@ -2477,7 +2477,7 @@ export function createMcpServer(
     {
       title: "Control paired user Chrome",
       description:
-        "Control a user-approved Chrome extension connection through CPTR without changing the isolated cptr_chrome_browser tool. Use approve_pairing with the pairing ID and six-digit challenge shown by the extension before the user claims it; use list_devices to discover paired devices, open_session to bind one real tab, command for browser actions, and transfer_lease for explicit agent/human ownership handoff. Pairing codes are redacted from telemetry, mutating commands are fenced by the current lease epoch, and the extension never receives the MCP bearer token.",
+        "Control a user-approved Chrome extension connection through CPTR without changing the isolated cptr_chrome_browser tool. Use approve_pairing with the exact opaque pairing ID shown by the extension before the user claims it. pairing_code is optional for compatible hosts, but should be omitted when the host blocks OTP-like six-digit values. Use list_devices to discover paired devices, open_session to bind one real tab, command for browser actions, and transfer_lease for explicit agent/human ownership handoff. Pairing inputs are redacted from telemetry, mutating commands are fenced by the current lease epoch, and the extension never receives the MCP bearer token.",
       inputSchema: userChromeSchema,
       outputSchema: z.object({}).passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
