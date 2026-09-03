@@ -208,6 +208,7 @@ export class PromptTerminalStore {
   replay(ticket: string, after = 0): { events: PromptTerminalEvent[]; last_sequence: number; expires_at: number } | null {
     const session = this.getSession(ticket);
     if (!session) return null;
+    session.expiresAt = this.now() + this.ttlMs;
     return {
       events: session.events.filter((event) => event.sequence > after),
       last_sequence: session.lastSequence,
@@ -219,6 +220,7 @@ export class PromptTerminalStore {
     if (!this.streamingEnabledValue) return null;
     const session = this.getSession(ticket);
     if (!session) return null;
+    session.expiresAt = this.now() + this.ttlMs;
     session.listeners.add(listener);
     return () => session.listeners.delete(listener);
   }

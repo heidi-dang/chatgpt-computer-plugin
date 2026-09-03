@@ -64,3 +64,18 @@ test("reuses and renews a workbench prompt stream while resetting per-turn deleg
   assert.ok(resumed.expiresAt > first.expiresAt, "resuming a live task must renew the prompt stream lease");
   assert.equal(store.allowsDelegation(first.ticket), false, "delegation authorization must not leak into the next user turn");
 });
+
+test("refreshes prompt-session expiry on successful snapshot/stream activity so long tasks do not lose the persistent widget", () => {
+  let now = 1_000;
+  const store = new PromptTerminalStore({ streamingEnabled: true, ttlMs: 60_000, now: () => now });
+  const first = store.open();
+  assert.equal(store.bindWorkbenchSession(first.ticket, "wbs-long-running"), true);
+
+  now += 50_000;
+  const replay = store.replay(first.ticket, 0);
+  assert.ok(replay);
+  assert.ok(replay.expires_at > first.expiresAt, "successful activity must extend the prompt-session lease");
+
+  now += 50_000;
+  assert.equal(store.ticketForWorkbenchSession("wbs-long-running"), first.ticket, "active prompt stream must remain bound across long execution windows");
+});
