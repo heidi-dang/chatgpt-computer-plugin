@@ -16,7 +16,7 @@ export type TerminalViewProps = {
   onExpand: () => void;
 };
 
-type TerminalDisplayState = "connecting" | "live" | "reconnecting" | "offline" | "exited" | "closed" | "failed";
+type TerminalDisplayState = "connecting" | "live" | "waiting" | "reconnecting" | "offline" | "exited" | "closed" | "failed";
 
 type RichToken = {
   text: string;
@@ -174,9 +174,11 @@ function displayState(status: string, connection: string): TerminalDisplayState 
   const normalizedStatus = status.toUpperCase();
   if (["FAILED", "BLOCKED", "REJECTED", "COMPLETE_WITH_TOOL_ERRORS"].includes(normalizedStatus)) return "failed";
   if (normalizedStatus === "CANCELLED") return "closed";
-  if (normalizedStatus === "COMPLETE") return "exited";
 
   const normalizedConnection = connection.toLowerCase();
+  if (normalizedStatus === "COMPLETE") {
+    return normalizedConnection.includes("live") && !normalizedConnection.includes("disabled") ? "waiting" : "exited";
+  }
   if (normalizedConnection.includes("reconnect")) return "reconnecting";
   if (normalizedConnection.includes("live") && !normalizedConnection.includes("disabled")) return "live";
   if (
@@ -277,7 +279,7 @@ export function TerminalView({
 
     <footer className="terminal-footer">
       <span>shell</span>
-      <span>SSE {state === "live" ? "LIVE" : state === "connecting" ? "CONNECTING" : state === "reconnecting" ? "RECONNECTING" : "OFFLINE"}</span>
+      <span>SSE {state === "live" || state === "waiting" ? "LIVE" : state === "connecting" ? "CONNECTING" : state === "reconnecting" ? "RECONNECTING" : "OFFLINE"}</span>
       {exitCode === null ? null : <span className="terminal-exit" data-success={exitCode === 0 ? "true" : "false"}>EXIT {exitCode}</span>}
     </footer>
   </section>;

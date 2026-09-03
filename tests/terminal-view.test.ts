@@ -104,7 +104,8 @@ test("terminal final command state exposes the real exit code in the compact foo
     onExpand: () => {},
   }));
 
-  assert.match(html, />EXITED</);
+  assert.match(html, />WAITING</);
+  assert.match(html, /SSE LIVE/);
   assert.match(html, /EXIT 0/);
   assert.match(html, /data-success="true"/);
 });
@@ -156,7 +157,7 @@ test("Workbench reports intrinsic height through both ChatGPT host sizing paths 
   assert.doesNotMatch(source, /requestHostDisplayMode\(hostBridge\(\), "pip"\)[\s\S]*autoPinAttempted/);
   assert.doesNotMatch(source, /hasWorkers\s*\?\s*<DirectWorkersView/);
   assert.match(source, /const promptConnection = usePromptActivity\(/);
-  assert.match(source, /const connection = meta\?\.targetId \? targetConnection : promptConnection/);
+  assert.match(source, /const connection = meta\?\.targetId && !isTerminalWorkbenchStatus\(state\.status\) \? targetConnection : promptConnection/);
   assert.doesNotMatch(source, /meta\?\.targetId \? targetConnection : "connecting terminal session"/);
   assert.match(source, /promptConnection === "prompt live" \? "CPTR Computer" : "Connecting to computer"/);
   assert.match(source, /"Waiting for terminal session…"/);

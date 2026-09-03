@@ -31,12 +31,14 @@ function computerFixture(): ComputerClient {
   const mutable = computer as unknown as {
     listWorkspaces: () => Promise<{ workspaces: unknown[] }>;
     createWorkbenchSession: () => Promise<typeof workbenchSession>;
+    getWorkbenchSession: () => Promise<typeof workbenchSession>;
     runCodingCommand: () => Promise<Record<string, unknown>>;
     bindWorkbenchSession: () => Promise<Record<string, unknown>>;
     appendWorkbenchSessionEvent: () => Promise<Record<string, unknown>>;
   };
   mutable.listWorkspaces = async () => ({ workspaces: [] });
   mutable.createWorkbenchSession = async () => ({ ...workbenchSession });
+  mutable.getWorkbenchSession = async () => ({ ...workbenchSession });
   mutable.runCodingCommand = async () => ({
     command_id: "command-stateless-1",
     status: "RUNNING",
@@ -127,6 +129,39 @@ test("routes live command binding through the durable workbench session across M
     ["STARTED", "COMPLETE"],
     "stateless command lifecycle must remain visible in the prompt transcript",
   );
+
+  await second.client.close();
+  await second.server.close();
+});
+
+
+test("reopening the same durable workbench keeps the original prompt SSE stream", async () => {
+  const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
+  const tickets = new LiveTicketStore();
+  const computer = computerFixture();
+
+  const first = await connectedServer(computer, promptSessions, tickets);
+  const opened = await first.client.callTool({
+    name: "cptr_open_live_workbench",
+    arguments: { delegation_authorization: "allow:delegate" },
+  });
+  const originalTicket = (opened._meta as { "cptr/prompt"?: { ticket?: string } } | undefined)?.["cptr/prompt"]?.ticket;
+  const sessionId = (opened.structuredContent as { session_id?: string } | undefined)?.session_id;
+  assert.ok(originalTicket);
+  assert.ok(sessionId);
+  assert.equal(promptSessions.allowsDelegation(originalTicket), true);
+  await first.client.close();
+  await first.server.close();
+
+  const second = await connectedServer(computer, promptSessions, tickets);
+  const resumed = await second.client.callTool({
+    name: "cptr_open_live_workbench",
+    arguments: { resume_session_id: sessionId },
+  });
+  const resumedTicket = (resumed._meta as { "cptr/prompt"?: { ticket?: string } } | undefined)?.["cptr/prompt"]?.ticket;
+  assert.equal(resumedTicket, originalTicket, "a ChatGPT turn boundary must not strand the already-open Live Terminal");
+  assert.equal(promptSessions.ticketForWorkbenchSession(sessionId), originalTicket);
+  assert.equal(promptSessions.allowsDelegation(originalTicket), false, "delegation must require fresh authorization each user turn");
 
   await second.client.close();
   await second.server.close();

@@ -588,7 +588,8 @@ export function createMcpServer(
 
   const workbenchSessionIdFrom = (value: unknown): string | undefined => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-    const id = (value as Record<string, unknown>).workbench_session_id;
+    const record = value as Record<string, unknown>;
+    const id = record.workbench_session_id ?? record.resume_session_id;
     return typeof id === "string" && id ? id : undefined;
   };
 
@@ -1058,7 +1059,7 @@ export function createMcpServer(
     {
       title: "Prepare CPTR Live Workbench context",
       description:
-        "Call this first whenever the user explicitly invokes CPTR. Set session_name to the exact current ChatGPT conversation title when the host exposes it; otherwise use a concise prompt-derived Workbench session label and never claim it is the host title. This is the sole CPTR UI-producing tool: it opens exactly one Live Terminal for the current prompt before any target exists. All later task, monitor, command, status, and render/bind calls are data-only and update this existing terminal instead of creating another widget.",
+        "Call this first whenever the user explicitly invokes CPTR. Set session_name to the exact current ChatGPT conversation title when the host exposes it; otherwise use a concise prompt-derived Workbench session label and never claim it is the host title. When continuing the same task in a later ChatGPT turn, pass resume_session_id so the existing Live Terminal prompt SSE is renewed and reused rather than replaced. This is the sole CPTR UI-producing tool: it opens exactly one Live Terminal before any target exists. All later task, monitor, command, status, and render/bind calls are data-only and update this existing terminal instead of creating another widget.",
       inputSchema: openWorkbenchSessionSchema,
       outputSchema: {
         session_id: z.string(),
@@ -1078,15 +1079,18 @@ export function createMcpServer(
         .listWorkspaces(false)
         .then((value) => Array.isArray(value.workspaces) ? value.workspaces : [])
         .catch(() => []);
-      const prompt = promptSessions.open({ allowDelegate: delegationAllowed });
-      activePromptTicket = prompt.ticket;
-      promptTicketContext.enterWith(prompt.ticket);
       const session = input.resume_session_id
         ? await client.getWorkbenchSession(input.resume_session_id)
         : await client.createWorkbenchSession({
             ...(input.session_name ? { name: input.session_name } : {}),
             ...(input.workspace_id ? { workspace_id: input.workspace_id } : {}),
           });
+      const prompt = input.resume_session_id
+        ? promptSessions.resumeWorkbenchSession(session.session_id, { allowDelegate: delegationAllowed })
+          ?? promptSessions.open({ allowDelegate: delegationAllowed })
+        : promptSessions.open({ allowDelegate: delegationAllowed });
+      activePromptTicket = prompt.ticket;
+      promptTicketContext.enterWith(prompt.ticket);
       promptSessions.bindWorkbenchSession(prompt.ticket, session.session_id);
       const value = {
         session_id: session.session_id,

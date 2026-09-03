@@ -94,7 +94,8 @@ button:focus-visible, .terminal-output:focus-visible { outline: 2px solid #7fb8f
   border-radius: 999px;
   background: currentColor;
 }
-.terminal-status[data-state="live"] { color: #56d364; background: rgba(46, 160, 67, 0.09); border-color: rgba(63, 185, 80, 0.17); }
+.terminal-status[data-state="live"],
+.terminal-status[data-state="waiting"] { color: #56d364; background: rgba(46, 160, 67, 0.09); border-color: rgba(63, 185, 80, 0.17); }
 .terminal-status[data-state="reconnecting"],
 .terminal-status[data-state="connecting"] { color: #d29922; }
 .terminal-status[data-state="closed"],
@@ -195,6 +196,7 @@ button:focus-visible, .terminal-output:focus-visible { outline: 2px solid #7fb8f
   white-space: nowrap;
 }
 .terminal-footer span:nth-child(2) { color: #3fb950; }
+[data-state="waiting"] .terminal-footer span:nth-child(2) { color: #3fb950; }
 [data-state="reconnecting"] .terminal-footer span:nth-child(2),
 [data-state="connecting"] .terminal-footer span:nth-child(2) { color: #d29922; }
 [data-state="closed"] .terminal-footer span:nth-child(2),
