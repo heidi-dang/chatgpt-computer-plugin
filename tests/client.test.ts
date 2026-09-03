@@ -108,6 +108,28 @@ test("routes paired user Chrome through the dedicated browser-device API without
   assert.equal(JSON.stringify(body).includes("secret-token"), false);
 });
 
+test("fetches paired user Chrome frames server-side with the CPTR bearer", async () => {
+  const seen: Array<{ url: string; init?: RequestInit }> = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seen.push({ url: String(input), init });
+      return new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { "content-type": "image/jpeg", "x-cptr-frame-id": "frm_2" },
+      });
+    },
+  });
+
+  const response = await client.getUserChromeFrame("brs-1", "frm_1");
+
+  assert.equal(response.status, 200);
+  assert.equal(seen[0]?.url, "http://cptr.test/api/browser-device/v1/sessions/brs-1/frame?after_frame_id=frm_1");
+  assert.equal((seen[0]?.init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
+  assert.equal((seen[0]?.init?.headers as Record<string, string>).Accept, "image/jpeg, image/webp");
+});
+
 test("routes the single FDX intelligence gateway with repository and worker scope", async () => {
   let seenUrl = "";
   let seenBody: Record<string, unknown> = {};

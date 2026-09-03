@@ -1194,6 +1194,37 @@ export class ComputerClient {
     }
   }
 
+  async getUserChromeFrame(sessionId: string, afterFrameId?: string): Promise<Response> {
+    if (!sessionId) throw new Error("browser session id is required");
+    const query = new URLSearchParams();
+    if (afterFrameId) query.set("after_frame_id", afterFrameId);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Math.max(this.timeoutMs, 20_000));
+    try {
+      const response = await this.fetchImpl(
+        `${this.baseUrl}/api/browser-device/v1/sessions/${encodeURIComponent(sessionId)}/frame${query.size ? `?${query}` : ""}`,
+        {
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            Accept: "image/jpeg, image/webp",
+          },
+          signal: controller.signal,
+        },
+      );
+      if (response.status === 204) return response;
+      if (!response.ok) throw new ComputerApiError(response.status, "browser frame unavailable");
+      return response;
+    } catch (error) {
+      if (error instanceof ComputerApiError) throw error;
+      if (error instanceof DOMException && error.name === "AbortError") {
+        throw new ComputerApiError(504, "CPTR request timed out", "computer_api_timeout");
+      }
+      throw new ComputerApiError(502, "CPTR request failed", "computer_api_unavailable");
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   async createAutonomous(input: {
     workspace_id: string;
     goal: string;

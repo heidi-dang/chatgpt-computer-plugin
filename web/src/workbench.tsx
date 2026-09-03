@@ -17,7 +17,7 @@ import {
 } from "./state.js";
 import { requestHostDisplayMode, type DisplayModeBridge } from "./display-mode.js";
 import { TerminalView } from "./terminal-view.js";
-import { BrowserSurface, type BrowserFrame } from "./browser-surface.js";
+import { BrowserSurface } from "./browser-surface.js";
 import { PluginUpdateCenter } from "./plugin-update.js";
 import { CPTR_APP_VERSION } from "./version.js";
 import "./workbench.css";
@@ -52,6 +52,7 @@ type PromptMetadata = {
   ticket?: string;
   streamUrl?: string;
   snapshotUrl?: string;
+  browserFrameUrl?: string;
   expiresAt?: number;
   streamingEnabled?: boolean;
 };
@@ -587,7 +588,6 @@ function OwnedWorkbench() {
   const [meta, setMeta] = useState<LiveMetadata | null>(null);
   const [surfaceMode, setSurfaceMode] = useState<"terminal" | "browser">("terminal");
   const [browserSurface, setBrowserSurface] = useState<BrowserSurfaceState | null>(null);
-  const [browserFrame] = useState<BrowserFrame | null>(null);
   const promptConnection = usePromptActivity(setMeta, setState, setBrowserSurface, setSurfaceMode, liveStreamingEnabled);
   const targetConnection = useLiveSession(meta, setMeta, setState, liveStreamingEnabled);
   const connection = meta?.targetId && !isTerminalWorkbenchStatus(state.status) ? targetConnection : promptConnection;
@@ -665,7 +665,10 @@ function OwnedWorkbench() {
     </div>
     {surfaceMode === "browser"
       ? <BrowserSurface
-          frame={browserFrame}
+          frameUrl={promptMetadata?.browserFrameUrl}
+          ticket={promptMetadata?.ticket}
+          sessionId={browserSurface?.sessionId}
+          active={surfaceMode === "browser"}
           connection={connection}
           mode={browserSurface?.mode ?? "DISCONNECTED"}
           hostname={browserSurface?.hostname ?? "CPTR User Chrome"}

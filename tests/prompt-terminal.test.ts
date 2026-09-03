@@ -52,6 +52,7 @@ test("live terminal streaming implementation remains available when enabled", ()
 test("browser surface activity reuses the prompt stream without credential fields", () => {
   const store = new PromptTerminalStore({ streamingEnabled: true });
   const metadata = store.open();
+  assert.match(metadata.browserFrameUrl, /\/live\/prompt\/browser-frame$/);
   const appended = store.append(metadata.ticket, {
     type: "browser.surface",
     payload: {
@@ -68,6 +69,8 @@ test("browser surface activity reuses the prompt stream without credential field
   assert.equal(appended?.type, "browser.surface");
   const payload = appended?.payload as Record<string, unknown> | undefined;
   assert.equal(payload?.session_id, "brs_1");
+  assert.equal(store.allowsBrowserSession(metadata.ticket, "brs_1"), true);
+  assert.equal(store.allowsBrowserSession(metadata.ticket, "brs_other"), false);
   assert.equal(JSON.stringify(payload).includes("credential"), false);
 });
 
