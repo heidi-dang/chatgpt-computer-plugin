@@ -1,6 +1,45 @@
 import { z } from "zod";
 
 export const workspaceIdSchema = { workspace_id: z.string().min(1).max(200) };
+
+const factoryRunId = z.string().min(1).max(200);
+const factoryIdempotencyKey = z.string().min(1).max(200);
+export const factoryRunIdSchema = { run_id: factoryRunId };
+export const factoryStartSchema = {
+  workspace_id: z.string().min(1).max(200),
+  mission: z.string().min(1).max(100_000),
+  acceptance_criteria: z.array(z.string().min(1).max(10_000)).min(1).max(100),
+  policy: z.record(z.string(), z.unknown()).default({}),
+  budget: z.record(z.string(), z.unknown()).default({}),
+  model_id: z.string().min(1).max(500).optional(),
+  idempotency_key: factoryIdempotencyKey.optional(),
+};
+export const factoryPageSchema = {
+  run_id: factoryRunId,
+  cursor: z.string().min(1).max(200).optional(),
+  limit: z.number().int().min(1).max(100).default(50),
+};
+export const factoryMessageSchema = {
+  run_id: factoryRunId,
+  content: z.string().min(1).max(50_000),
+  idempotency_key: factoryIdempotencyKey.optional(),
+};
+export const factoryControlSchema = {
+  run_id: factoryRunId,
+  idempotency_key: factoryIdempotencyKey,
+};
+export const factoryApprovalSchema = {
+  run_id: factoryRunId,
+  approval_id: z.string().min(1).max(200),
+  approved: z.boolean(),
+  note: z.string().max(4_000).optional(),
+  idempotency_key: factoryIdempotencyKey.optional(),
+};
+export const factoryStopSchema = {
+  run_id: factoryRunId,
+  idempotency_key: factoryIdempotencyKey,
+  timeout_ms: z.number().int().min(100).max(120_000).optional(),
+};
 const optionalWorkerTargetSchema = {
   worker_id: z.string().min(1).max(200).optional().describe(
     "Optional model-free Direct Coding Worker. When set, ChatGPT operates inside that worker's isolated Git worktree.",

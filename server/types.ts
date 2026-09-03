@@ -1,3 +1,47 @@
+export type FactoryRunControl = {
+  run_id: string;
+  state: string;
+};
+
+export type FactoryRunStatus = FactoryRunControl & {
+  workspace_id: string;
+  current_cycle_id: string | null;
+  resumable_state: string | null;
+  next_action: string | null;
+  mission: string;
+  acceptance_criteria: string[];
+  policy: Record<string, unknown>;
+  budget: Record<string, unknown>;
+  cycle: Record<string, unknown> | null;
+  progress: Record<string, unknown>;
+  pending_approval: Record<string, unknown> | null;
+  gates: Array<Record<string, unknown>>;
+  created_at: number;
+  updated_at: number;
+  completed_at: number | null;
+};
+
+export type FactoryEventPage = {
+  events: Array<Record<string, unknown>>;
+  next_cursor: string | null;
+  max_bytes: number;
+  bytes_returned: number;
+  truncated: boolean;
+};
+
+export type FactoryEvidencePage = {
+  evidence: Array<Record<string, unknown>>;
+  next_cursor: string | null;
+  max_bytes: number;
+  bytes_returned: number;
+  truncated: boolean;
+};
+
+export type FactoryApprovalResult = {
+  approval: Record<string, unknown>;
+  run: Record<string, unknown>;
+};
+
 export type Workspace = {
   workspace_id: string;
   name: string;

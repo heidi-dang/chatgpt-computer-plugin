@@ -6,6 +6,11 @@ import type {
   DirectFileRead,
   DirectSshCommand,
   DirectTaskExecution,
+  FactoryApprovalResult,
+  FactoryEventPage,
+  FactoryEvidencePage,
+  FactoryRunControl,
+  FactoryRunStatus,
   GitDiff,
   Task,
   TaskOutput,
@@ -387,6 +392,86 @@ export class ComputerClient {
   }
   async readManyFiles(input: { workspace_id: string; [key: string]: unknown }): Promise<Record<string, unknown>> { return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/read-many`, { method: "POST", body: input }); }
   async applyEdits(input: { workspace_id: string; [key: string]: unknown }): Promise<Record<string, unknown>> { return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/apply-edits`, { method: "POST", body: input }); }
+
+  async startFactoryRun(input: {
+    workspace_id: string;
+    mission: string;
+    acceptance_criteria: string[];
+    policy?: Record<string, unknown>;
+    budget?: Record<string, unknown>;
+    model_id?: string;
+    idempotency_key?: string;
+  }): Promise<FactoryRunControl> {
+    return this.request("/factory/runs", { method: "POST", body: input });
+  }
+
+  async getFactoryRun(runId: string): Promise<FactoryRunStatus> {
+    return this.request(`/factory/runs/${encodeURIComponent(runId)}`);
+  }
+
+  async getFactoryEvents(input: {
+    run_id: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<FactoryEventPage> {
+    const query = new URLSearchParams();
+    if (input.cursor) query.set("cursor", input.cursor);
+    query.set("limit", String(input.limit ?? 50));
+    return this.request(`/factory/runs/${encodeURIComponent(input.run_id)}/events?${query}`);
+  }
+
+  async getFactoryEvidence(input: {
+    run_id: string;
+    cursor?: string;
+    limit?: number;
+  }): Promise<FactoryEvidencePage> {
+    const query = new URLSearchParams();
+    if (input.cursor) query.set("cursor", input.cursor);
+    query.set("limit", String(input.limit ?? 50));
+    return this.request(`/factory/runs/${encodeURIComponent(input.run_id)}/evidence?${query}`);
+  }
+
+  async messageFactoryRun(input: {
+    run_id: string;
+    content: string;
+    idempotency_key?: string;
+  }): Promise<Record<string, unknown>> {
+    const { run_id, ...body } = input;
+    return this.request(`/factory/runs/${encodeURIComponent(run_id)}/messages`, {
+      method: "POST",
+      body,
+    });
+  }
+
+  async pauseFactoryRun(input: { run_id: string; idempotency_key: string }): Promise<FactoryRunControl> {
+    const { run_id, ...body } = input;
+    return this.request(`/factory/runs/${encodeURIComponent(run_id)}/pause`, { method: "POST", body });
+  }
+
+  async resumeFactoryRun(input: { run_id: string; idempotency_key: string }): Promise<FactoryRunControl> {
+    const { run_id, ...body } = input;
+    return this.request(`/factory/runs/${encodeURIComponent(run_id)}/resume`, { method: "POST", body });
+  }
+
+  async approveFactoryRun(input: {
+    run_id: string;
+    approval_id: string;
+    approved: boolean;
+    note?: string;
+    idempotency_key?: string;
+  }): Promise<FactoryApprovalResult> {
+    const { run_id, ...body } = input;
+    return this.request(`/factory/runs/${encodeURIComponent(run_id)}/approve`, { method: "POST", body });
+  }
+
+  async stopFactoryRun(input: {
+    run_id: string;
+    idempotency_key: string;
+    timeout_ms?: number;
+  }): Promise<FactoryRunControl> {
+    const { run_id, ...body } = input;
+    return this.request(`/factory/runs/${encodeURIComponent(run_id)}/stop`, { method: "POST", body });
+  }
 
   async getWorkspace(workspaceId: string): Promise<Workspace> {
     return this.request(`/workspaces/${encodeURIComponent(workspaceId)}`);

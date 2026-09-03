@@ -56,6 +56,13 @@ import {
   codingWriteSchema,
   chromeBrowserSchema,
   executeTaskSchema,
+  factoryApprovalSchema,
+  factoryControlSchema,
+  factoryMessageSchema,
+  factoryPageSchema,
+  factoryRunIdSchema,
+  factoryStartSchema,
+  factoryStopSchema,
   messageSchema,
   monitorAutonomousSchema,
   monitorIdSchema,
@@ -253,6 +260,36 @@ function recordWorkbenchActivity(
   if (!sessionId) return;
   void client.appendWorkbenchSessionEvent({ session_id: sessionId, ...input }).catch(() => undefined);
 }
+
+const factoryRunControlOutputSchema = {
+  run_id: z.string(),
+  state: z.string(),
+};
+const factoryStatusOutputSchema = {
+  run_id: z.string(),
+  workspace_id: z.string(),
+  state: z.string(),
+  current_cycle_id: z.string().nullable(),
+  resumable_state: z.string().nullable(),
+  next_action: z.string().nullable(),
+  mission: z.string(),
+  acceptance_criteria: z.array(z.string()),
+  policy: z.record(z.string(), z.unknown()),
+  budget: z.record(z.string(), z.unknown()),
+  cycle: z.record(z.string(), z.unknown()).nullable(),
+  progress: z.record(z.string(), z.unknown()),
+  pending_approval: z.record(z.string(), z.unknown()).nullable(),
+  gates: z.array(z.record(z.string(), z.unknown())),
+  created_at: z.number().int(),
+  updated_at: z.number().int(),
+  completed_at: z.number().int().nullable(),
+};
+const factoryPageMetadataOutputSchema = {
+  next_cursor: z.string().nullable(),
+  max_bytes: z.number().int().nonnegative(),
+  bytes_returned: z.number().int().nonnegative(),
+  truncated: z.boolean(),
+};
 
 const workspaceInsightOutputSchema = {
   workspace_id: z.string(),
@@ -1422,6 +1459,126 @@ export function createMcpServer(
       _meta: oauthToolMetadata,
     },
     async ({ workspace_id }) => activityResult(await client.getWorkspace(workspace_id), "cptr_get_workspace"),
+  );
+
+  server.registerTool(
+    "cptr_factory_start",
+    {
+      title: "Start a durable Dark Factory run",
+      description: "Start one owner-scoped Dark Factory mission through CPTR's server-authoritative factory runtime. This adapter forwards the bounded mission, acceptance criteria, policy, and budget; it does not implement the factory state machine, trust policy, or Victory logic.",
+      inputSchema: factoryStartSchema,
+      outputSchema: factoryRunControlOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.startFactoryRun(input), "cptr_factory_start"),
+  );
+
+  server.registerTool(
+    "cptr_factory_status",
+    {
+      title: "Get Dark Factory run status",
+      description: "Read the bounded owner-scoped Dark Factory projection, including current cycle, progress, pending approval, budgets, selected capabilities, and latest gate summary.",
+      inputSchema: factoryRunIdSchema,
+      outputSchema: factoryStatusOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async ({ run_id }) => activityResult(await client.getFactoryRun(run_id), "cptr_factory_status"),
+  );
+
+  server.registerTool(
+    "cptr_factory_events",
+    {
+      title: "Get Dark Factory events",
+      description: "Read one bounded cursor-paginated page of redacted durable Dark Factory events. The backend remains the authoritative event and transition source.",
+      inputSchema: factoryPageSchema,
+      outputSchema: { events: z.array(z.record(z.string(), z.unknown())), ...factoryPageMetadataOutputSchema },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.getFactoryEvents(input), "cptr_factory_events"),
+  );
+
+  server.registerTool(
+    "cptr_factory_evidence",
+    {
+      title: "Get Dark Factory evidence",
+      description: "Read one bounded cursor-paginated page of redacted machine/user evidence for an owner-scoped Dark Factory run.",
+      inputSchema: factoryPageSchema,
+      outputSchema: { evidence: z.array(z.record(z.string(), z.unknown())), ...factoryPageMetadataOutputSchema },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.getFactoryEvidence(input), "cptr_factory_evidence"),
+  );
+
+  server.registerTool(
+    "cptr_factory_message",
+    {
+      title: "Message a Dark Factory run",
+      description: "Append one bounded authenticated user message to a durable Dark Factory run. Messages are advisory input and cannot directly set state, gate, trust, or Victory values.",
+      inputSchema: factoryMessageSchema,
+      outputSchema: { event: z.record(z.string(), z.unknown()) },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.messageFactoryRun(input), "cptr_factory_message"),
+  );
+
+  server.registerTool(
+    "cptr_factory_pause",
+    {
+      title: "Pause a Dark Factory run",
+      description: "Request the backend state machine to pause an owner-scoped Dark Factory run. Approval-required runs cannot be bypassed through this generic control.",
+      inputSchema: factoryControlSchema,
+      outputSchema: factoryRunControlOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.pauseFactoryRun(input), "cptr_factory_pause"),
+  );
+
+  server.registerTool(
+    "cptr_factory_resume",
+    {
+      title: "Resume a paused Dark Factory run",
+      description: "Resume only the backend-persisted resumable state of a paused Dark Factory run. This tool cannot release an approval-required operation.",
+      inputSchema: factoryControlSchema,
+      outputSchema: factoryRunControlOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.resumeFactoryRun(input), "cptr_factory_resume"),
+  );
+
+  server.registerTool(
+    "cptr_factory_approve",
+    {
+      title: "Decide a pending Dark Factory approval",
+      description: "Approve or deny the exact backend-issued operation envelope for a Dark Factory run. Approval may release a revision-bound external/destructive operation; the backend validates the envelope and policy.",
+      inputSchema: factoryApprovalSchema,
+      outputSchema: {
+        approval: z.record(z.string(), z.unknown()),
+        run: z.record(z.string(), z.unknown()),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.approveFactoryRun(input), "cptr_factory_approve"),
+  );
+
+  server.registerTool(
+    "cptr_factory_stop",
+    {
+      title: "Stop a Dark Factory run",
+      description: "Stop an owner-scoped Dark Factory run only after CPTR proves its owned worker execution is quiescent. The backend refuses cancellation completion while commands or worker assignments remain unresolved.",
+      inputSchema: factoryStopSchema,
+      outputSchema: factoryRunControlOutputSchema,
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      _meta: oauthToolMetadata,
+    },
+    async (input) => activityResult(await client.stopFactoryRun(input), "cptr_factory_stop"),
   );
 
   server.registerTool(
