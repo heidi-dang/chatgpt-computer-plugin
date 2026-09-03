@@ -198,6 +198,7 @@ test("Workbench switches terminal and browser inside one persistent root", () =>
 
   assert.match(source, /useState<"terminal" \| "browser">\("terminal"\)/);
   assert.match(source, /<BrowserSurface/);
+  assert.match(source, /if \(!sessionId\) return/);
   assert.match(source, /<TerminalView/);
   assert.match(source, /createRoot\(root\)\.render\(<Workbench \/>\)/);
   assert.equal((source.match(/createRoot\(/g) ?? []).length, 1);
@@ -207,6 +208,8 @@ test("Workbench switches terminal and browser inside one persistent root", () =>
   assert.match(browserSource, /document\.visibilityState === "hidden"/);
   assert.match(browserSource, /controller\?\.abort\(\)/);
   assert.match(browserSource, /createImageBitmap\(blob\)/);
+  assert.match(browserSource, /No Chrome session is attached yet/);
+  assert.match(browserSource, /Browser frame unavailable — reconnecting/);
   assert.match(browserSource, /\/live\/prompt\/browser-stream/);
   assert.match(browserSource, /max_fps:\s*visible \? 10 : 0/);
   assert.match(browserSource, /configureSourceVisibility\(false\)/);

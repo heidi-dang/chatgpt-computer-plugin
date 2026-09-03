@@ -33,8 +33,12 @@ export function currentPluginUpdateManifest(env: NodeJS.ProcessEnv = process.env
     tool_count: MCP_CONTRACT_TOOL_COUNT,
     release_sha: env.GIT_COMMIT_SHA ?? env.RAILWAY_GIT_COMMIT_SHA ?? env.CPTR_WORKBENCH_BUILD_ID ?? null,
     released_at: "2026-09-03",
-    summary: "CPTR Computer v1.4.1 fixes secure pairing and persistent control for the pinned CPTR Live Computer Chrome extension while preserving the v1.4 benchmark, Direct Coding, PTY, LSP, FDX, managed-browser, and SSH surfaces.",
+    summary: "CPTR Computer v1.4.2 restores the paired-Chrome live card and makes real Chrome tab selection bootstrappable while hardening browser reconnect and managed-browser interaction.",
     changes: [
+      "Adds owner-scoped pre-session tab discovery and lets open_session automatically bind the active Chrome tab when tab_id is omitted, eliminating the circular session-bootstrap dependency.",
+      "Prevents device discovery and pairing activity from switching the persistent Workbench into an unrenderable blank browser canvas before a real browser session exists.",
+      "Stops malformed internal browser audit-event replay from driving the extension into reconnect loops; durable extension session/lease recovery remains authoritative and interrupted commands retry explicitly.",
+      "Removes the intentionally unsupported upload_file action from the extension wire contract and keeps native file-picker use behind HUMAN_CONTROL until an approved file broker exists.",
       "Adds exact chrome-extension:// origin support to MCP_ALLOWED_ORIGINS without enabling wildcard extension origins; the production CPTR Live Computer ID is pinned by its manifest public key.",
       "Proxies only /api/browser-device/v1 HTTP and WebSocket traffic to CPTR_BASE_URL so the public MCP origin can host pairing/device channels while MCP bearer, cookies, and Cloudflare assertions are never forwarded to the browser-device backend.",
       "Keeps browser-device CORS authoritative at the public plugin boundary, strips upstream CORS and Set-Cookie headers, rejects wrong WebSocket origins, and couples both sides of proxied WebSocket shutdown to prevent leaked device connections.",

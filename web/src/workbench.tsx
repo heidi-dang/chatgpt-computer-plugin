@@ -223,6 +223,10 @@ function usePromptActivity(
         setMeta(event.payload.live);
       } else if (event.type === "browser.surface") {
         const payload = event.payload ?? {};
+        const sessionId = typeof payload.session_id === "string" && payload.session_id ? payload.session_id : null;
+        // Discovery/pairing activity is not a renderable browser surface. Keep
+        // the terminal visible until CPTR has bound a real browser session.
+        if (!sessionId) return;
         const stateValue = typeof payload.state === "string" ? payload.state : "OBSERVING";
         const mode = (["OBSERVING", "AGENT_CONTROL", "HANDOFF_REQUIRED", "HUMAN_CONTROL", "DISCONNECTED"] as const)
           .includes(stateValue as BrowserSurfaceState["mode"])
@@ -231,7 +235,7 @@ function usePromptActivity(
         setBrowserSurface({
           action: typeof payload.action === "string" ? payload.action : "unknown",
           ...(typeof payload.device_id === "string" ? { deviceId: payload.device_id } : {}),
-          ...(typeof payload.session_id === "string" ? { sessionId: payload.session_id } : {}),
+          sessionId,
           mode,
           ...(typeof payload.owner === "string" ? { owner: payload.owner } : {}),
           ...(typeof payload.epoch === "number" ? { epoch: payload.epoch } : {}),

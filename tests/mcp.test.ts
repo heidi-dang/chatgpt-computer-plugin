@@ -612,6 +612,47 @@ test("invokes paired user Chrome through the separate ChatGPT-visible MCP tool",
   await server.close();
 });
 
+test("discovers paired Chrome tabs and can open the active tab without an explicit tab id", async () => {
+  const seen: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async (input, init) => {
+      const url = String(input);
+      seen.push({ url, body: init?.body ? JSON.parse(String(init.body)) : {} });
+      if (url.endsWith("/devices/bdv-1/tabs")) {
+        return new Response(JSON.stringify({ device_id: "bdv-1", tabs: [{ id: 7, active: true, title: "Example" }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ session_id: "brs-1", device_id: "bdv-1", tab_id: 7, state: "AGENT_CONTROL", lease: { owner: "agent", epoch: 1 } }), { status: 200 });
+    },
+  });
+  const server = createMcpServer(computer);
+  const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+  const tabs = await client.callTool({
+    name: "cptr_user_chrome",
+    arguments: { action: "list_tabs", device_id: "bdv-1" },
+  });
+  assert.equal(tabs.isError, undefined);
+  assert.equal((tabs.structuredContent as { tabs?: Array<{ id?: number }> } | undefined)?.tabs?.[0]?.id, 7);
+
+  const opened = await client.callTool({
+    name: "cptr_user_chrome",
+    arguments: { action: "open_session", device_id: "bdv-1" },
+  });
+  assert.equal(opened.isError, undefined);
+  assert.equal((opened.structuredContent as { tab_id?: number } | undefined)?.tab_id, 7);
+  assert.deepEqual(seen, [
+    { url: "http://cptr.test/api/browser-device/v1/devices/bdv-1/tabs", body: {} },
+    { url: "http://cptr.test/api/browser-device/v1/sessions", body: { device_id: "bdv-1" } },
+  ]);
+
+  await client.close();
+  await server.close();
+});
+
 test("approves a Chrome pairing challenge by opaque ID without forwarding an OTP-like code", async () => {
   const seen: Array<{ url: string; body: Record<string, unknown>; authorization?: string }> = [];
   const computer = new ComputerClient({

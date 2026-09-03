@@ -1215,7 +1215,7 @@ export class ComputerClient {
   }
 
   async controlUserChrome(input: {
-    action: "approve_pairing" | "list_devices" | "open_session" | "approve_evaluate" | "command" | "transfer_lease";
+    action: "approve_pairing" | "list_devices" | "list_tabs" | "open_session" | "approve_evaluate" | "command" | "transfer_lease";
     pairing_id?: string;
     pairing_code?: string;
     device_id?: string;
@@ -1248,15 +1248,19 @@ export class ComputerClient {
       }
       case "list_devices":
         return this.requestBrowserDevice("/devices");
+      case "list_tabs": {
+        if (!input.device_id) throw new Error("list_tabs requires device_id");
+        return this.requestBrowserDevice(`/devices/${encodeURIComponent(input.device_id)}/tabs`);
+      }
       case "open_session": {
-        if (!input.device_id || input.tab_id === undefined) {
-          throw new Error("open_session requires device_id and tab_id");
+        if (!input.device_id) {
+          throw new Error("open_session requires device_id");
         }
         return this.requestBrowserDevice("/sessions", {
           method: "POST",
           body: {
             device_id: input.device_id,
-            tab_id: input.tab_id,
+            ...(input.tab_id !== undefined ? { tab_id: input.tab_id } : {}),
             ...(input.workbench_session_id ? { workbench_session_id: input.workbench_session_id } : {}),
             ...(input.surface_id ? { surface_id: input.surface_id } : {}),
           },

@@ -67,6 +67,7 @@ export function BrowserSurface({
   const pendingMove = useRef<HumanInputPayload | null>(null);
   const lastStreamVisible = useRef<boolean | null>(null);
   const [hasFrame, setHasFrame] = useState(false);
+  const [frameStatus, setFrameStatus] = useState("Waiting for browser frame…");
   const [returningControl, setReturningControl] = useState(false);
 
   const canHumanInput = active && mode === "HUMAN_CONTROL" && Boolean(inputUrl && ticket && sessionId && Number.isInteger(epoch));
@@ -142,6 +143,9 @@ export function BrowserSurface({
   };
 
   useEffect(() => {
+    setHasFrame(false);
+    lastFrameId.current = null;
+    setFrameStatus(sessionId ? "Waiting for browser frame…" : "No Chrome session is attached yet.");
     const shell = shellRef.current;
     if (!shell || !active || !frameUrl || !ticket || !sessionId) return;
     let intersecting = true;
@@ -167,6 +171,7 @@ export function BrowserSurface({
         context.drawImage(bitmap, 0, 0, width, height);
         lastFrameId.current = frameId;
         setHasFrame(true);
+        setFrameStatus("");
       } finally {
         bitmap.close();
       }
@@ -218,6 +223,7 @@ export function BrowserSurface({
         }
       } catch (error) {
         if (!stopped && !(error instanceof DOMException && error.name === "AbortError")) {
+          setFrameStatus("Browser frame unavailable — reconnecting…");
           await new Promise((resolve) => window.setTimeout(resolve, 750));
         }
       } finally {
@@ -321,7 +327,7 @@ export function BrowserSurface({
           event.preventDefault();
         }}
       />
-      {!hasFrame ? <div className="browser-empty">Waiting for browser frame…</div> : null}
+      {!hasFrame ? <div className="browser-empty">{frameStatus || "Waiting for browser frame…"}</div> : null}
       {mode === "HUMAN_CONTROL" ? <div className="browser-human-hint">
         <span>Human control · touch, pointer, wheel and keyboard are live</span>
         <button type="button" disabled={returningControl} onClick={() => void returnToAgent()}>

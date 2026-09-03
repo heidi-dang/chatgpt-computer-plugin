@@ -489,6 +489,7 @@ export const userChromeSchema = {
   action: z.enum([
     "approve_pairing",
     "list_devices",
+    "list_tabs",
     "open_session",
     "approve_evaluate",
     "command",

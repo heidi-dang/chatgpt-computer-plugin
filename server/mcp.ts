@@ -615,19 +615,25 @@ export function createMcpServer(
   };
 
   const publishBrowserSurface = (input: Record<string, unknown>, result: Record<string, unknown>) => {
+    const lease = recordFrom(result.lease);
+    const sessionId = result.session_id ?? input.session_id ?? lease.session_id;
+    // Device discovery and pairing are not browser surfaces. Publishing a
+    // browser.surface before a real session exists switches the Workbench to
+    // an empty canvas that can never legally poll the frame gateway.
+    if (typeof sessionId !== "string" || !sessionId) return;
     const payload: {
       action: string;
       device_id?: string;
-      session_id?: string;
+      session_id: string;
       state?: string;
       owner?: string;
       epoch?: number;
       hostname?: string;
     } = {
       action: typeof input.action === "string" ? input.action : "unknown",
+      session_id: sessionId.slice(0, 200),
     };
-    const lease = recordFrom(result.lease);
-    for (const key of ["device_id", "session_id", "state", "owner", "hostname"] as const) {
+    for (const key of ["device_id", "state", "owner", "hostname"] as const) {
       const value = result[key] ?? (key === "owner" ? lease.owner : undefined) ?? input[key];
       if (typeof value === "string" && value) payload[key] = value.slice(0, 200);
     }
@@ -2477,7 +2483,7 @@ export function createMcpServer(
     {
       title: "Control paired user Chrome",
       description:
-        "Control a user-approved Chrome extension connection through CPTR without changing the isolated cptr_chrome_browser tool. Use approve_pairing with the exact opaque pairing ID shown by the extension before the user claims it. pairing_code is optional for compatible hosts, but should be omitted when the host blocks OTP-like six-digit values. Use list_devices to discover paired devices, open_session to bind one real tab, command for browser actions, and transfer_lease for explicit agent/human ownership handoff. Pairing inputs are redacted from telemetry, mutating commands are fenced by the current lease epoch, and the extension never receives the MCP bearer token.",
+        "Control a user-approved Chrome extension connection through CPTR without changing the isolated cptr_chrome_browser tool. Use approve_pairing with the exact opaque pairing ID shown by the extension before the user claims it. pairing_code is optional for compatible hosts, but should be omitted when the host blocks OTP-like six-digit values. Start with list_devices, use list_tabs with device_id to inspect sanitized live tabs, or call open_session with only device_id to bind the active tab automatically; an explicit tab_id may still be supplied. Use command for browser actions and transfer_lease for explicit agent/human ownership handoff. Pairing inputs are redacted from telemetry, mutating commands are fenced by the current lease epoch, and the extension never receives the MCP bearer token.",
       inputSchema: userChromeSchema,
       outputSchema: z.object({}).passthrough(),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
