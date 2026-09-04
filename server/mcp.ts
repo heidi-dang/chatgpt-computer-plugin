@@ -2601,7 +2601,7 @@ export function createMcpServer(
     {
       title: "Execute an authorized delegated CPTR task",
       description:
-        "Do not use this for ordinary CPTR work: ChatGPT must perform the user's request itself through the ChatGPT Direct Coding tools. This Delegated Agent tool is available only when the current prompt session was explicitly authorized with allow:delegate. model_id may name provider/model or agent:profile/model; when omitted, CPTR may use its configured qualified default only after authorization. The call waits at most 60 seconds and uses durable status for follow-up.",
+        "Do not use this for ordinary CPTR work: ChatGPT must perform the user's request itself through the ChatGPT Direct Coding tools. This Delegated Agent convenience call waits only a short bounded interval (5 seconds by default, 15 seconds maximum). Prefer cptr_start_task for durable work, then resume with task events/status/output rather than holding the MCP request open. It is available only when the current prompt session was explicitly authorized with allow:delegate. model_id may name provider/model or agent:profile/model; when omitted, CPTR may use its configured qualified default only after authorization.",
       inputSchema: executeTaskSchema,
       outputSchema: {
         task_id: z.string(),

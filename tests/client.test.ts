@@ -557,6 +557,7 @@ test("bounds direct-execution output before returning it to ChatGPT", async () =
   assert.equal(result.output_truncated, true);
   assert.equal(result.output.endsWith("[Output truncated by the MCP adapter.]"), true);
   assert.equal(result.output.length, 20_040);
+  assert.equal(result.wait_seconds, 5);
 });
 
 

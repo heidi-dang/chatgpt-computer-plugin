@@ -80,6 +80,41 @@ test("MCP diagnostics emitter is bounded, allowlist-only, and sanitizes summarie
   assert.equal(failure.summary, "Backend failed at <redacted-path> and Bearer [REDACTED] next line");
 });
 
+test("latency diagnostics preserve bounded operation classification without leaking arguments", async () => {
+  const delivered: Array<Array<Record<string, unknown>>> = [];
+  const Emitter = diagnosticsModule.McpDiagnosticsEmitter as new (options: Record<string, unknown>) => {
+    latency: (input: Record<string, unknown>) => void;
+    flush: () => Promise<void>;
+    close: () => Promise<void>;
+  };
+  const emitter = new Emitter({
+    batchSize: 10,
+    flushMs: 10_000,
+    maxQueue: 10,
+    deliver: async (events: Array<Record<string, unknown>>) => delivered.push(events),
+  });
+  emitter.latency({
+    request_id: "request-1",
+    correlation_id: "corr-1",
+    edge_id: "client-mcp-connector",
+    metric_type: "observed_request_time",
+    duration_ms: 5_200,
+    status: "ok",
+    tool_name: "cptr_execute_task",
+    operation_class: "bounded_wait",
+    requested_wait_ms: 5_000,
+    health_eligible: false,
+  });
+  await emitter.flush();
+  await emitter.close();
+
+  assert.equal(delivered[0]?.[0]?.tool_name, "cptr_execute_task");
+  assert.equal(delivered[0]?.[0]?.operation_class, "bounded_wait");
+  assert.equal(delivered[0]?.[0]?.requested_wait_ms, 5_000);
+  assert.equal(delivered[0]?.[0]?.health_eligible, false);
+  assert.equal(JSON.stringify(delivered).includes("prompt"), false);
+});
+
 test("diagnostics delivery rejection is swallowed and counted without recursion", async () => {
   assert.equal(typeof diagnosticsModule.McpDiagnosticsEmitter, "function");
   const Emitter = diagnosticsModule.McpDiagnosticsEmitter as new (options: Record<string, unknown>) => {

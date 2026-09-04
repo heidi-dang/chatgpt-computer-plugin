@@ -6,6 +6,7 @@ export type McpLatencyEdge =
   | "cptr-mcp-cptr-backend";
 
 export type McpLatencyMetric = "observed_request_time" | "adapter_handoff" | "backend_api_rtt";
+export type McpLatencyOperationClass = "immediate" | "bounded_wait" | "long_operation";
 
 export type McpFailureStage =
   | "client_transport"
@@ -26,6 +27,10 @@ export type McpLatencyDiagnostic = {
   metric_type: McpLatencyMetric;
   duration_ms: number;
   status: "ok" | "error";
+  tool_name?: string | null;
+  operation_class?: McpLatencyOperationClass;
+  requested_wait_ms?: number | null;
+  health_eligible?: boolean;
 };
 
 export type McpUsageDiagnostic = {
@@ -136,6 +141,13 @@ function copyLatency(event: McpLatencyDiagnostic): McpLatencyDiagnostic {
     metric_type: event.metric_type,
     duration_ms: boundedNumber(event.duration_ms, 86_400_000) ?? 0,
     status: event.status,
+    tool_name: boundedText(event.tool_name, 256),
+    operation_class:
+      event.operation_class === "bounded_wait" || event.operation_class === "long_operation"
+        ? event.operation_class
+        : "immediate",
+    requested_wait_ms: boundedNumber(event.requested_wait_ms, 86_400_000),
+    health_eligible: event.health_eligible !== false,
   };
 }
 
@@ -206,7 +218,7 @@ export class McpDiagnosticsEmitter {
   constructor(options: McpDiagnosticsEmitterOptions) {
     const env = options.env ?? process.env;
     const envBatchSize = boundedInt(env.CPTR_MCP_DIAGNOSTICS_PLUGIN_BATCH_SIZE, 20, 1, 100);
-    const envFlushMs = boundedInt(env.CPTR_MCP_DIAGNOSTICS_PLUGIN_FLUSH_MS, 250, 25, 10_000);
+    const envFlushMs = boundedInt(env.CPTR_MCP_DIAGNOSTICS_PLUGIN_FLUSH_MS, 1000, 25, 10_000);
     const envMaxQueue = boundedInt(env.CPTR_MCP_DIAGNOSTICS_PLUGIN_MAX_QUEUE, 500, 10, 5_000);
     this.deliver = options.deliver;
     this.batchSize = boundedOverride(options.batchSize, envBatchSize, 1, 100);

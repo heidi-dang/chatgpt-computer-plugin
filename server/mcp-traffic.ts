@@ -224,7 +224,7 @@ export class McpTrafficEmitter {
     const env = options.env ?? process.env;
     this.deliver = options.deliver;
     this.batchSize = boundedInt(env.CPTR_MCP_TRAFFIC_PLUGIN_BATCH_SIZE, 20, 1, 100);
-    this.flushMs = boundedInt(env.CPTR_MCP_TRAFFIC_PLUGIN_FLUSH_MS, 250, 25, 10_000);
+    this.flushMs = boundedInt(env.CPTR_MCP_TRAFFIC_PLUGIN_FLUSH_MS, 1000, 25, 10_000);
     this.maxQueue = boundedInt(env.CPTR_MCP_TRAFFIC_PLUGIN_MAX_QUEUE, 1000, 10, 10_000);
     this.onDeliveryFailure = options.onDeliveryFailure;
   }

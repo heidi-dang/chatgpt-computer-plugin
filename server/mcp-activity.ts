@@ -136,7 +136,7 @@ export class McpActivityEmitter {
   constructor(options: McpActivityEmitterOptions) {
     const env = options.env ?? process.env;
     const envBatchSize = boundedInt(env.CPTR_MCP_ACTIVITY_PLUGIN_BATCH_SIZE, 20, 1, 100);
-    const envFlushMs = boundedInt(env.CPTR_MCP_ACTIVITY_PLUGIN_FLUSH_MS, 250, 25, 10_000);
+    const envFlushMs = boundedInt(env.CPTR_MCP_ACTIVITY_PLUGIN_FLUSH_MS, 1000, 25, 10_000);
     const envMaxQueue = boundedInt(env.CPTR_MCP_ACTIVITY_PLUGIN_MAX_QUEUE, 500, 10, 5_000);
     this.deliver = options.deliver;
     this.batchSize = boundedOverride(options.batchSize, envBatchSize, 1, 100);

@@ -171,7 +171,9 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   const directInputSchema = tools.get("cptr_execute_task")?.inputSchema as
     | { properties?: Record<string, { maximum?: number }> }
     | undefined;
-  assert.equal(directInputSchema?.properties?.wait_seconds?.maximum, 60);
+  assert.equal(directInputSchema?.properties?.wait_seconds?.maximum, 15);
+  assert.match(tools.get("cptr_execute_task")?.description ?? "", /5 seconds by default, 15 seconds maximum/);
+  assert.match(tools.get("cptr_execute_task")?.description ?? "", /Prefer cptr_start_task/);
   const commandInputSchema = tools.get("cptr_code_run_command")?.inputSchema as
     | { properties?: Record<string, { maximum?: number }> }
     | undefined;

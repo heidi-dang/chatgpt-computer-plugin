@@ -150,7 +150,7 @@ export const executeTaskSchema = {
   workspace_id: z.string().min(1).max(200),
   prompt: z.string().min(1).max(100_000),
   model_id: z.string().min(1).max(500).optional(),
-  wait_seconds: z.number().int().min(1).max(60).default(30),
+  wait_seconds: z.number().int().min(1).max(15).default(5),
   idempotency_key: z.string().min(1).max(200).optional(),
   execution_policy: taskExecutionPolicySchema,
   workbench_session_id: workbenchSessionId.optional(),

@@ -281,6 +281,49 @@ function rawToolArguments(body: unknown): unknown | undefined {
   return params.arguments;
 }
 
+type McpOperationMetadata = {
+  toolName: string | null;
+  operationClass: "immediate" | "bounded_wait" | "long_operation";
+  requestedWaitMs: number | null;
+  healthEligible: boolean;
+};
+
+function mcpOperationMetadata(body: unknown): McpOperationMetadata {
+  const record = jsonRecord(body);
+  const params = jsonRecord(record?.params);
+  const toolName = record?.method === "tools/call" && typeof params?.name === "string"
+    ? params.name.slice(0, 256)
+    : null;
+  const args = jsonRecord(params?.arguments) ?? {};
+  let requestedWaitMs = 0;
+  let intentionalWait = false;
+
+  if (toolName === "cptr_execute_task") {
+    requestedWaitMs = Math.max(0, Number(args.wait_seconds ?? 5) * 1000);
+    intentionalWait = true;
+  } else if (["cptr_code_run_command", "cptr_code_get_command", "cptr_workspace_run_test_target", "cptr_ssh_run_command", "cptr_ssh_get_command"].includes(toolName ?? "")) {
+    requestedWaitMs = Math.max(0, Number(args.wait_seconds ?? 0) * 1000);
+    intentionalWait = requestedWaitMs > 0;
+  } else if (toolName === "cptr_user_chrome" && args.action === "command") {
+    requestedWaitMs = Math.max(0, Number(args.wait_seconds ?? 15) * 1000);
+    intentionalWait = true;
+  } else if (toolName === "cptr_lsp_request") {
+    requestedWaitMs = Math.max(0, Number(args.timeout_seconds ?? 15) * 1000);
+    intentionalWait = true;
+  } else if (toolName === "cptr_factory_stop") {
+    requestedWaitMs = Math.max(0, Number(args.timeout_ms ?? 0));
+    intentionalWait = true;
+  }
+
+  if (!Number.isFinite(requestedWaitMs)) requestedWaitMs = 0;
+  return {
+    toolName,
+    operationClass: intentionalWait ? (requestedWaitMs >= 30_000 ? "long_operation" : "bounded_wait") : "immediate",
+    requestedWaitMs: intentionalWait ? Math.round(requestedWaitMs) : null,
+    healthEligible: !intentionalWait,
+  };
+}
+
 function emitClientTransportFailure(
   req: IncomingMessage,
   input: {
@@ -393,17 +436,19 @@ async function handleWithTraffic(
     requestBytes: number | null;
     sessionId: string | null;
     client: TrafficClient;
+    requestStartedAt: number;
   },
   run: (context: McpRequestContextValue) => Promise<void>,
 ): Promise<void> {
   const adapterSetupStartedAt = Date.now();
+  const operation = mcpOperationMetadata(input.body);
   const context: McpRequestContextValue = {
     requestId: randomUUID(),
     correlationId: randomUUID(),
     sessionId: input.sessionId,
     client: input.client,
     method: trafficMethod(req, input.body),
-    startedAt: adapterSetupStartedAt,
+    startedAt: input.requestStartedAt,
     requestBytes: input.requestBytes,
     rawToolArguments: rawToolArguments(input.body),
     outcome: { failed: false, errorCode: null },
@@ -500,6 +545,10 @@ async function handleWithTraffic(
       metric_type: "observed_request_time",
       duration_ms: Math.max(0, Date.now() - context.startedAt),
       status: failed ? "error" : "ok",
+      tool_name: operation.toolName,
+      operation_class: operation.operationClass,
+      requested_wait_ms: operation.requestedWaitMs,
+      health_eligible: operation.healthEligible,
     });
     responseObservation.restore();
   }
@@ -568,6 +617,7 @@ async function handleStatefulInitialize(
   body: unknown,
   requestBytes: number,
   identity: string,
+  requestStartedAt: number,
 ): Promise<void> {
   await pruneMcpSessions();
   await evictMcpSessionIfFull();
@@ -612,7 +662,7 @@ async function handleStatefulInitialize(
     await handleWithTraffic(
       req,
       res,
-      { body, requestBytes, sessionId: null, client: trafficClient },
+      { body, requestBytes, sessionId: null, client: trafficClient, requestStartedAt },
       async () => {
         await transport.handleRequest(req, res, body);
       },
@@ -632,6 +682,7 @@ async function handleStatelessCompatibilityRequest(
   res: ServerResponse,
   body: unknown,
   requestBytes: number,
+  requestStartedAt: number,
 ): Promise<void> {
   const trafficClient = trafficClientFromRequest(req, body);
   const server = createSessionServer();
@@ -649,7 +700,7 @@ async function handleStatelessCompatibilityRequest(
     await handleWithTraffic(
       req,
       res,
-      { body, requestBytes, sessionId: null, client: trafficClient },
+      { body, requestBytes, sessionId: null, client: trafficClient, requestStartedAt },
       async () => {
         await transport.handleRequest(req, res, body);
       },
@@ -666,6 +717,7 @@ let hotReloadClients = 0;
 const maxHotReloadClients = 32;
 
 const httpServer = createServer(async (req, res) => {
+  const requestStartedAt = Date.now();
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? `${host}:${port}`}`);
   const requestOrigin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
   const workbenchBrowserRequest =
@@ -934,6 +986,7 @@ const httpServer = createServer(async (req, res) => {
           requestBytes: req.method === "POST" ? parsed.bytes : null,
           sessionId: sessionHeader,
           client: session.trafficClient,
+          requestStartedAt,
         },
         async () => {
           await session.transport.handleRequest(req, res, parsed.value);
@@ -946,14 +999,14 @@ const httpServer = createServer(async (req, res) => {
     if (req.method === "POST") {
       const parsed = await readJsonBody(req);
       if (isInitializeRequest(parsed.value)) {
-        await handleStatefulInitialize(req, res, parsed.value, parsed.bytes, identity);
+        await handleStatefulInitialize(req, res, parsed.value, parsed.bytes, identity, requestStartedAt);
         return;
       }
       // Migration compatibility for a ChatGPT connection created before the
       // current contract. After connector metadata Refresh, initialize-capable
       // clients receive an Mcp-Session-Id and all prompt activity stays scoped.
       res.setHeader("X-CPTR-Contract-Refresh", `required-v${CPTR_APP_VERSION}`);
-      await handleStatelessCompatibilityRequest(req, res, parsed.value, parsed.bytes);
+      await handleStatelessCompatibilityRequest(req, res, parsed.value, parsed.bytes, requestStartedAt);
       return;
     }
 
