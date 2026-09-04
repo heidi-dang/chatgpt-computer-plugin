@@ -3,8 +3,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import http from "node:http";
 import net from "node:net";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { getEncoding } from "js-tiktoken";
 
 const host = "127.0.0.1";

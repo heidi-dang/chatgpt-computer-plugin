@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { createMcpHandler, isInitializeRequest, isLegacyRequest } from "@modelcontextprotocol/server";
+import { NodeStreamableHTTPServerTransport, toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
 import {
   authenticateMcpRequest,
   createBearerChallenge,
@@ -484,6 +484,7 @@ async function handleWithTraffic(
 ): Promise<void> {
   const adapterSetupStartedAt = Date.now();
   const operation = mcpOperationMetadata(input.body);
+  /* @mcp-codemod-error This object looks like a v1 handler-context mock (requestId, sessionId). v2 nests the context — reshape it (requestId → mcpReq.id; sessionId stays top-level), e.g. { sendRequest: fn } → { mcpReq: { send: fn } }. Passed as-is to a migrated handler that reads ctx.mcpReq.*, the v1 shape throws "Cannot read properties of undefined". */
   const context: McpRequestContextValue = {
     requestId: randomUUID(),
     correlationId: randomUUID(),
@@ -495,6 +496,7 @@ async function handleWithTraffic(
     rawToolArguments: rawToolArguments(input.body),
     outcome: { failed: false, errorCode: null },
   };
+  /* @mcp-codemod-error This object looks like a v1 handler-context mock (requestId, sessionId). v2 nests the context — reshape it (requestId → mcpReq.id; sessionId stays top-level), e.g. { sendRequest: fn } → { mcpReq: { send: fn } }. Passed as-is to a migrated handler that reads ctx.mcpReq.*, the v1 shape throws "Cannot read properties of undefined". */
   mcpTraffic.requestStarted({
     requestId: context.requestId,
     correlationId: context.correlationId,
@@ -599,7 +601,7 @@ async function handleWithTraffic(
 }
 
 type McpSessionRecord = {
-  transport: StreamableHTTPServerTransport;
+  transport: NodeStreamableHTTPServerTransport;
   server: ReturnType<typeof createMcpServer>;
   authIdentity: string;
   trafficClient: TrafficClient;
@@ -661,6 +663,20 @@ const statelessServerPool = new StatelessServerPool(
   Number.isFinite(configuredStatelessPoolSize) ? configuredStatelessPoolSize : 2,
 );
 
+// createMcpHandler is the explicit MCP 2026-07-28 serving entry. Legacy 2025
+// sessionful traffic remains on the established transport path below.
+const modernMcpHandler = createMcpHandler(() => createSessionServer(), {
+  legacy: "reject",
+  onerror: (error) => {
+    console.error("MCP 2026 handler failed", error.message);
+  },
+});
+const modernMcpNodeHandler = toNodeHandler(modernMcpHandler, {
+  onerror: (error) => {
+    console.error("MCP 2026 Node adapter failed", error.message);
+  },
+});
+
 async function handleStatefulInitialize(
   req: IncomingMessage,
   res: ServerResponse,
@@ -674,9 +690,9 @@ async function handleStatefulInitialize(
   const trafficClient = trafficClientFromRequest(req, body);
   const setupStartedAt = Date.now();
   let initializedSessionId: string | null = null;
-  let transport!: StreamableHTTPServerTransport;
+  let transport!: NodeStreamableHTTPServerTransport;
   const server = createSessionServer();
-  transport = new StreamableHTTPServerTransport({
+  transport = new NodeStreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     enableJsonResponse: true,
     onsessioninitialized: (sessionId) => {
@@ -749,7 +765,7 @@ async function handleStatelessCompatibilityRequest(
   const setupStartedAt = Date.now();
   const pooledServer = statelessServerPool.take();
   const server = pooledServer.value;
-  const transport = new StreamableHTTPServerTransport({
+  const transport = new NodeStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
   });
@@ -898,7 +914,7 @@ const httpServer = createServer(async (req, res) => {
   if (url.pathname === mcpPath && req.method === "OPTIONS") {
     res.writeHead(204, {
       ...originHeaders,
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept, Mcp-Session-Id, MCP-Protocol-Version",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept, Mcp-Session-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name, Mcp-Param",
       "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
     }).end();
     return;
@@ -1090,10 +1106,32 @@ const httpServer = createServer(async (req, res) => {
   }
   const identity = authIdentity(auth);
 
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Mcp-Session-Id, MCP-Protocol-Version");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Mcp-Session-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name, Mcp-Param");
   res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
 
   try {
+    const parsedPostBody = req.method === "POST" ? await readJsonBody(req) : undefined;
+    const classificationRequest = await toWebRequest(req, parsedPostBody?.value);
+    const legacyRequest = await isLegacyRequest(classificationRequest, parsedPostBody?.value);
+    if (!legacyRequest) {
+      const trafficClient = trafficClientFromRequest(req, parsedPostBody?.value);
+      await handleWithTraffic(
+        req,
+        res,
+        {
+          body: parsedPostBody?.value,
+          requestBytes: parsedPostBody?.bytes ?? null,
+          sessionId: null,
+          client: trafficClient,
+          requestStartedAt,
+        },
+        async () => {
+          await modernMcpNodeHandler(req, res, parsedPostBody?.value);
+        },
+      );
+      return;
+    }
+
     const sessionHeader = Array.isArray(req.headers["mcp-session-id"])
       ? req.headers["mcp-session-id"][0]
       : req.headers["mcp-session-id"];
@@ -1122,7 +1160,7 @@ const httpServer = createServer(async (req, res) => {
       }
       session.lastSeenAt = Date.now();
       const parsed = req.method === "POST"
-        ? await readJsonBody(req)
+        ? parsedPostBody ?? { value: undefined, bytes: 0 }
         : { value: undefined, bytes: 0 };
       await handleWithTraffic(
         req,
@@ -1143,7 +1181,7 @@ const httpServer = createServer(async (req, res) => {
     }
 
     if (req.method === "POST") {
-      const parsed = await readJsonBody(req);
+      const parsed = parsedPostBody ?? { value: undefined, bytes: 0 };
       if (isInitializeRequest(parsed.value)) {
         await handleStatefulInitialize(req, res, parsed.value, parsed.bytes, identity, requestStartedAt);
         return;
@@ -1204,6 +1242,7 @@ async function shutdown(signal: string) {
   console.log(`Shutting down ChatGPT Computer MCP server (${signal})`);
   clearInterval(sessionPruner);
   await Promise.all([...mcpSessions.keys()].map((sessionId) => closeMcpSession(sessionId)));
+  await modernMcpHandler.close().catch(() => undefined);
   nativeOAuthServer?.close();
   const telemetryDeadline = new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, 1_000);

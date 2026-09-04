@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { ComputerApiError, ComputerClient } from "./client/computer-client.js";
 import { telemetryInputForTool } from "./browser-telemetry.js";
 import { McpActivityEmitter } from "./mcp-activity.js";
@@ -900,6 +900,7 @@ export function createMcpServer(
           }
         };
         options.traffic?.toolStarted(name, trafficContext);
+        /* @mcp-codemod-error This object looks like a v1 handler-context mock (sessionId, requestId). v2 nests the context — reshape it (requestId → mcpReq.id; sessionId stays top-level), e.g. { sendRequest: fn } → { mcpReq: { send: fn } }. Passed as-is to a migrated handler that reads ctx.mcpReq.*, the v1 shape throws "Cannot read properties of undefined". */
         options.activityTelemetry?.started({
           client: activityClient,
           sessionId: trafficContext?.sessionId ?? null,
@@ -959,6 +960,7 @@ export function createMcpServer(
               trafficContext.outcome.errorCode = "tool_error";
             }
             options.traffic?.toolFailed(name, { code: "tool_error", kind: "tool_error" }, trafficContext, activityDurationMs);
+            /* @mcp-codemod-error This object looks like a v1 handler-context mock (sessionId, requestId). v2 nests the context — reshape it (requestId → mcpReq.id; sessionId stays top-level), e.g. { sendRequest: fn } → { mcpReq: { send: fn } }. Passed as-is to a migrated handler that reads ctx.mcpReq.*, the v1 shape throws "Cannot read properties of undefined". */
             options.activityTelemetry?.failed({
               client: activityClient,
               sessionId: trafficContext?.sessionId ?? null,
@@ -1007,6 +1009,7 @@ export function createMcpServer(
             return value as never;
           }
           options.traffic?.toolFinished(name, trafficContext, activityDurationMs);
+          /* @mcp-codemod-error This object looks like a v1 handler-context mock (sessionId, requestId). v2 nests the context — reshape it (requestId → mcpReq.id; sessionId stays top-level), e.g. { sendRequest: fn } → { mcpReq: { send: fn } }. Passed as-is to a migrated handler that reads ctx.mcpReq.*, the v1 shape throws "Cannot read properties of undefined". */
           options.activityTelemetry?.complete({
             client: activityClient,
             sessionId: trafficContext?.sessionId ?? null,
@@ -1065,6 +1068,7 @@ export function createMcpServer(
                 retriable: false,
               };
           const activityErrorJson = terminalJson(envelope);
+          /* @mcp-codemod-error This object looks like a v1 handler-context mock (sessionId, requestId). v2 nests the context — reshape it (requestId → mcpReq.id; sessionId stays top-level), e.g. { sendRequest: fn } → { mcpReq: { send: fn } }. Passed as-is to a migrated handler that reads ctx.mcpReq.*, the v1 shape throws "Cannot read properties of undefined". */
           options.activityTelemetry?.failed({
             client: activityClient,
             sessionId: trafficContext?.sessionId ?? null,
@@ -1161,6 +1165,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_open_live_workbench",
     {
@@ -1168,15 +1173,15 @@ export function createMcpServer(
       description:
         "Call this first whenever the user explicitly invokes CPTR. Set session_name to the exact current ChatGPT conversation title when the host exposes it; otherwise use a concise prompt-derived Workbench session label and never claim it is the host title. When continuing the same task in a later ChatGPT turn, pass resume_session_id so the existing Live Terminal prompt SSE is renewed and reused rather than replaced. This is the sole CPTR UI-producing tool: it opens exactly one Live Terminal before any target exists. All later task, monitor, command, status, and render/bind calls are data-only and update this existing terminal instead of creating another widget.",
       inputSchema: openWorkbenchSessionSchema,
-      outputSchema: {
-        session_id: z.string(),
-        name: z.string(),
-        status: z.string(),
-        workspace_id: z.string().nullable(),
-        title: z.string(),
-        initial_summary: z.string(),
-        delegation_allowed: z.boolean(),
-      },
+      outputSchema: z.object({
+              session_id: z.string(),
+              name: z.string(),
+              status: z.string(),
+              workspace_id: z.string().nullable(),
+              title: z.string(),
+              initial_summary: z.string(),
+              delegation_allowed: z.boolean(),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: openWorkbenchToolMetadata,
     },
@@ -1228,59 +1233,65 @@ export function createMcpServer(
   server.registerTool("cptr_list_models", {
     title: "List CPTR models",
     description: "Discover configured model IDs before starting a task; use the returned default when no model is specified.",
-    inputSchema: {}, outputSchema: { models: z.array(z.object({ model_id: z.string(), name: z.string(), default: z.boolean() })) },
+    inputSchema: z.object({}), outputSchema: z.object({ models: z.array(z.object({ model_id: z.string(), name: z.string(), default: z.boolean() })) }),
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, _meta: oauthToolMetadata,
   }, async () => activityResult(await client.listModels(), "cptr_list_models"));
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool("cptr_list_tasks", {
     title: "List CPTR tasks", description: "Recover or rebind recent durable delegated tasks by workspace and status. Returns the newest tasks first, bounded by limit.",
     inputSchema: listTasksSchema,
-    outputSchema: { tasks: z.array(taskListItemOutputSchema) },
+    outputSchema: z.object({ tasks: z.array(taskListItemOutputSchema) }),
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, _meta: oauthToolMetadata,
   }, async (input) => activityResult(await client.listTasks(input), "cptr_list_tasks"));
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool("cptr_list_autonomous", {
     title: "List CPTR monitors", description: "Recover active or recent delegated autonomous monitors by workspace/status, including per-scope verification state.",
     inputSchema: listAutonomousSchema,
-    outputSchema: { monitors: z.array(z.object(autonomousSummaryOutputSchema)) },
+    outputSchema: z.object({ monitors: z.array(z.object(autonomousSummaryOutputSchema)) }),
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, _meta: oauthToolMetadata,
   }, async (input) => activityResult(await client.listAutonomous(input), "cptr_list_autonomous"));
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool("cptr_get_task_events", {
     title: "Get task events", description: "Read the same paginated, redacted durable event stream used by the live gateway for delegated task recovery.",
     inputSchema: taskEventsSchema,
-    outputSchema: {
-      task_id: z.string(),
-      after_sequence: z.number().int().nonnegative(),
-      last_sequence: z.number().int().nonnegative(),
-      max_events: z.number().int().positive(),
-      truncated: z.boolean(),
-      events: z.array(liveEventOutputSchema),
-    },
+    outputSchema: z.object({
+          task_id: z.string(),
+          after_sequence: z.number().int().nonnegative(),
+          last_sequence: z.number().int().nonnegative(),
+          max_events: z.number().int().positive(),
+          truncated: z.boolean(),
+          events: z.array(liveEventOutputSchema),
+        }),
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, _meta: oauthToolMetadata,
   }, async (input) => activityResult(await client.getTaskEvents(input), "cptr_get_task_events"));
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool("cptr_code_read_many_files", {
     title: "Read multiple CPTR files", description: "Read up to ten workspace files in one direct ChatGPT request with a shared character budget; each file includes its full-content SHA-256 for safe follow-up writes.",
     inputSchema: readManyFilesSchema,
-    outputSchema: {
-      workspace_id: z.string(),
-      files: z.array(z.object({
-        path: z.string(),
-        content: z.string(),
-        content_sha256: z.string().regex(/^[a-f0-9]{64}$/),
-        truncated: z.boolean(),
-        start_line: z.number().int().nonnegative(),
-        end_line: z.number().int().nonnegative(),
-        total_lines: z.number().int().nonnegative(),
-      })),
-      total_chars: z.number().int().nonnegative(),
-      truncated: z.boolean(),
-    },
+    outputSchema: z.object({
+          workspace_id: z.string(),
+          files: z.array(z.object({
+            path: z.string(),
+            content: z.string(),
+            content_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+            truncated: z.boolean(),
+            start_line: z.number().int().nonnegative(),
+            end_line: z.number().int().nonnegative(),
+            total_lines: z.number().int().nonnegative(),
+          })),
+          total_chars: z.number().int().nonnegative(),
+          truncated: z.boolean(),
+        }),
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, _meta: oauthToolMetadata,
   }, async (input) => activityResult(await client.readManyFiles(input), "cptr_code_read_many_files"));
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool("cptr_code_apply_edits", {
     title: "Apply atomic CPTR edits", description: "Apply up to twenty unambiguous edits atomically with optional stale-file protection.",
-    inputSchema: applyEditsSchema, outputSchema: { workspace_id: z.string(), path: z.string(), sha256: z.string(), diff: z.string() },
+    inputSchema: applyEditsSchema, outputSchema: z.object({ workspace_id: z.string(), path: z.string(), sha256: z.string(), diff: z.string() }),
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false }, _meta: oauthToolMetadata,
   }, async (input) => activityResult(await client.applyEdits(input), "cptr_code_apply_edits"));
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_plugin_update",
     {
@@ -1288,27 +1299,27 @@ export function createMcpServer(
       description:
         "Check the currently deployed CPTR Computer plugin release, read release notes, or verify the live MCP contract after the user refreshes the app in ChatGPT. This action cannot bypass ChatGPT's native app-action review or force the host to refresh its frozen tool snapshot.",
       inputSchema: pluginUpdateSchema,
-      outputSchema: {
-        action: z.string(),
-        product: z.string(),
-        version: z.string(),
-        schema_revision: z.string(),
-        contract_version: z.string(),
-        tool_count: z.number().int(),
-        release_sha: z.string().nullable(),
-        released_at: z.string(),
-        summary: z.string(),
-        changes: z.array(z.string()),
-        refresh_required: z.boolean(),
-        refresh_reason: z.string(),
-        refresh_path: z.array(z.string()),
-        verification: z.object({
-          tool: z.string(),
-          arguments: z.record(z.string(), z.unknown()),
-        }),
-        contract_matches: z.boolean().optional(),
-        tool_count_matches: z.boolean().optional(),
-      },
+      outputSchema: z.object({
+              action: z.string(),
+              product: z.string(),
+              version: z.string(),
+              schema_revision: z.string(),
+              contract_version: z.string(),
+              tool_count: z.number().int(),
+              release_sha: z.string().nullable(),
+              released_at: z.string(),
+              summary: z.string(),
+              changes: z.array(z.string()),
+              refresh_required: z.boolean(),
+              refresh_reason: z.string(),
+              refresh_path: z.array(z.string()),
+              verification: z.object({
+                tool: z.string(),
+                arguments: z.record(z.string(), z.unknown()),
+              }),
+              contract_matches: z.boolean().optional(),
+              tool_count_matches: z.boolean().optional(),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
@@ -1334,6 +1345,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_benchmark_start",
     {
@@ -1355,6 +1367,7 @@ export function createMcpServer(
     ),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_benchmark_submit",
     {
@@ -1373,6 +1386,7 @@ export function createMcpServer(
     ),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_benchmark_get",
     {
@@ -1390,6 +1404,7 @@ export function createMcpServer(
     ),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_benchmark_leaderboard",
     {
@@ -1407,19 +1422,21 @@ export function createMcpServer(
     ),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_list_workbench_sessions",
     {
       title: "List CPTR Workbench Sessions",
       description: "List active or archived Workbench Sessions owned by the current CPTR user. Sessions are durable Plugin activity records, not live access tickets.",
       inputSchema: workbenchSessionListSchema,
-      outputSchema: { sessions: z.array(z.record(z.string(), z.unknown())) },
+      outputSchema: z.object({ sessions: z.array(z.record(z.string(), z.unknown())) }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.listWorkbenchSessions(input), "cptr_list_workbench_sessions"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_get_workbench_session",
     {
@@ -1433,13 +1450,14 @@ export function createMcpServer(
     async ({ workbench_session_id }) => activityResult(await client.getWorkbenchSession(workbench_session_id), "cptr_get_workbench_session"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_get_workbench_session_events",
     {
       title: "Get CPTR Workbench Session activity",
       description: "Retrieve bounded, redacted, ordered activity for one current-user Workbench Session.",
       inputSchema: workbenchSessionEventsSchema,
-      outputSchema: { session_id: z.string(), events: z.array(z.record(z.string(), z.unknown())), last_sequence: z.number().int() },
+      outputSchema: z.object({ session_id: z.string(), events: z.array(z.record(z.string(), z.unknown())), last_sequence: z.number().int() }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -1450,6 +1468,7 @@ export function createMcpServer(
     }), "cptr_get_workbench_session_events"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_bind_live_workbench_session",
     {
@@ -1479,6 +1498,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_rename_workbench_session",
     {
@@ -1492,6 +1512,7 @@ export function createMcpServer(
     async (input) => activityResult(await client.renameWorkbenchSession({ session_id: input.workbench_session_id, name: input.name }), "cptr_rename_workbench_session"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_archive_workbench_session",
     {
@@ -1505,46 +1526,49 @@ export function createMcpServer(
     async ({ workbench_session_id }) => activityResult(await client.archiveWorkbenchSession(workbench_session_id), "cptr_archive_workbench_session"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_request_delete_workbench_session",
     {
       title: "Request deletion of a CPTR Workbench Session",
       description: "Begin deletion of an owned Workbench Session only after the user explicitly asks. This returns a short-lived confirmation ID and deletes no data by itself.",
       inputSchema: workbenchSessionDeleteRequestSchema,
-      outputSchema: { session_id: z.string(), confirmation_id: z.string(), expires_at: z.number(), event_count: z.number(), impact: z.string() },
+      outputSchema: z.object({ session_id: z.string(), confirmation_id: z.string(), expires_at: z.number(), event_count: z.number(), impact: z.string() }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async ({ workbench_session_id }) => activityResult(await client.requestWorkbenchSessionDelete(workbench_session_id), "cptr_request_delete_workbench_session"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_confirm_delete_workbench_session",
     {
       title: "Confirm deletion of a CPTR Workbench Session",
       description: "Delete the session UI record and its redacted Plugin activity only after the user has clearly confirmed the deletion impact. It never deletes tasks, workspaces, files, or control audit records.",
       inputSchema: workbenchSessionDeleteConfirmSchema,
-      outputSchema: { session_id: z.string(), status: z.string(), deleted_at: z.number() },
+      outputSchema: z.object({ session_id: z.string(), status: z.string(), deleted_at: z.number() }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async ({ confirmation_id }) => activityResult(await client.confirmWorkbenchSessionDelete(confirmation_id), "cptr_confirm_delete_workbench_session"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_list_workspaces",
     {
       title: "List CPTR workspaces",
       description: "Use this when the user wants to discover the CPTR workspaces they can control.",
       inputSchema: listWorkspacesSchema,
-      outputSchema: {
-        workspaces: z.array(z.object({
-          workspace_id: z.string(),
-          name: z.string(),
-          available: z.boolean(),
-          last_used_at: z.number().int(),
-        })),
-      },
+      outputSchema: z.object({
+              workspaces: z.array(z.object({
+                workspace_id: z.string(),
+                name: z.string(),
+                available: z.boolean(),
+                last_used_at: z.number().int(),
+              })),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
@@ -1552,26 +1576,28 @@ export function createMcpServer(
       initialWorkbenchResult(await client.listWorkspaces(include_unavailable), "cptr_list_workspaces"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_get_workspace",
     {
       title: "Get a CPTR workspace",
       description: "Use this when the user wants details about one CPTR workspace by workspace ID.",
       inputSchema: workspaceIdSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        name: z.string(),
-        available: z.boolean(),
-        is_git_repo: z.boolean(),
-        dirty_file_count: z.number().int(),
-        last_used_at: z.number().int(),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              name: z.string(),
+              available: z.boolean(),
+              is_git_repo: z.boolean(),
+              dirty_file_count: z.number().int(),
+              last_used_at: z.number().int(),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async ({ workspace_id }) => activityResult(await client.getWorkspace(workspace_id), "cptr_get_workspace"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_factory_start",
     {
@@ -1585,6 +1611,7 @@ export function createMcpServer(
     async (input) => activityResult(await client.startFactoryRun(input), "cptr_factory_start"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_factory_status",
     {
@@ -1598,45 +1625,49 @@ export function createMcpServer(
     async ({ run_id }) => activityResult(await client.getFactoryRun(run_id), "cptr_factory_status"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_factory_events",
     {
       title: "Get Dark Factory events",
       description: "Read one bounded cursor-paginated page of redacted durable Dark Factory events. The backend remains the authoritative event and transition source.",
       inputSchema: factoryPageSchema,
-      outputSchema: { events: z.array(z.record(z.string(), z.unknown())), ...factoryPageMetadataOutputSchema },
+      outputSchema: z.object({ events: z.array(z.record(z.string(), z.unknown())), ...factoryPageMetadataOutputSchema }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.getFactoryEvents(input), "cptr_factory_events"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_factory_evidence",
     {
       title: "Get Dark Factory evidence",
       description: "Read one bounded cursor-paginated page of redacted machine/user evidence for an owner-scoped Dark Factory run.",
       inputSchema: factoryPageSchema,
-      outputSchema: { evidence: z.array(z.record(z.string(), z.unknown())), ...factoryPageMetadataOutputSchema },
+      outputSchema: z.object({ evidence: z.array(z.record(z.string(), z.unknown())), ...factoryPageMetadataOutputSchema }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.getFactoryEvidence(input), "cptr_factory_evidence"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_factory_message",
     {
       title: "Message a Dark Factory run",
       description: "Append one bounded authenticated user message to a durable Dark Factory run. Messages are advisory input and cannot directly set state, gate, trust, or Victory values.",
       inputSchema: factoryMessageSchema,
-      outputSchema: { event: z.record(z.string(), z.unknown()) },
+      outputSchema: z.object({ event: z.record(z.string(), z.unknown()) }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.messageFactoryRun(input), "cptr_factory_message"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_factory_pause",
     {
@@ -1650,6 +1681,7 @@ export function createMcpServer(
     async (input) => activityResult(await client.pauseFactoryRun(input), "cptr_factory_pause"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_factory_resume",
     {
@@ -1663,22 +1695,24 @@ export function createMcpServer(
     async (input) => activityResult(await client.resumeFactoryRun(input), "cptr_factory_resume"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_factory_approve",
     {
       title: "Decide a pending Dark Factory approval",
       description: "Approve or deny the exact backend-issued operation envelope for a Dark Factory run. Approval may release a revision-bound external/destructive operation; the backend validates the envelope and policy.",
       inputSchema: factoryApprovalSchema,
-      outputSchema: {
-        approval: z.record(z.string(), z.unknown()),
-        run: z.record(z.string(), z.unknown()),
-      },
+      outputSchema: z.object({
+              approval: z.record(z.string(), z.unknown()),
+              run: z.record(z.string(), z.unknown()),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.approveFactoryRun(input), "cptr_factory_approve"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_factory_stop",
     {
@@ -1692,6 +1726,7 @@ export function createMcpServer(
     async (input) => activityResult(await client.stopFactoryRun(input), "cptr_factory_stop"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_workspace_detect_project",
     {
@@ -1705,6 +1740,7 @@ export function createMcpServer(
     async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "project" }), "cptr_workspace_detect_project"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_workspace_tree",
     {
@@ -1718,6 +1754,7 @@ export function createMcpServer(
     async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "tree" }), "cptr_workspace_tree"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_workspace_file_metadata",
     {
@@ -1731,6 +1768,7 @@ export function createMcpServer(
     async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "metadata" }), "cptr_workspace_file_metadata"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_workspace_read_many",
     {
@@ -1744,6 +1782,7 @@ export function createMcpServer(
     async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "read_many" }), "cptr_workspace_read_many"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_workspace_search_symbols",
     {
@@ -1757,6 +1796,7 @@ export function createMcpServer(
     async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "symbols" }), "cptr_workspace_search_symbols"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_workspace_discover_tests",
     {
@@ -1770,6 +1810,7 @@ export function createMcpServer(
     async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "tests" }), "cptr_workspace_discover_tests"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_workspace_dependency_summary",
     {
@@ -1783,6 +1824,7 @@ export function createMcpServer(
     async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "dependencies" }), "cptr_workspace_dependency_summary"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_workspace_package_scripts",
     {
@@ -1796,6 +1838,7 @@ export function createMcpServer(
     async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "scripts" }), "cptr_workspace_package_scripts"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_workspace_release_readiness",
     {
@@ -1809,6 +1852,7 @@ export function createMcpServer(
     async (input) => activityResult(await client.inspectWorkspace({ ...input, kind: "release" }), "cptr_workspace_release_readiness"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_direct_worker_create",
     {
@@ -1823,19 +1867,21 @@ export function createMcpServer(
     async (input) => activityResult(await client.createDirectWorker(input), "cptr_direct_worker_create"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_direct_worker_list",
     {
       title: "List Direct Coding Workers",
       description: "List model-free isolated direct-coding workers for one workspace so ChatGPT can coordinate parallel execution lanes.",
       inputSchema: directWorkerListSchema,
-      outputSchema: { workspace_id: z.string(), workers: z.array(z.object(directWorkerOutputSchema)) },
+      outputSchema: z.object({ workspace_id: z.string(), workers: z.array(z.object(directWorkerOutputSchema)) }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
     async ({ workspace_id }) => activityResult(await client.listDirectWorkers(workspace_id), "cptr_direct_worker_list"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_direct_worker_get",
     {
@@ -1849,26 +1895,28 @@ export function createMcpServer(
     async (input) => activityResult(await client.getDirectWorker(input), "cptr_direct_worker_get"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_direct_workers_overview",
     {
       title: "Summarize Direct Coding Workers",
       description: "Return one compact coordination snapshot for all isolated Direct Coding Workers in the selected workspace.",
       inputSchema: directWorkersOverviewSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        workers: z.array(z.object(directWorkerOutputSchema)),
-        total: z.number().int().nonnegative(),
-        active: z.number().int().nonnegative(),
-        ready: z.number().int().nonnegative(),
-        integrated: z.number().int().nonnegative(),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              workers: z.array(z.object(directWorkerOutputSchema)),
+              total: z.number().int().nonnegative(),
+              active: z.number().int().nonnegative(),
+              ready: z.number().int().nonnegative(),
+              integrated: z.number().int().nonnegative(),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
     async ({ workspace_id }) => activityResult(await client.directWorkersOverview(workspace_id), "cptr_direct_workers_overview"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_direct_workers_integrate",
     {
@@ -1876,18 +1924,19 @@ export function createMcpServer(
       description:
         "Mechanically apply non-overlapping worker changes back to the source repository without committing them. CPTR refuses active commands, base-revision drift, and overlapping source changes so ChatGPT can review and resolve conflicts itself.",
       inputSchema: directWorkersIntegrateSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        integrated: z.array(z.string()),
-        conflicts: z.record(z.string(), z.array(z.string())),
-        applied_paths: z.record(z.string(), z.array(z.string())),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              integrated: z.array(z.string()),
+              conflicts: z.record(z.string(), z.array(z.string())),
+              applied_paths: z.record(z.string(), z.array(z.string())),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
     async (input) => activityResult(await client.integrateDirectWorkers(input), "cptr_direct_workers_integrate"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_direct_worker_close",
     {
@@ -1895,33 +1944,34 @@ export function createMcpServer(
       description:
         "Remove an isolated worker worktree after its changes are integrated. Unintegrated changes are preserved by default and can be discarded only when discard_changes=true is explicitly supplied.",
       inputSchema: directWorkerCloseSchema,
-      outputSchema: {
-        worker_id: z.string(),
-        workspace_id: z.string(),
-        status: z.string(),
-        discarded: z.boolean(),
-      },
+      outputSchema: z.object({
+              worker_id: z.string(),
+              workspace_id: z.string(),
+              status: z.string(),
+              discarded: z.boolean(),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
     async (input) => activityResult(await client.closeDirectWorker(input), "cptr_direct_worker_close"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_workspace_run_test_target",
     {
       title: "Run a fixed local CPTR test profile",
       description: "Use this only after the user explicitly asks to run local validation in the selected workspace. Choose one server-owned test profile; arbitrary shell syntax, installs, and network access are not accepted. If workbench_session_id is supplied, CPTR streams actual bounded stdout/stderr to that durable session's terminal.",
       inputSchema: workspaceTestTargetSchema,
-      outputSchema: {
-        target: z.string(),
-        workspace_id: z.string(),
-        command_id: z.string(),
-        status: z.string(),
-        exit_code: z.number().int().nullable(),
-        output: z.string(),
-        next_offset: z.number().int(),
-      },
+      outputSchema: z.object({
+              target: z.string(),
+              workspace_id: z.string(),
+              command_id: z.string(),
+              status: z.string(),
+              exit_code: z.number().int().nullable(),
+              output: z.string(),
+              next_offset: z.number().int(),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
@@ -1968,6 +2018,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_fdx_intelligence",
     {
@@ -1975,28 +2026,29 @@ export function createMcpServer(
       description:
         "Preferred first repository-intelligence entry point for Direct Coding. Choose the FDX action that best fits the task: capabilities/status, token-optimized read, search/grep, batch, outline/tree/listing, dependency impact, why explanations, evidence/semantic/build intelligence, symbol-aware diff, index status, or verification planning. This is structured read-only intelligence, not a raw shell and not agent delegation. If status is unavailable/degraded or fallback_recommended=true, continue with normal CPTR Direct Coding tools. Use exact cptr_code_read_file output and SHA-256 before editing.",
       inputSchema: fdxIntelligenceSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        worker_id: z.string().optional(),
-        repo_path: z.string().optional(),
-        action: z.string(),
-        provider: z.string(),
-        status: z.enum(["ok", "degraded", "unavailable"]),
-        fallback_recommended: z.boolean(),
-        truncated: z.boolean().optional(),
-        assurance: z.string().optional(),
-        error_code: z.string().optional(),
-        reason: z.string().optional(),
-        retriable: z.boolean().optional(),
-        fallback_tools: z.array(z.string()).optional(),
-        data: z.unknown().optional(),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              worker_id: z.string().optional(),
+              repo_path: z.string().optional(),
+              action: z.string(),
+              provider: z.string(),
+              status: z.enum(["ok", "degraded", "unavailable"]),
+              fallback_recommended: z.boolean(),
+              truncated: z.boolean().optional(),
+              assurance: z.string().optional(),
+              error_code: z.string().optional(),
+              reason: z.string().optional(),
+              retriable: z.boolean().optional(),
+              fallback_tools: z.array(z.string()).optional(),
+              data: z.unknown().optional(),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.runFdxIntelligence(input), "cptr_fdx_intelligence"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_code_list_files",
     {
@@ -2004,25 +2056,26 @@ export function createMcpServer(
       description:
         "Use this to inspect the selected CPTR workspace before ChatGPT directly edits code. It cannot access paths outside that workspace.",
       inputSchema: codingListSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        path: z.string(),
-        entries: z.array(z.object({
-          path: z.string(),
-          type: z.enum(["file", "directory"]),
-          size: z.number().int().nonnegative(),
-        })),
-        total: z.number().int().nonnegative(),
-        truncated: z.boolean(),
-        max_entries: z.number().int().positive(),
-        cursor: z.string().nullable(),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              path: z.string(),
+              entries: z.array(z.object({
+                path: z.string(),
+                type: z.enum(["file", "directory"]),
+                size: z.number().int().nonnegative(),
+              })),
+              total: z.number().int().nonnegative(),
+              truncated: z.boolean(),
+              max_entries: z.number().int().positive(),
+              cursor: z.string().nullable(),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.listCodingFiles(input), "cptr_code_list_files"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_code_read_file",
     {
@@ -2030,22 +2083,23 @@ export function createMcpServer(
       description:
         "Use this to read source code in the selected CPTR workspace before ChatGPT edits it. Environment files, binary files, paths outside the workspace, and oversized files are rejected by CPTR.",
       inputSchema: codingReadSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        path: z.string(),
-        content: z.string(),
-        start_line: z.number().int(),
-        end_line: z.number().int(),
-        total_lines: z.number().int(),
-        size: z.number().int(),
-        content_sha256: z.string().regex(/^[a-f0-9]{64}$/),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              path: z.string(),
+              content: z.string(),
+              start_line: z.number().int(),
+              end_line: z.number().int(),
+              total_lines: z.number().int(),
+              size: z.number().int(),
+              content_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.readCodingFile(input), "cptr_code_read_file"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_code_search_files",
     {
@@ -2053,24 +2107,25 @@ export function createMcpServer(
       description:
         "Use this to locate symbols, text, or files in the selected CPTR workspace before ChatGPT edits code.",
       inputSchema: codingSearchSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        path: z.string(),
-        matches: z.array(z.object({
-          path: z.string(),
-          line: z.number().int().nonnegative(),
-          text: z.string(),
-          context: z.array(z.string()).optional(),
-        })),
-        max_results: z.number().int().positive(),
-        truncated: z.boolean(),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              path: z.string(),
+              matches: z.array(z.object({
+                path: z.string(),
+                line: z.number().int().nonnegative(),
+                text: z.string(),
+                context: z.array(z.string()).optional(),
+              })),
+              max_results: z.number().int().positive(),
+              truncated: z.boolean(),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.searchCodingFiles(input), "cptr_code_search_files"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_code_write_file",
     {
@@ -2078,18 +2133,19 @@ export function createMcpServer(
       description:
         "Use this only when the user explicitly asks ChatGPT to create or replace code in the selected CPTR workspace. Read the existing file first when modifying it. CPTR rejects paths outside the workspace and environment files.",
       inputSchema: codingWriteSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        path: z.string(),
-        bytes_written: z.number().int().nonnegative(),
-        sha256: z.string().regex(/^[a-f0-9]{64}$/),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              path: z.string(),
+              bytes_written: z.number().int().nonnegative(),
+              sha256: z.string().regex(/^[a-f0-9]{64}$/),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.writeCodingFile(input), "cptr_code_write_file"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_code_edit_file",
     {
@@ -2097,20 +2153,21 @@ export function createMcpServer(
       description:
         "Use this only when the user explicitly asks ChatGPT to modify code. It replaces an exact, unique target string and refuses ambiguous edits, so read the file first and then provide the precise target.",
       inputSchema: codingEditSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        path: z.string(),
-        replaced_characters: z.number().int().nonnegative(),
-        inserted_characters: z.number().int().nonnegative(),
-        sha256: z.string().regex(/^[a-f0-9]{64}$/),
-        diff: z.string(),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              path: z.string(),
+              replaced_characters: z.number().int().nonnegative(),
+              inserted_characters: z.number().int().nonnegative(),
+              sha256: z.string().regex(/^[a-f0-9]{64}$/),
+              diff: z.string(),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.editCodingFile(input), "cptr_code_edit_file"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_code_create_directory",
     {
@@ -2118,18 +2175,19 @@ export function createMcpServer(
       description:
         "Use this only when the user explicitly asks ChatGPT to create a source directory in the selected CPTR workspace. Paths remain confined to the workspace.",
       inputSchema: codingDirectorySchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        path: z.string(),
-        type: z.literal("directory"),
-        created: z.boolean(),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              path: z.string(),
+              type: z.literal("directory"),
+              created: z.boolean(),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.createCodingDirectory(input), "cptr_code_create_directory"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_code_move_file",
     {
@@ -2137,18 +2195,19 @@ export function createMcpServer(
       description:
         "Use this only when the user explicitly asks ChatGPT to rename or move a file. CPTR confines both paths to the selected workspace, refuses directory moves, and refuses overwriting an existing destination.",
       inputSchema: codingMoveSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        source: z.string(),
-        destination: z.string(),
-        sha256: z.string().regex(/^[a-f0-9]{64}$/),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              source: z.string(),
+              destination: z.string(),
+              sha256: z.string().regex(/^[a-f0-9]{64}$/),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.moveCodingFile(input), "cptr_code_move_file"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_code_delete_file",
     {
@@ -2156,18 +2215,19 @@ export function createMcpServer(
       description:
         "Use this only when the user explicitly asks ChatGPT to delete a file. CPTR confines the path to the selected workspace and refuses directory deletion.",
       inputSchema: codingDeleteSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        path: z.string(),
-        deleted: z.boolean(),
-        existed: z.boolean(),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              path: z.string(),
+              deleted: z.boolean(),
+              existed: z.boolean(),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.deleteCodingFile(input), "cptr_code_delete_file"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_code_get_git_status",
     {
@@ -2175,29 +2235,30 @@ export function createMcpServer(
       description:
         "Use this to inspect changed, staged, and untracked files in the selected CPTR workspace before or after direct coding edits.",
       inputSchema: gitStatusSchema,
-      outputSchema: {
-        is_repo: z.boolean(),
-        branch: z.string().optional(),
-        ahead: z.number().int().nonnegative().optional(),
-        behind: z.number().int().nonnegative().optional(),
-        files: z.array(z.object({
-          path: z.string(),
-          status: z.string(),
-          staged: z.boolean(),
-          unstaged: z.boolean().optional(),
-          staged_status: z.string().optional(),
-          unstaged_status: z.string().optional(),
-          additions: z.number().int().nonnegative().optional(),
-          deletions: z.number().int().nonnegative().optional(),
-          binary: z.boolean().optional(),
-        })),
-      },
+      outputSchema: z.object({
+              is_repo: z.boolean(),
+              branch: z.string().optional(),
+              ahead: z.number().int().nonnegative().optional(),
+              behind: z.number().int().nonnegative().optional(),
+              files: z.array(z.object({
+                path: z.string(),
+                status: z.string(),
+                staged: z.boolean(),
+                unstaged: z.boolean().optional(),
+                staged_status: z.string().optional(),
+                unstaged_status: z.string().optional(),
+                additions: z.number().int().nonnegative().optional(),
+                deletions: z.number().int().nonnegative().optional(),
+                binary: z.boolean().optional(),
+              })),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.getGitStatus(input), "cptr_code_get_git_status"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_code_run_command",
     {
@@ -2252,6 +2313,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_code_get_command",
     {
@@ -2279,6 +2341,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_code_cancel_command",
     {
@@ -2306,6 +2369,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_code_send_input",
     {
@@ -2329,6 +2393,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_code_resize_command",
     {
@@ -2352,6 +2417,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_code_signal_command",
     {
@@ -2375,6 +2441,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_lsp_discover",
     {
@@ -2382,16 +2449,17 @@ export function createMcpServer(
       description:
         "Discover administrator-configured language servers that are installed for the selected workspace. This never executes project code.",
       inputSchema: lspDiscoverSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        servers: z.array(z.object({ server_id: z.string(), available: z.boolean(), executable: z.string() })),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              servers: z.array(z.object({ server_id: z.string(), available: z.boolean(), executable: z.string() })),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.discoverLsp(input), "cptr_lsp_discover"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_lsp_start",
     {
@@ -2399,21 +2467,22 @@ export function createMcpServer(
       description:
         "Start one administrator-configured LSP server inside the authorized workspace root. CPTR initializes it and returns an owned opaque lsp_id.",
       inputSchema: lspStartSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        lsp_id: z.string(),
-        server_id: z.string(),
-        root: z.string(),
-        status: z.string(),
-        pid: z.number().int(),
-        capabilities: z.record(z.string(), z.unknown()),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              lsp_id: z.string(),
+              server_id: z.string(),
+              root: z.string(),
+              status: z.string(),
+              pid: z.number().int(),
+              capabilities: z.record(z.string(), z.unknown()),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.startLsp(input), "cptr_lsp_start"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_lsp_request",
     {
@@ -2421,17 +2490,18 @@ export function createMcpServer(
       description:
         "Send one bounded LSP JSON-RPC request to an owned workspace-scoped language server, including hover, definition, references, symbols, completion, or rename-capability requests supported by that server.",
       inputSchema: lspRequestSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        lsp_id: z.string(),
-        response: z.record(z.string(), z.unknown()),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              lsp_id: z.string(),
+              response: z.record(z.string(), z.unknown()),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.requestLsp(input), "cptr_lsp_request"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_lsp_stop",
     {
@@ -2439,18 +2509,19 @@ export function createMcpServer(
       description:
         "Gracefully shut down and dispose an owned LSP process inside the selected workspace.",
       inputSchema: lspStopSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        lsp_id: z.string(),
-        server_id: z.string(),
-        status: z.string(),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              lsp_id: z.string(),
+              server_id: z.string(),
+              status: z.string(),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.stopLsp(input), "cptr_lsp_stop"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_ssh_list_hosts",
     {
@@ -2458,16 +2529,17 @@ export function createMcpServer(
       description:
         "List literal SSH Host aliases available to the authorized CPTR execution identity. This returns alias names only and never exposes private keys, IdentityFile contents, or other SSH config secrets.",
       inputSchema: sshHostsSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        aliases: z.array(z.string()),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              aliases: z.array(z.string()),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.listSshHosts(input), "cptr_ssh_list_hosts"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_ssh_run_command",
     {
@@ -2475,15 +2547,15 @@ export function createMcpServer(
       description:
         "Run an explicitly requested remote command through a configured SSH alias using CPTR's dedicated SSH control path. The generic coding-command tool does not permit raw SSH. CPTR preserves normal OpenSSH host-key verification and exposes resumable live command output.",
       inputSchema: sshCommandSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        alias: z.string(),
-        command_id: z.string(),
-        status: z.string(),
-        exit_code: z.number().int().nullable(),
-        output: z.string(),
-        next_offset: z.number().int(),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              alias: z.string(),
+              command_id: z.string(),
+              status: z.string(),
+              exit_code: z.number().int().nullable(),
+              output: z.string(),
+              next_offset: z.number().int(),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
       _meta: workbenchToolMetadata,
     },
@@ -2497,6 +2569,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_ssh_get_command",
     {
@@ -2504,15 +2577,15 @@ export function createMcpServer(
       description:
         "Retrieve the current status and incremental output for a command previously started through CPTR's dedicated SSH control path.",
       inputSchema: sshCommandStatusSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        alias: z.string(),
-        command_id: z.string(),
-        status: z.string(),
-        exit_code: z.number().int().nullable(),
-        output: z.string(),
-        next_offset: z.number().int(),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              alias: z.string(),
+              command_id: z.string(),
+              status: z.string(),
+              exit_code: z.number().int().nullable(),
+              output: z.string(),
+              next_offset: z.number().int(),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
@@ -2526,6 +2599,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_ssh_cancel_command",
     {
@@ -2533,15 +2607,15 @@ export function createMcpServer(
       description:
         "Stop a running command that was started through CPTR's dedicated SSH control path.",
       inputSchema: sshCommandCancelSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        alias: z.string(),
-        command_id: z.string(),
-        status: z.string(),
-        exit_code: z.number().int().nullable(),
-        output: z.string(),
-        next_offset: z.number().int(),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              alias: z.string(),
+              command_id: z.string(),
+              status: z.string(),
+              exit_code: z.number().int().nullable(),
+              output: z.string(),
+              next_offset: z.number().int(),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
@@ -2555,6 +2629,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_user_chrome",
     {
@@ -2577,6 +2652,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_chrome_browser",
     {
@@ -2584,21 +2660,21 @@ export function createMcpServer(
       description:
         "Control CPTR's isolated managed Chrome browser through one action-based tool. Use status to check availability; navigate for an explicit http/https URL; snapshot to obtain bounded accessibility refs; click/type with refs from the latest snapshot; press_key or scroll for interaction; screenshot to save a workspace-confined PNG; and close to end the scoped browser session. External navigation requires allow_network=true and CPTR's command:external scope. This tool never attaches to the user's normal Chrome profile by default and never returns cookies, auth headers, browser storage, or typed secret values.",
       inputSchema: chromeBrowserSchema,
-      outputSchema: {
-        workspace_id: z.string(),
-        action: z.string(),
-        status: z.string(),
-        managed: z.boolean().optional(),
-        available: z.boolean().optional(),
-        active: z.boolean().optional(),
-        browser: z.string().optional(),
-        url: z.string().optional(),
-        title: z.string().optional(),
-        snapshot: z.string().optional(),
-        truncated: z.boolean().optional(),
-        screenshot_path: z.string().optional(),
-        bytes: z.number().int().optional(),
-      },
+      outputSchema: z.object({
+              workspace_id: z.string(),
+              action: z.string(),
+              status: z.string(),
+              managed: z.boolean().optional(),
+              available: z.boolean().optional(),
+              active: z.boolean().optional(),
+              browser: z.string().optional(),
+              url: z.string().optional(),
+              title: z.string().optional(),
+              snapshot: z.string().optional(),
+              truncated: z.boolean().optional(),
+              screenshot_path: z.string().optional(),
+              bytes: z.number().int().optional(),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       _meta: workbenchToolMetadata,
     },
@@ -2610,13 +2686,14 @@ export function createMcpServer(
       ),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_start_task",
     {
       title: "Start an authorized delegated CPTR task",
       description: "Do not use this for ordinary CPTR work: ChatGPT must complete the user's request itself through the ChatGPT Direct Coding tools. This Delegated Agent tool is available only when the current prompt session was explicitly authorized with allow:delegate. model_id may name provider/model or agent:profile/model; when omitted, CPTR may use its configured qualified default only after delegation authorization. Encode write, command, network, and package restrictions in execution_policy.",
       inputSchema: startTaskSchema,
-      outputSchema: { id: z.string(), status: z.string(), workspace_id: z.string() },
+      outputSchema: z.object({ id: z.string(), status: z.string(), workspace_id: z.string() }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
@@ -2647,6 +2724,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_execute_task",
     {
@@ -2654,18 +2732,18 @@ export function createMcpServer(
       description:
         "Do not use this for ordinary CPTR work: ChatGPT must perform the user's request itself through the ChatGPT Direct Coding tools. This Delegated Agent convenience call waits only a short bounded interval (5 seconds by default, 15 seconds maximum). Prefer cptr_start_task for durable work, then resume with task events/status/output rather than holding the MCP request open. It is available only when the current prompt session was explicitly authorized with allow:delegate. model_id may name provider/model or agent:profile/model; when omitted, CPTR may use its configured qualified default only after authorization.",
       inputSchema: executeTaskSchema,
-      outputSchema: {
-        task_id: z.string(),
-        workspace_id: z.string(),
-        status: z.string(),
-        output: z.string(),
-        output_truncated: z.boolean(),
-        error: z.string().nullable().optional(),
-        completion_integrity: z.record(z.string(), z.unknown()).optional(),
-        review_summary: z.record(z.string(), z.unknown()).nullable().optional(),
-        completed: z.boolean(),
-        wait_seconds: z.number().int(),
-      },
+      outputSchema: z.object({
+              task_id: z.string(),
+              workspace_id: z.string(),
+              status: z.string(),
+              output: z.string(),
+              output_truncated: z.boolean(),
+              error: z.string().nullable().optional(),
+              completion_integrity: z.record(z.string(), z.unknown()).optional(),
+              review_summary: z.record(z.string(), z.unknown()).nullable().optional(),
+              completed: z.boolean(),
+              wait_seconds: z.number().int(),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
       _meta: workbenchToolMetadata,
     },
@@ -2696,6 +2774,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_monitor_autonomous",
     {
@@ -2763,16 +2842,16 @@ export function createMcpServer(
           "Optional Apps SDK presentation preferences. They do not change CPTR permissions and are forwarded only in result _meta.ui.presentation.",
         ),
       }),
-      outputSchema: {
-        target_type: z.enum(["task", "monitor", "command"]),
-        target_id: z.string(),
-        status: z.string(),
-        workspace_id: z.string().optional(),
-        review_status: z.string().optional(),
-        title: z.string(),
-        initial_summary: z.string(),
-        recent_events: z.array(z.record(z.string(), z.unknown())),
-      },
+      outputSchema: z.object({
+              target_type: z.enum(["task", "monitor", "command"]),
+              target_id: z.string(),
+              status: z.string(),
+              workspace_id: z.string().optional(),
+              review_status: z.string().optional(),
+              title: z.string(),
+              initial_summary: z.string(),
+              recent_events: z.array(z.record(z.string(), z.unknown())),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: workbenchToolMetadata,
     },
@@ -2868,6 +2947,7 @@ export function createMcpServer(
     },
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_get_autonomous",
     {
@@ -2881,61 +2961,64 @@ export function createMcpServer(
     async ({ monitor_id }) => activityResult(await client.getAutonomous(monitor_id), "cptr_get_autonomous"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_get_autonomous_events",
     {
       title: "Get CPTR autonomous events",
       description: "Read a paginated, redacted durable event stream for one autonomous monitor. Use after_sequence and max_events to resume without replaying the full history.",
       inputSchema: autonomousEventsSchema,
-      outputSchema: {
-        monitor_id: z.string(),
-        after_sequence: z.number().int().nonnegative(),
-        last_sequence: z.number().int().nonnegative(),
-        max_events: z.number().int().positive(),
-        truncated: z.boolean(),
-        events: z.array(liveEventOutputSchema),
-      },
+      outputSchema: z.object({
+              monitor_id: z.string(),
+              after_sequence: z.number().int().nonnegative(),
+              last_sequence: z.number().int().nonnegative(),
+              max_events: z.number().int().positive(),
+              truncated: z.boolean(),
+              events: z.array(liveEventOutputSchema),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.getAutonomousEvents(input), "cptr_get_autonomous_events"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_get_autonomous_evidence",
     {
       title: "Get CPTR autonomous evidence",
       description: "Read persisted worker and independent verification evidence for one autonomous monitor, optionally filtered to a single scope_id.",
       inputSchema: autonomousEvidenceSchema,
-      outputSchema: {
-        monitor_id: z.string(),
-        evidence: z.array(z.object({
-          evidence_id: z.string(),
-          scope_id: z.string().nullable(),
-          kind: z.string(),
-          payload: z.record(z.string(), z.unknown()),
-          created_at: z.number().int(),
-        })),
-      },
+      outputSchema: z.object({
+              monitor_id: z.string(),
+              evidence: z.array(z.object({
+                evidence_id: z.string(),
+                scope_id: z.string().nullable(),
+                kind: z.string(),
+                payload: z.record(z.string(), z.unknown()),
+                created_at: z.number().int(),
+              })),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.getAutonomousEvidence(input), "cptr_get_autonomous_evidence"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_steer_autonomous",
     {
       title: "Steer a CPTR autonomous monitor",
       description: "Send a scoped follow-up message to a running autonomous monitor. The response confirms whether the durable steering request was accepted and reports its current delivery status.",
       inputSchema: steerAutonomousSchema,
-      outputSchema: {
-        message_id: z.string(),
-        status: z.string(),
-        accepted: z.boolean(),
-        task_id: z.string().optional(),
-        control_message_id: z.string().optional(),
-      },
+      outputSchema: z.object({
+              message_id: z.string(),
+              status: z.string(),
+              accepted: z.boolean(),
+              task_id: z.string().optional(),
+              control_message_id: z.string().optional(),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -2943,19 +3026,21 @@ export function createMcpServer(
       activityResult(await client.steerAutonomous(monitor_id, content, idempotency_key), "cptr_steer_autonomous"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_cancel_autonomous",
     {
       title: "Cancel a CPTR autonomous monitor",
       description: "Use this when the user explicitly wants to stop a running CPTR autonomous monitor.",
       inputSchema: monitorIdSchema,
-      outputSchema: { ...autonomousSummaryOutputSchema, quiesced: z.boolean() },
+      outputSchema: z.object({ ...autonomousSummaryOutputSchema, quiesced: z.boolean() }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async ({ monitor_id }) => activityResult(await client.cancelAutonomous(monitor_id), "cptr_cancel_autonomous"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. | Could not verify `outputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_approve_autonomous",
     {
@@ -2970,56 +3055,59 @@ export function createMcpServer(
       activityResult(await client.approveAutonomous(monitor_id, approval_id, approved, note), "cptr_approve_autonomous"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_get_task",
     {
       title: "Get CPTR task status",
       description: "Read the durable task state, timestamps, review status, and terminal error for one delegated CPTR task.",
       inputSchema: taskIdSchema,
-      outputSchema: {
-        id: z.string(),
-        workspace_id: z.string(),
-        chat_id: z.string(),
-        message_id: z.string(),
-        status: z.string(),
-        prompt: z.string(),
-        model_id: z.string(),
-        output: z.string(),
-        error: z.string().nullable(),
-        review_status: z.string(),
-        review: z.record(z.string(), z.unknown()),
-        created_at: z.number().int(),
-        updated_at: z.number().int(),
-      },
+      outputSchema: z.object({
+              id: z.string(),
+              workspace_id: z.string(),
+              chat_id: z.string(),
+              message_id: z.string(),
+              status: z.string(),
+              prompt: z.string(),
+              model_id: z.string(),
+              output: z.string(),
+              error: z.string().nullable(),
+              review_status: z.string(),
+              review: z.record(z.string(), z.unknown()),
+              created_at: z.number().int(),
+              updated_at: z.number().int(),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async ({ task_id }) => activityResult(await client.getTask(task_id), "cptr_get_task"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_get_task_output",
     {
       title: "Get CPTR task output",
       description: "Read a bounded page of durable task output. Use offset/max_chars to resume without returning unbounded content.",
       inputSchema: taskOutputSchema,
-      outputSchema: {
-        task_id: z.string(),
-        status: z.string(),
-        content: z.string(),
-        offset: z.number().int(),
-        max_chars: z.number().int(),
-        total_chars: z.number().int(),
-        truncated: z.boolean(),
-        completion_integrity: z.record(z.string(), z.unknown()).nullable().optional(),
-        review: z.record(z.string(), z.unknown()).nullable().optional(),
-      },
+      outputSchema: z.object({
+              task_id: z.string(),
+              status: z.string(),
+              content: z.string(),
+              offset: z.number().int(),
+              max_chars: z.number().int(),
+              total_chars: z.number().int(),
+              truncated: z.boolean(),
+              completion_integrity: z.record(z.string(), z.unknown()).nullable().optional(),
+              review: z.record(z.string(), z.unknown()).nullable().optional(),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.getTaskOutput(input), "cptr_get_task_output"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_get_task_review",
     {
@@ -3027,26 +3115,27 @@ export function createMcpServer(
       description:
         "Retrieve the durable review state and a bounded authorized workspace diff for one delegated task. max_diff_bytes prevents an oversized review payload; omitted files are marked in the diff result.",
       inputSchema: taskReviewSchema,
-      outputSchema: {
-        task_id: z.string(),
-        workspace_id: z.string(),
-        status: z.string(),
-        review: z.record(z.string(), z.unknown()),
-        diff: z.object({
-          files: z.array(z.record(z.string(), z.unknown())),
-          max_bytes: z.number().int(),
-          bytes_returned: z.number().int(),
-          truncated: z.boolean(),
-          omitted_paths: z.array(z.string()),
-        }).passthrough(),
-        review_available: z.boolean(),
-      },
+      outputSchema: z.object({
+              task_id: z.string(),
+              workspace_id: z.string(),
+              status: z.string(),
+              review: z.record(z.string(), z.unknown()),
+              diff: z.object({
+                files: z.array(z.record(z.string(), z.unknown())),
+                max_bytes: z.number().int(),
+                bytes_returned: z.number().int(),
+                truncated: z.boolean(),
+                omitted_paths: z.array(z.string()),
+              }).passthrough(),
+              review_available: z.boolean(),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async (input) => activityResult(await client.getTaskReview(input), "cptr_get_task_review"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_decide_task_review",
     {
@@ -3054,12 +3143,12 @@ export function createMcpServer(
       description:
         "Use this only after the user explicitly accepts, rejects, or requests changes to a CPTR task that is awaiting diff review. Acceptance and rejection are durable user decisions; request changes queues a scoped follow-up.",
       inputSchema: reviewDecisionSchema,
-      outputSchema: {
-        id: z.string(),
-        status: z.string(),
-        review: z.record(z.string(), z.unknown()).optional(),
-        follow_up_task_id: z.string().optional(),
-      },
+      outputSchema: z.object({
+              id: z.string(),
+              status: z.string(),
+              review: z.record(z.string(), z.unknown()).optional(),
+              follow_up_task_id: z.string().optional(),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -3067,20 +3156,21 @@ export function createMcpServer(
       activityResult(await client.decideTaskReview(task_id, { decision, note, idempotency_key }), "cptr_decide_task_review"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_send_message",
     {
       title: "Send a message to CPTR",
       description: "Use this when the user explicitly wants to steer an existing CPTR task with a follow-up message.",
       inputSchema: messageSchema,
-      outputSchema: {
-        task_id: z.string(),
-        message_id: z.string(),
-        status: z.string(),
-        accepted: z.boolean(),
-        control_message_id: z.string().optional(),
-        delivery_status: z.string().optional(),
-      },
+      outputSchema: z.object({
+              task_id: z.string(),
+              message_id: z.string(),
+              status: z.string(),
+              accepted: z.boolean(),
+              control_message_id: z.string().optional(),
+              delivery_status: z.string().optional(),
+            }),
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
@@ -3088,35 +3178,37 @@ export function createMcpServer(
       activityResult(await client.sendMessage(task_id, content, idempotency_key), "cptr_send_message"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_cancel_task",
     {
       title: "Cancel a CPTR task",
       description: "Use this when the user explicitly wants to stop a running CPTR task by task ID.",
       inputSchema: taskIdSchema,
-      outputSchema: { id: z.string(), status: z.string(), quiesced: z.boolean() },
+      outputSchema: z.object({ id: z.string(), status: z.string(), quiesced: z.boolean() }),
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       _meta: oauthToolMetadata,
     },
     async ({ task_id }) => activityResult(await client.cancelTask(task_id), "cptr_cancel_task"),
   );
 
+  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
     "cptr_get_diff",
     {
       title: "Get a CPTR workspace diff",
       description: "Use this when the user wants to inspect the current Git diff for a CPTR workspace.",
       inputSchema: gitDiffSchema,
-      outputSchema: {
-        is_repo: z.boolean(),
-        files: z.array(z.record(z.string(), z.unknown())),
-        max_bytes: z.number().int(),
-        bytes_returned: z.number().int(),
-        truncated: z.boolean(),
-        omitted_paths: z.array(z.string()),
-        diagnostic: z.string().optional(),
-        error: z.string().optional(),
-      },
+      outputSchema: z.object({
+              is_repo: z.boolean(),
+              files: z.array(z.record(z.string(), z.unknown())),
+              max_bytes: z.number().int(),
+              bytes_returned: z.number().int(),
+              truncated: z.boolean(),
+              omitted_paths: z.array(z.string()),
+              diagnostic: z.string().optional(),
+              error: z.string().optional(),
+            }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: oauthToolMetadata,
     },

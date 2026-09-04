@@ -513,7 +513,7 @@ export const userChromeSchema = {
   new_owner: z.enum(["none", "agent", "human"]).optional(),
   fresh_snapshot_id: z.string().min(1).max(200).optional(),
   wait_seconds: z.number().min(0.1).max(60).default(15),
-  payload: z.record(z.unknown()).default({}),
+  payload: z.record(z.string(), z.unknown()).default({}),
 };
 
 export const chromeBrowserSchema = {

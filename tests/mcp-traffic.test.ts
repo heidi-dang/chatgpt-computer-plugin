@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { ComputerClient } from "../server/client/computer-client.js";
 import {
   McpTrafficEmitter,
@@ -102,6 +101,7 @@ test("MCP tool wrapper emits the enriched ChatGPT session identity", async () =>
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), sdkClient.connect(clientTransport)]);
 
+  /* @mcp-codemod-error This object looks like a v1 handler-context mock (requestId, sessionId). v2 nests the context — reshape it (requestId → mcpReq.id; sessionId stays top-level), e.g. { sendRequest: fn } → { mcpReq: { send: fn } }. Passed as-is to a migrated handler that reads ctx.mcpReq.*, the v1 shape throws "Cannot read properties of undefined". */
   const context: McpRequestContextValue = {
     requestId: "request-session-identity",
     correlationId: "corr-session-identity",
@@ -166,6 +166,7 @@ test("MCP traffic emitter is synchronous, bounded, batched, and allowlist-only",
 
   const startedAt = Date.now();
   for (let index = 0; index < 20; index += 1) {
+    /* @mcp-codemod-error This object looks like a v1 handler-context mock (requestId, sessionId). v2 nests the context — reshape it (requestId → mcpReq.id; sessionId stays top-level), e.g. { sendRequest: fn } → { mcpReq: { send: fn } }. Passed as-is to a migrated handler that reads ctx.mcpReq.*, the v1 shape throws "Cannot read properties of undefined". */
     emitter.requestStarted({
       requestId: `request-${index}`,
       correlationId: `corr-${index}`,
@@ -280,6 +281,7 @@ test("MCP traffic instruments the existing registerTool boundary without changin
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), sdkClient.connect(clientTransport)]);
 
+  /* @mcp-codemod-error This object looks like a v1 handler-context mock (requestId, sessionId). v2 nests the context — reshape it (requestId → mcpReq.id; sessionId stays top-level), e.g. { sendRequest: fn } → { mcpReq: { send: fn } }. Passed as-is to a migrated handler that reads ctx.mcpReq.*, the v1 shape throws "Cannot read properties of undefined". */
   const context: McpRequestContextValue = {
     requestId: "request-real-tool",
     correlationId: "corr-real-tool",
@@ -320,6 +322,7 @@ test("MCP traffic delivery failure cannot fail a real MCP tool call", async () =
   const sdkClient = new Client({ name: "Gemini", version: "1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), sdkClient.connect(clientTransport)]);
+  /* @mcp-codemod-error This object looks like a v1 handler-context mock (requestId, sessionId). v2 nests the context — reshape it (requestId → mcpReq.id; sessionId stays top-level), e.g. { sendRequest: fn } → { mcpReq: { send: fn } }. Passed as-is to a migrated handler that reads ctx.mcpReq.*, the v1 shape throws "Cannot read properties of undefined". */
   const context: McpRequestContextValue = {
     requestId: "request-failure-isolation",
     correlationId: "corr-failure-isolation",
