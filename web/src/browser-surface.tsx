@@ -64,6 +64,8 @@ export function BrowserSurface({
   const shellRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const lastFrameId = useRef<string | null>(null);
+  const consecutiveNoFrames = useRef(0);
+  const viewerId = useRef(`browser-viewer-${crypto.randomUUID()}`);
   const commandSequence = useRef(0);
   const moveInFlight = useRef(false);
   const pendingMove = useRef<HumanInputPayload | null>(null);
@@ -80,7 +82,7 @@ export function BrowserSurface({
     if (!canHumanInput || !inputUrl || !ticket || !sessionId || epoch === undefined) return;
     commandSequence.current += 1;
     const commandId = `human_${Date.now().toString(36)}_${commandSequence.current.toString(36)}`;
-    await fetch(inputUrl, {
+    const response = await fetch(inputUrl, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${ticket}`,
@@ -95,6 +97,13 @@ export function BrowserSurface({
         ...payload,
       }),
     });
+    if (!response.ok) {
+      if (response.status === 409) {
+        setFrameHealth("reconnecting");
+        setFrameStatus("Browser control changed — syncing the current lease…");
+      }
+      throw new Error(`browser input unavailable (${response.status})`);
+    }
   };
 
   const returnToAgent = async (): Promise<void> => {
@@ -112,11 +121,21 @@ export function BrowserSurface({
         cache: "no-store",
         body: JSON.stringify({ session_id: sessionId, expected_epoch: epoch }),
       });
-      if (!response.ok) throw new Error(`browser return unavailable (${response.status})`);
+      if (!response.ok) {
+        if (response.status === 409) {
+          setFrameHealth("reconnecting");
+          setFrameStatus("Browser control changed — syncing the current lease…");
+        }
+        throw new Error(`browser return unavailable (${response.status})`);
+      }
     } catch {
       setReturningControl(false);
     }
   };
+
+  useEffect(() => {
+    setReturningControl(false);
+  }, [epoch, mode, sessionId]);
 
   const flushMove = async (payload: HumanInputPayload): Promise<void> => {
     if (moveInFlight.current) {
@@ -149,6 +168,7 @@ export function BrowserSurface({
   useEffect(() => {
     setHasFrame(false);
     lastFrameId.current = null;
+    consecutiveNoFrames.current = 0;
     if (!sessionId) {
       setFrameHealth("waiting");
       setFrameStatus("No Chrome session is attached yet.");
@@ -185,6 +205,7 @@ export function BrowserSurface({
         if (!context) return;
         context.drawImage(bitmap, 0, 0, width, height);
         lastFrameId.current = frameId;
+        consecutiveNoFrames.current = 0;
         setHasFrame(true);
         setFrameHealth("live");
         setFrameStatus("");
@@ -207,8 +228,10 @@ export function BrowserSurface({
           Accept: "application/json",
         },
         cache: "no-store",
+        keepalive: true,
         body: JSON.stringify({
           session_id: sessionId,
+          viewer_id: viewerId.current,
           expected_epoch: epoch,
           visible,
           max_fps: visible ? 10 : 0,
@@ -234,9 +257,13 @@ export function BrowserSurface({
           });
           controller = null;
           if (response.status === 204) {
+            consecutiveNoFrames.current += 1;
             if (!lastFrameId.current) {
               setFrameHealth("waiting");
               setFrameStatus("Waiting for the first browser frame…");
+            } else if (consecutiveNoFrames.current >= 2) {
+              setFrameHealth("waiting");
+              setFrameStatus("Browser frames paused — waiting for Chrome…");
             }
             continue;
           }

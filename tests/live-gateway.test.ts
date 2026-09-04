@@ -14,6 +14,18 @@ test("keeps a default ticket valid beyond one bounded live-stream interval", () 
   assert.equal(issued.expiresAt - 1_000, 15 * 60_000);
 });
 
+test("default live ticket can renew for one full TTL after iOS wakes past expiry", () => {
+  let now = 1_000;
+  const store = new LiveTicketStore({ now: () => now });
+  const issued = store.issue({ targetType: "task", targetId: "task-ios" });
+  now = issued.expiresAt + 10 * 60_000;
+
+  const renewed = store.renew(issued.ticket);
+
+  assert.ok(renewed);
+  assert.equal(renewed?.targetId, "task-ios");
+});
+
 
 test("issues a short-lived ticket bound to one target", () => {
   const store = new LiveTicketStore({ now: () => 1_000, ttlMs: 5_000 });

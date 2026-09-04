@@ -75,6 +75,18 @@ export class PromptBrowserInputGateway {
     if (url.pathname === "/live/prompt/browser-return") {
       try {
         const result = await this.client.returnUserChromeToAgent(sessionId, Number(expectedEpoch));
+        this.promptSessions.append(ticket, {
+          type: "browser.surface",
+          payload: {
+            action: "return_to_agent",
+            session_id: sessionId,
+            ...(typeof result.device_id === "string" ? { device_id: result.device_id } : {}),
+            ...(typeof result.state === "string" ? { state: result.state } : {}),
+            ...(typeof result.owner === "string" ? { owner: result.owner } : {}),
+            ...(typeof result.epoch === "number" ? { epoch: result.epoch } : {}),
+            ...(typeof result.hostname === "string" ? { hostname: result.hostname } : {}),
+          },
+        });
         this.json(response, 200, result);
       } catch {
         this.json(response, 502, { error: "browser return unavailable" });
@@ -82,11 +94,13 @@ export class PromptBrowserInputGateway {
       return;
     }
     if (url.pathname === "/live/prompt/browser-stream") {
+      const viewerId = boundedId(body.viewer_id, 120);
       const visible = body.visible;
       const maxFps = body.max_fps;
       const maxWidth = body.max_width;
       const quality = body.quality;
       if (
+        !viewerId ||
         typeof visible !== "boolean" ||
         !Number.isSafeInteger(maxFps) || Number(maxFps) < 0 || Number(maxFps) > 12 ||
         !Number.isSafeInteger(maxWidth) || Number(maxWidth) < 320 || Number(maxWidth) > 3_840 ||
@@ -97,6 +111,7 @@ export class PromptBrowserInputGateway {
       }
       try {
         const result = await this.client.configureUserChromeStream(sessionId, {
+          viewer_id: viewerId,
           visible,
           max_fps: Number(maxFps),
           max_width: Number(maxWidth),

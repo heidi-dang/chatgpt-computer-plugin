@@ -38,7 +38,10 @@ export class LiveTicketStore {
     // target-bound ticket beyond that interval so ordinary reconnects do not
     // fail merely because the browser briefly lost connectivity.
     this.ttlMs = Math.max(1_000, options.ttlMs ?? 15 * 60_000);
-    this.renewGraceMs = Math.max(0, options.renewGraceMs ?? 0);
+    this.renewGraceMs = Math.max(
+      0,
+      options.renewGraceMs ?? (options.ttlMs === undefined ? this.ttlMs : 0),
+    );
     this.streamUrl = options.streamUrl ?? "/live/stream";
     this.snapshotUrl = options.snapshotUrl ?? this.streamUrl.replace(/\/stream(?:\?.*)?$/, "/snapshot");
     this.renewUrl = options.renewUrl ?? this.streamUrl.replace(/\/stream(?:\?.*)?$/, "/renew");

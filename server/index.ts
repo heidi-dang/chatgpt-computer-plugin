@@ -172,6 +172,7 @@ const liveGateway = new LiveGateway(client, liveTickets);
 const promptSessions = new PromptTerminalStore({
   streamUrl: `${publicOrigin}/live/prompt/stream`,
   snapshotUrl: `${publicOrigin}/live/prompt/snapshot`,
+  renewUrl: `${publicOrigin}/live/prompt/renew`,
   browserFrameUrl: `${publicOrigin}/live/prompt/browser-frame`,
   browserInputUrl: `${publicOrigin}/live/prompt/browser-input`,
   // Prompt activity is intentionally lightweight and remains available even
@@ -203,7 +204,6 @@ function writeJson(res: ServerResponse, status: number, value: unknown, headers:
   res.writeHead(status, {
     "content-type": "application/json",
     "cache-control": "no-store",
-    "Access-Control-Allow-Origin": "*",
     ...headers,
   }).end(JSON.stringify(value));
 }
@@ -759,6 +759,7 @@ const httpServer = createServer(async (req, res) => {
     url.pathname === "/live/renew" ||
     url.pathname === "/live/prompt/stream" ||
     url.pathname === "/live/prompt/snapshot" ||
+    url.pathname === "/live/prompt/renew" ||
     url.pathname === "/live/prompt/browser-frame" ||
     url.pathname === "/live/prompt/browser-input" ||
     url.pathname === "/live/prompt/browser-return" ||
@@ -910,6 +911,7 @@ const httpServer = createServer(async (req, res) => {
     url.pathname === "/live/renew" ||
     url.pathname === "/live/prompt/stream" ||
     url.pathname === "/live/prompt/snapshot" ||
+    url.pathname === "/live/prompt/renew" ||
     url.pathname === "/live/prompt/browser-frame" ||
     url.pathname === "/live/prompt/browser-input" ||
     url.pathname === "/live/prompt/browser-return" ||
@@ -930,6 +932,14 @@ const httpServer = createServer(async (req, res) => {
         return;
       }
       await liveGateway.handleRenew(req, res);
+      return;
+    }
+    if (url.pathname === "/live/prompt/renew") {
+      if (req.method !== "POST") {
+        res.writeHead(405, { "cache-control": "no-store" }).end();
+        return;
+      }
+      promptGateway.handleRenew(req, res);
       return;
     }
     if (url.pathname === "/live/prompt/browser-input" || url.pathname === "/live/prompt/browser-return" || url.pathname === "/live/prompt/browser-stream") {

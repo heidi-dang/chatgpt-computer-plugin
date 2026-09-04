@@ -109,3 +109,32 @@ test("refreshes prompt-session expiry on successful snapshot/stream activity so 
   now += 50_000;
   assert.equal(store.ticketForWorkbenchSession("wbs-long-running"), first.ticket, "active prompt stream must remain bound across long execution windows");
 });
+
+test("renews an expired prompt ticket inside grace without losing replay or browser/workbench routing", () => {
+  let now = 1_000;
+  const store = new PromptTerminalStore({
+    streamingEnabled: true,
+    ttlMs: 60_000,
+    renewGraceMs: 60_000,
+    now: () => now,
+    renewUrl: "https://plugin.test/live/prompt/renew",
+  } as never);
+  const first = store.open();
+  assert.equal((first as { renewUrl?: string }).renewUrl, "https://plugin.test/live/prompt/renew");
+  assert.equal(store.bindWorkbenchSession(first.ticket, "wbs-ios"), true);
+  store.append(first.ticket, {
+    type: "browser.surface",
+    payload: { action: "open_session", session_id: "brs_ios", state: "HUMAN_CONTROL", owner: "human", epoch: 4 },
+  });
+
+  now = first.expiresAt + 1;
+  const renewed = (store as unknown as { renew(ticket: string): { ticket: string; expiresAt: number } | null }).renew(first.ticket);
+
+  assert.ok(renewed);
+  assert.notEqual(renewed.ticket, first.ticket);
+  assert.ok(renewed.expiresAt > now);
+  assert.equal(store.ticketForWorkbenchSession("wbs-ios"), renewed.ticket);
+  assert.equal(store.ticketForBrowserSession("brs_ios"), renewed.ticket);
+  assert.equal(store.replay(renewed.ticket, 0)?.events.length, 1);
+  assert.equal(store.replay(first.ticket, 0), null);
+});

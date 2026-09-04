@@ -21,10 +21,10 @@ class FakeResponse extends EventEmitter {
   }
 }
 
-function requestWithBody(ticket: string, body: Record<string, unknown>) {
+function requestWithBody(ticket: string, body: Record<string, unknown>, path = "/live/prompt/browser-input") {
   const request = new EventEmitter() as EventEmitter & AsyncIterable<Buffer> & { method: string; url: string; headers: Record<string, string> };
   request.method = "POST";
-  request.url = "/live/prompt/browser-input";
+  request.url = path;
   request.headers = { authorization: `Bearer ${ticket}` };
   request[Symbol.asyncIterator] = async function* () {
     yield Buffer.from(JSON.stringify(body));
@@ -76,4 +76,39 @@ test("browser input gateway forwards only prompt-bound normalized human input", 
   }) as never, denied as never);
   assert.equal(denied.statusCode, 403);
   assert.equal(seen.length, 1);
+});
+
+test("return-to-agent publishes the authoritative browser surface epoch back to the prompt", async () => {
+  const store = new PromptTerminalStore({ streamingEnabled: true });
+  const metadata = store.open();
+  store.append(metadata.ticket, {
+    type: "browser.surface",
+    payload: { action: "transfer_lease", session_id: "brs_1", state: "HUMAN_CONTROL", owner: "human", epoch: 10 },
+  });
+  const client = {
+    returnUserChromeToAgent: async () => ({
+      session_id: "brs_1",
+      device_id: "bdv_1",
+      state: "AGENT_CONTROL",
+      owner: "agent",
+      epoch: 11,
+      hostname: "Heidi Chrome",
+    }),
+  };
+  const gateway = new PromptBrowserInputGateway(client as never, store);
+  const response = new FakeResponse();
+
+  await gateway.handle(requestWithBody(metadata.ticket, {
+    session_id: "brs_1",
+    expected_epoch: 10,
+  }, "/live/prompt/browser-return") as never, response as never);
+
+  assert.equal(response.statusCode, 200);
+  const replay = store.replay(metadata.ticket, 0)?.events ?? [];
+  const latest = replay.at(-1);
+  assert.equal(latest?.type, "browser.surface");
+  assert.equal(latest?.payload.action, "return_to_agent");
+  assert.equal(latest?.payload.owner, "agent");
+  assert.equal(latest?.payload.epoch, 11);
+  assert.equal(latest?.payload.state, "AGENT_CONTROL");
 });

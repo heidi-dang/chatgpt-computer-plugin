@@ -19,16 +19,10 @@ import type {
 import type { McpActivityEvent } from "../mcp-activity.js";
 import type { McpDiagnosticEvent } from "../mcp-diagnostics.js";
 import type { McpTrafficEvent } from "../mcp-traffic.js";
+import { actionMutatesBrowser, type BrowserAction } from "../browser-contract.js";
+import { TERMINAL_TASK_STATUSES } from "../../shared/task-status.js";
 
 const COMPLETE_WITH_TOOL_ERRORS = "COMPLETE_WITH_TOOL_ERRORS";
-const TERMINAL_TASK_STATUSES = new Set([
-  "COMPLETE",
-  COMPLETE_WITH_TOOL_ERRORS,
-  "FAILED",
-  "CANCELLED",
-  "REVIEW_REQUIRED",
-  "REJECTED",
-]);
 const DEFAULT_DIRECT_EXECUTION_WAIT_SECONDS = 5;
 const MAX_DIRECT_EXECUTION_OUTPUT_CHARACTERS = 20_000;
 
@@ -107,6 +101,16 @@ function normalizeTaskOutputCompletion(task: TaskOutput): TaskOutput {
   const integrity = completionIntegrity(task.raw_output);
   if (task.status !== "COMPLETE" || integrity.tool_error_count === 0) return task;
   return { ...task, status: COMPLETE_WITH_TOOL_ERRORS, completion_integrity: integrity };
+}
+
+function normalizeErrorCode(value: unknown): string {
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (!raw) return "computer_api_error";
+  return raw
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .replace(/[^A-Za-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase() || "computer_api_error";
 }
 
 function publicErrorMessage(value: string): string {
@@ -1217,14 +1221,13 @@ export class ComputerClient {
   async controlUserChrome(input: {
     action: "approve_pairing" | "list_devices" | "list_tabs" | "open_session" | "approve_evaluate" | "command" | "transfer_lease";
     pairing_id?: string;
-    pairing_code?: string;
     device_id?: string;
     session_id?: string;
     tab_id?: number;
     workbench_session_id?: string;
     surface_id?: string;
     command_id?: string;
-    browser_action?: string;
+    browser_action?: BrowserAction;
     expression?: string;
     expected_epoch?: number;
     expected_owner?: "none" | "agent" | "human";
@@ -1240,10 +1243,7 @@ export class ComputerClient {
         }
         return this.requestBrowserDevice("/pairing/approve", {
           method: "POST",
-          body: {
-            pairing_id: input.pairing_id,
-            ...(input.pairing_code ? { code: input.pairing_code } : {}),
-          },
+          body: { pairing_id: input.pairing_id },
         });
       }
       case "list_devices":
@@ -1279,6 +1279,9 @@ export class ComputerClient {
         if (!input.session_id || !input.command_id || !input.browser_action) {
           throw new Error("command requires session_id, command_id, and browser_action");
         }
+        if (actionMutatesBrowser(input.browser_action) && input.expected_epoch === undefined) {
+          throw new Error(`mutating browser action ${input.browser_action} requires expected_epoch`);
+        }
         return this.requestBrowserDevice(`/sessions/${encodeURIComponent(input.session_id)}/command`, {
           method: "POST",
           body: {
@@ -1307,7 +1310,7 @@ export class ComputerClient {
     }
   }
 
-  async configureUserChromeStream(sessionId: string, input: { visible: boolean; max_fps: number; max_width: number; quality: number }): Promise<Record<string, unknown>> {
+  async configureUserChromeStream(sessionId: string, input: { viewer_id?: string; visible: boolean; max_fps: number; max_width: number; quality: number }): Promise<Record<string, unknown>> {
     if (!sessionId) throw new Error("browser session id is required");
     return this.requestBrowserDevice(`/sessions/${encodeURIComponent(sessionId)}/stream-config`, {
       method: "POST",
@@ -1561,9 +1564,19 @@ export class ComputerClient {
         signal: controller.signal,
       });
       status = response.status;
-      const payload = await response.json().catch(() => ({}));
+      const payload = await response.json().catch(() => ({})) as Record<string, unknown>;
       if (!response.ok) {
-        const rawDetail = payload?.detail;
+        const rawDetail = payload.detail;
+        if (rawDetail && typeof rawDetail === "object" && !Array.isArray(rawDetail)) {
+          const detail = rawDetail as Record<string, unknown>;
+          throw new ComputerApiError(
+            response.status,
+            publicErrorMessage(String(detail.message ?? "request failed")),
+            normalizeErrorCode(detail.code),
+            Boolean(detail.retriable ?? response.status >= 500),
+            typeof detail.field === "string" ? detail.field : undefined,
+          );
+        }
         const detail = typeof rawDetail === "string" ? rawDetail : "request failed";
         throw new ComputerApiError(response.status, publicErrorMessage(detail));
       }

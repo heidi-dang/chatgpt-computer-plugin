@@ -10,13 +10,18 @@ export type TerminalViewProps = {
   actionStatus?: string;
   updateCenter?: React.ReactNode;
   canStop: boolean;
+  follow?: boolean;
+  scrollTop?: number;
+  onFollowChange?: (follow: boolean) => void;
+  onScrollTopChange?: (scrollTop: number) => void;
   onStop: () => void;
   onCopy: () => void;
   onPin: () => void;
   onExpand: () => void;
 };
 
-type TerminalDisplayState = "connecting" | "live" | "waiting" | "reconnecting" | "offline" | "exited" | "closed" | "failed";
+type TerminalDisplayState = "connecting" | "working" | "live" | "waiting" | "reconnecting" | "offline" | "exited" | "closed" | "failed";
+type TerminalTransportState = "live" | "connecting" | "reconnecting" | "offline";
 
 type RichToken = {
   text: string;
@@ -170,15 +175,8 @@ const TerminalLine = React.memo(function TerminalLine({ row }: { row: TerminalRo
   </>;
 });
 
-function displayState(status: string, connection: string): TerminalDisplayState {
-  const normalizedStatus = status.toUpperCase();
-  if (["FAILED", "BLOCKED", "REJECTED", "COMPLETE_WITH_TOOL_ERRORS"].includes(normalizedStatus)) return "failed";
-  if (normalizedStatus === "CANCELLED") return "closed";
-
+function transportState(connection: string): TerminalTransportState {
   const normalizedConnection = connection.toLowerCase();
-  if (normalizedStatus === "COMPLETE") {
-    return normalizedConnection.includes("live") && !normalizedConnection.includes("disabled") ? "waiting" : "exited";
-  }
   if (normalizedConnection.includes("reconnect")) return "reconnecting";
   if (normalizedConnection.includes("live") && !normalizedConnection.includes("disabled")) return "live";
   if (
@@ -186,6 +184,22 @@ function displayState(status: string, connection: string): TerminalDisplayState 
     normalizedConnection.includes("recover") ||
     normalizedConnection.includes("renew")
   ) return "connecting";
+  return "offline";
+}
+
+function displayState(status: string, connection: string): TerminalDisplayState {
+  const normalizedStatus = status.toUpperCase();
+  if (["FAILED", "BLOCKED", "REJECTED", "COMPLETE_WITH_TOOL_ERRORS"].includes(normalizedStatus)) return "failed";
+  if (normalizedStatus === "CANCELLED") return "closed";
+  if (normalizedStatus === "COMPLETE") return "waiting";
+
+  const transport = transportState(connection);
+  if (["RUNNING", "WORKING"].includes(normalizedStatus)) {
+    return transport === "live" ? "live" : "working";
+  }
+  if (transport === "reconnecting") return "reconnecting";
+  if (transport === "live") return "live";
+  if (transport === "connecting") return "connecting";
   return "offline";
 }
 
@@ -203,12 +217,29 @@ export function TerminalView({
   connection,
   machineLabel = "Connecting to computer",
   targetLabel,
+  actionStatus = "",
+  updateCenter,
+  canStop,
+  follow: controlledFollow,
+  scrollTop = 0,
+  onFollowChange,
+  onScrollTopChange,
+  onStop,
+  onCopy,
+  onPin,
+  onExpand,
 }: TerminalViewProps) {
   const output = useRef<HTMLPreElement>(null);
   const scrollFrame = useRef<number | null>(null);
-  const [follow, setFollow] = useState(true);
+  const [localFollow, setLocalFollow] = useState(true);
+  const follow = controlledFollow ?? localFollow;
+  const setFollow = (value: boolean) => {
+    setLocalFollow(value);
+    onFollowChange?.(value);
+  };
   const [renderedRowLimit, setRenderedRowLimit] = useState(initialRenderedRowLimit);
   const state = displayState(status, connection);
+  const transport = transportState(connection);
   const exitCode = exitCodeFromRows(rows);
   const hiddenRowCount = Math.max(0, rows.length - renderedRowLimit);
   const visibleRows = useMemo(
@@ -225,13 +256,13 @@ export function TerminalView({
   }, []);
 
   useEffect(() => {
-    if (!follow) return;
     const frame = window.requestAnimationFrame(() => {
       const element = output.current;
-      if (element) element.scrollTop = element.scrollHeight;
+      if (!element) return;
+      element.scrollTop = follow ? element.scrollHeight : scrollTop;
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [visibleRows, follow]);
+  }, [visibleRows, follow, scrollTop]);
 
   useEffect(() => () => {
     if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
@@ -243,6 +274,7 @@ export function TerminalView({
       scrollFrame.current = null;
       const element = output.current;
       if (!element) return;
+      onScrollTopChange?.(element.scrollTop);
       setFollow(element.scrollHeight - element.scrollTop - element.clientHeight < 24);
     });
   };
@@ -259,6 +291,16 @@ export function TerminalView({
           </span>
         </div>
         <div className="terminal-path" title={targetLabel}>{targetLabel}</div>
+        <div className="terminal-toolbar">
+          <span className="action-status" role="status" aria-live="polite">{actionStatus}</span>
+          <div className="terminal-actions" role="group" aria-label="Terminal actions">
+            <button type="button" disabled={!canStop} onClick={onStop}>Stop</button>
+            <button type="button" onClick={onCopy}>Copy</button>
+            <button type="button" onClick={onPin}>Pin</button>
+            <button type="button" onClick={onExpand}>Expand</button>
+          </div>
+        </div>
+        {updateCenter ? <div className="terminal-update-center">{updateCenter}</div> : null}
       </div>
     </header>
 
@@ -279,7 +321,7 @@ export function TerminalView({
 
     <footer className="terminal-footer">
       <span>shell</span>
-      <span>SSE {state === "live" || state === "waiting" ? "LIVE" : state === "connecting" ? "CONNECTING" : state === "reconnecting" ? "RECONNECTING" : "OFFLINE"}</span>
+      <span>SSE {transport.toUpperCase()}</span>
       {exitCode === null ? null : <span className="terminal-exit" data-success={exitCode === 0 ? "true" : "false"}>EXIT {exitCode}</span>}
     </footer>
   </section>;

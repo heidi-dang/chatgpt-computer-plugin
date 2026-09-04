@@ -49,10 +49,10 @@ test("default widget matches the ChatGPT Terminal live surface", () => {
   assert.match(html, /term-success/);
   assert.match(html, /term-overflow/);
   assert.equal(html.includes("terminal-seq"), false);
-  assert.equal(html.includes(">Stop<"), false);
-  assert.equal(html.includes(">Copy<"), false);
-  assert.equal(html.includes(">Pin<"), false);
-  assert.equal(html.includes(">Expand<"), false);
+  assert.match(html, />Stop</);
+  assert.match(html, />Copy</);
+  assert.match(html, />Pin</);
+  assert.match(html, />Expand</);
   assert.equal(html.includes("2 lines"), false);
   assert.equal(html.includes("›_"), false);
 });
@@ -108,6 +108,47 @@ test("terminal final command state exposes the real exit code in the compact foo
   assert.match(html, /SSE LIVE/);
   assert.match(html, /EXIT 0/);
   assert.match(html, /data-success="true"/);
+});
+
+test("terminal keeps ChatGPT lifecycle separate from transient SSE reconnect state", () => {
+  const running = renderToStaticMarkup(React.createElement(TerminalView, {
+    rows: [],
+    status: "RUNNING",
+    connection: "reconnecting",
+    machineLabel: "CPTR Computer",
+    targetLabel: "command · cmd-running",
+    canStop: true,
+    onStop: () => {},
+    onCopy: () => {},
+    onPin: () => {},
+    onExpand: () => {},
+  }));
+  assert.match(running, />WORKING</);
+  assert.match(running, /SSE RECONNECTING/);
+  assert.doesNotMatch(running, />RECONNECTING</);
+
+  const completed = renderToStaticMarkup(React.createElement(TerminalView, {
+    rows: [{
+      id: "row-exit-reconnect",
+      sequence: 10,
+      timestamp: "2026-09-04T00:00:00Z",
+      tone: "success",
+      text: "Command exited with code 0.",
+    }],
+    status: "COMPLETE",
+    connection: "reconnecting prompt activity",
+    machineLabel: "CPTR Computer",
+    targetLabel: "command · cmd-complete",
+    canStop: false,
+    onStop: () => {},
+    onCopy: () => {},
+    onPin: () => {},
+    onExpand: () => {},
+  }));
+  assert.match(completed, />WAITING</);
+  assert.match(completed, /SSE RECONNECTING/);
+  assert.match(completed, /EXIT 0/);
+  assert.doesNotMatch(completed, />EXITED</);
 });
 
 test("terminal CSS preserves the reference desktop and mobile geometry", () => {
@@ -234,4 +275,23 @@ test("Workbench switches terminal and browser inside one persistent root", () =>
   assert.match(css, /\.browser-status\[data-state="connecting"\]/);
   assert.match(css, /\.browser-shell\[data-released="true"\]/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.browser-shell/);
+});
+
+test("Workbench recovery contract survives iOS suspension, replay, and browser lease changes", () => {
+  const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+  const browserSource = readFileSync(new URL("../web/src/browser-surface.tsx", import.meta.url), "utf8");
+
+  assert.doesNotMatch(source, /retryAttempts\s*>=\s*8/);
+  assert.match(source, /addEventListener\("pageshow"/);
+  assert.match(source, /addEventListener\("online"/);
+  assert.match(source, /visibilitychange/);
+  assert.match(source, /renewUrl/);
+  assert.match(source, /isLiveEvent\s*&&\s*owner\s*!==\s*"none"/);
+  assert.match(browserSource, /keepalive:\s*true/);
+  assert.match(browserSource, /if\s*\(!response\.ok\)/);
+  assert.match(browserSource, /response\.status\s*===\s*409/);
+  assert.match(browserSource, /consecutiveNoFrames/);
+  assert.match(browserSource, /viewer_id/);
+  assert.match(source, /terminalViewState/);
+  assert.match(readFileSync(new URL("../web/src/terminal-view.tsx", import.meta.url), "utf8"), /onScrollTopChange/);
 });

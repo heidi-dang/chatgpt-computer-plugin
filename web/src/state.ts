@@ -1,3 +1,5 @@
+import { TERMINAL_TASK_STATUSES } from "../../shared/task-status.js";
+
 export type WorkbenchEvent = {
   version?: number;
   event_id: string;
@@ -89,15 +91,7 @@ export type WorkbenchState = {
 const MAX_TERMINAL_ROWS = 2_000;
 const MAX_WORKER_ACTIVITY_ROWS = 120;
 
-export const TERMINAL_WORKBENCH_STATUSES = new Set([
-  "COMPLETE",
-  "COMPLETE_WITH_TOOL_ERRORS",
-  "CANCELLED",
-  "FAILED",
-  "BLOCKED",
-  "REVIEW_REQUIRED",
-  "REJECTED",
-]);
+export const TERMINAL_WORKBENCH_STATUSES = TERMINAL_TASK_STATUSES;
 
 const AUTHORITATIVE_STATUS_EVENTS = new Set([
   "task.started",

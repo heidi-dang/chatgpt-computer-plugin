@@ -52,6 +52,7 @@ type PromptMetadata = {
   ticket?: string;
   streamUrl?: string;
   snapshotUrl?: string;
+  renewUrl?: string;
   browserFrameUrl?: string;
   browserInputUrl?: string;
   expiresAt?: number;
@@ -151,13 +152,14 @@ function findPromptMetadata(value: unknown): PromptMetadata | null {
 }
 
 function usePromptActivity(
+  promptMetadata: PromptMetadata | null,
+  setPromptMetadata: React.Dispatch<React.SetStateAction<PromptMetadata | null>>,
   setMeta: React.Dispatch<React.SetStateAction<LiveMetadata | null>>,
   setState: React.Dispatch<React.SetStateAction<WorkbenchState>>,
   setBrowserSurface: React.Dispatch<React.SetStateAction<BrowserSurfaceState | null>>,
   setSurfaceMode: React.Dispatch<React.SetStateAction<"terminal" | "browser">>,
   streamingEnabled: boolean,
 ) {
-  const prompt = useRef<PromptMetadata | null>(findPromptMetadata(hostBridge()?.toolResponseMetadata));
   const cursor = useRef(0);
   const [connection, setConnection] = useState("connecting prompt activity");
 
@@ -166,17 +168,17 @@ function usePromptActivity(
       setConnection("live streaming disabled");
       return;
     }
-    const meta = prompt.current;
+    const meta = promptMetadata;
     if (!meta?.ticket || !meta.streamUrl || !meta.snapshotUrl) {
       setConnection("prompt activity unavailable");
       return;
     }
-    const controller = new AbortController();
+    let controller = new AbortController();
     let stopped = false;
     let retryTimer: number | undefined;
     let retryAttempts = 0;
 
-    const applyEvent = (event: PromptEvent) => {
+    const applyEvent = (event: PromptEvent, isLiveEvent = false) => {
       if (event.sequence <= cursor.current) return;
       cursor.current = event.sequence;
       if (event.type === "mcp.tool") {
@@ -244,7 +246,7 @@ function usePromptActivity(
           ...(typeof payload.epoch === "number" ? { epoch: payload.epoch } : {}),
           ...(typeof payload.hostname === "string" ? { hostname: payload.hostname } : {}),
         });
-        setSurfaceMode("browser");
+        if (isLiveEvent && owner !== "none") setSurfaceMode("browser");
       }
     };
 
@@ -255,20 +257,42 @@ function usePromptActivity(
         headers: { Authorization: `Bearer ${meta.ticket}`, Accept: "application/json" },
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error(`prompt snapshot unavailable (${response.status})`);
+      if (!response.ok) {
+        const error = new Error(`prompt snapshot unavailable (${response.status})`) as Error & { status?: number };
+        error.status = response.status;
+        throw error;
+      }
       const value = await response.json() as { replay?: { events?: PromptEvent[]; last_sequence?: number } };
-      for (const event of value.replay?.events ?? []) applyEvent(event);
+      for (const event of value.replay?.events ?? []) applyEvent(event, false);
       if (typeof value.replay?.last_sequence === "number") cursor.current = Math.max(cursor.current, value.replay.last_sequence);
     };
 
-    const scheduleRetry = (run: () => void) => {
-      if (retryAttempts >= 8 || stopped) {
-        setConnection("prompt reconnect limit reached");
-        return;
+    const renewPromptTicket = async (): Promise<boolean> => {
+      if (!meta.renewUrl) return false;
+      setConnection("renewing prompt activity");
+      try {
+        const response = await fetch(new URL(meta.renewUrl, window.location.href), {
+          method: "POST",
+          headers: { Authorization: `Bearer ${meta.ticket}`, Accept: "application/json" },
+          signal: controller.signal,
+        });
+        if (!response.ok) return false;
+        const renewed = await response.json() as PromptMetadata;
+        if (!renewed.ticket || !renewed.streamUrl || !renewed.snapshotUrl || !renewed.renewUrl) return false;
+        setPromptMetadata(renewed);
+        return true;
+      } catch {
+        return false;
       }
-      retryTimer = window.setTimeout(run, Math.min(15000, 1000 * 2 ** retryAttempts));
+    };
+
+    const scheduleRetry = (run: () => void) => {
+      if (stopped) return;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      const delay = Math.min(15_000, 1_000 * 2 ** Math.min(retryAttempts, 4));
       retryAttempts += 1;
-      setConnection("reconnecting prompt activity");
+      retryTimer = window.setTimeout(run, delay);
+      setConnection(navigator.onLine === false ? "offline" : "reconnecting prompt activity");
     };
 
     const consume = async () => {
@@ -281,7 +305,15 @@ function usePromptActivity(
           headers: { Authorization: `Bearer ${meta.ticket}`, Accept: "text/event-stream", "Last-Event-ID": String(cursor.current) },
           signal: controller.signal,
         });
-        if (!response.ok || !response.body) throw new Error(`prompt stream unavailable (${response.status})`);
+        if (response.status === 401) {
+          if (!(await renewPromptTicket())) scheduleRetry(consume);
+          return;
+        }
+        if (!response.ok || !response.body) {
+          const error = new Error(`prompt stream unavailable (${response.status})`) as Error & { status?: number };
+          error.status = response.status;
+          throw error;
+        }
         retryAttempts = 0;
         setConnection("prompt live");
         const reader = response.body.getReader();
@@ -290,7 +322,7 @@ function usePromptActivity(
         let data: string[] = [];
         const dispatch = () => {
           if (!data.length) return;
-          try { applyEvent(JSON.parse(data.join("\n")) as PromptEvent); }
+          try { applyEvent(JSON.parse(data.join("\n")) as PromptEvent, true); }
           catch { setConnection("received invalid prompt event"); }
           data = [];
         };
@@ -309,13 +341,42 @@ function usePromptActivity(
         if (!stopped) scheduleRetry(consume);
       } catch (error) {
         if (stopped || (error instanceof DOMException && error.name === "AbortError")) return;
+        const status = error && typeof error === "object" && "status" in error
+          ? (error as { status?: unknown }).status
+          : undefined;
+        if (status === 401) {
+          if (!(await renewPromptTicket())) scheduleRetry(consume);
+          return;
+        }
         setConnection(error instanceof Error ? error.message : "prompt stream error");
         scheduleRetry(consume);
       }
     };
+
+    const wake = () => {
+      if (stopped) return;
+      retryAttempts = 0;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      controller.abort();
+      controller = new AbortController();
+      retryTimer = window.setTimeout(() => void consume(), 0);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") wake();
+    };
+    window.addEventListener("pageshow", wake);
+    window.addEventListener("online", wake);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     void consume();
-    return () => { stopped = true; controller.abort(); if (retryTimer !== undefined) window.clearTimeout(retryTimer); };
-  }, [setMeta, setState, streamingEnabled]);
+    return () => {
+      stopped = true;
+      controller.abort();
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      window.removeEventListener("pageshow", wake);
+      window.removeEventListener("online", wake);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [promptMetadata?.ticket, promptMetadata?.streamUrl, promptMetadata?.snapshotUrl, promptMetadata?.renewUrl, setPromptMetadata, setMeta, setState, streamingEnabled]);
 
   return connection;
 }
@@ -389,7 +450,7 @@ function useLiveSession(
       return;
     }
 
-    const controller = new AbortController();
+    let controller = new AbortController();
     let retryTimer: number | undefined;
     let renewalTimer: number | undefined;
     let stopped = false;
@@ -397,7 +458,7 @@ function useLiveSession(
     let retryAttempts = 0;
 
     const renewTicket = async (): Promise<boolean> => {
-      if (!meta.targetType || !meta.targetId || !meta.renewUrl || liveTarget.current.renewalAttempts >= 2) return false;
+      if (!meta.targetType || !meta.targetId || !meta.renewUrl) return false;
       liveTarget.current.renewalAttempts += 1;
       setConnection("renewing session");
       try {
@@ -425,7 +486,7 @@ function useLiveSession(
       const renewInMs = Math.max(1_000, meta.expiresAt - Date.now() - 60_000);
       renewalTimer = window.setTimeout(() => {
         void renewTicket().then((renewed) => {
-          if (!renewed && !stopped) setConnection("ticket renewal failed");
+          if (!renewed && !stopped) scheduleRetry(consume);
         });
       }, renewInMs);
     }
@@ -466,14 +527,12 @@ function useLiveSession(
     };
 
     const scheduleRetry = (run: () => void) => {
-      if (retryAttempts >= 8) {
-        setConnection("reconnect limit reached");
-        return;
-      }
-      const delay = Math.min(15_000, 1_000 * 2 ** retryAttempts);
+      if (stopped) return;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      const delay = Math.min(15_000, 1_000 * 2 ** Math.min(retryAttempts, 4));
       retryAttempts += 1;
       retryTimer = window.setTimeout(run, delay);
-      setConnection("reconnecting");
+      setConnection(navigator.onLine === false ? "offline" : "reconnecting");
     };
 
     const consume = async () => {
@@ -493,7 +552,7 @@ function useLiveSession(
           signal: controller.signal,
         });
         if (response.status === 401) {
-          if (!(await renewTicket())) setConnection("ticket renewal failed");
+          if (!(await renewTicket())) scheduleRetry(consume);
           return;
         }
         if ([403, 404, 410].includes(response.status)) {
@@ -556,7 +615,7 @@ function useLiveSession(
           ? (error as { status?: unknown }).status
           : undefined;
         if (status === 401) {
-          if (!(await renewTicket())) setConnection("ticket renewal failed");
+          if (!(await renewTicket())) scheduleRetry(consume);
           return;
         }
         setConnection(error instanceof Error ? error.message : "stream error");
@@ -564,12 +623,30 @@ function useLiveSession(
       }
     };
 
+    const wake = () => {
+      if (stopped || terminalSeen) return;
+      retryAttempts = 0;
+      liveTarget.current.renewalAttempts = 0;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      controller.abort();
+      controller = new AbortController();
+      retryTimer = window.setTimeout(() => void consume(), 0);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") wake();
+    };
+    window.addEventListener("pageshow", wake);
+    window.addEventListener("online", wake);
+    document.addEventListener("visibilitychange", onVisibilityChange);
     void consume();
     return () => {
       stopped = true;
       controller.abort();
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
       if (renewalTimer !== undefined) window.clearTimeout(renewalTimer);
+      window.removeEventListener("pageshow", wake);
+      window.removeEventListener("online", wake);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [meta?.ticket, meta?.streamUrl, meta?.snapshotUrl, meta?.renewUrl, meta?.expiresAt, meta?.targetType, meta?.targetId, meta?.workspaceId, setMeta, setState, streamingEnabled]);
 
@@ -588,7 +665,7 @@ function OwnedWorkbench() {
   const [state, setState] = useState(initialWorkbenchState);
   const [actionStatus, setActionStatus] = useState("");
   const callTool = useMcpBridge();
-  const promptMetadata = findPromptMetadata(hostBridge()?.toolResponseMetadata);
+  const [promptMetadata, setPromptMetadata] = useState<PromptMetadata | null>(() => findPromptMetadata(hostBridge()?.toolResponseMetadata));
   const liveStreamingEnabled = promptMetadata?.streamingEnabled === true;
   const updateManifestUrl = promptMetadata?.streamUrl
     ? new URL("/plugin/update", promptMetadata.streamUrl).toString()
@@ -596,7 +673,8 @@ function OwnedWorkbench() {
   const [meta, setMeta] = useState<LiveMetadata | null>(null);
   const [surfaceMode, setSurfaceMode] = useState<"terminal" | "browser">("terminal");
   const [browserSurface, setBrowserSurface] = useState<BrowserSurfaceState | null>(null);
-  const promptConnection = usePromptActivity(setMeta, setState, setBrowserSurface, setSurfaceMode, liveStreamingEnabled);
+  const [terminalViewState, setTerminalViewState] = useState({ follow: true, scrollTop: 0 });
+  const promptConnection = usePromptActivity(promptMetadata, setPromptMetadata, setMeta, setState, setBrowserSurface, setSurfaceMode, liveStreamingEnabled);
   const targetConnection = useLiveSession(meta, setMeta, setState, liveStreamingEnabled);
   const connection = meta?.targetId && !isTerminalWorkbenchStatus(state.status) ? targetConnection : promptConnection;
   const visibleTarget = useRef<string | null>(null);
@@ -694,6 +772,10 @@ function OwnedWorkbench() {
           targetLabel={targetLabel(meta)}
           actionStatus={actionStatus}
           canStop={canControl}
+          follow={terminalViewState.follow}
+          scrollTop={terminalViewState.scrollTop}
+          onFollowChange={(follow) => setTerminalViewState((current) => ({ ...current, follow }))}
+          onScrollTopChange={(scrollTop) => setTerminalViewState((current) => ({ ...current, scrollTop }))}
           onStop={() => void stop()}
           onCopy={() => void copyTranscript()}
           onPin={() => void pin()}

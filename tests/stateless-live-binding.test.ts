@@ -33,6 +33,7 @@ function computerFixture(): ComputerClient {
     createWorkbenchSession: () => Promise<typeof workbenchSession>;
     getWorkbenchSession: () => Promise<typeof workbenchSession>;
     runCodingCommand: () => Promise<Record<string, unknown>>;
+    getCodingCommand: () => Promise<Record<string, unknown>>;
     bindWorkbenchSession: () => Promise<Record<string, unknown>>;
     appendWorkbenchSessionEvent: () => Promise<Record<string, unknown>>;
   };
@@ -48,6 +49,16 @@ function computerFixture(): ComputerClient {
     duration_ms: 1,
     output_truncated: false,
     timed_out: true,
+  });
+  mutable.getCodingCommand = async () => ({
+    command_id: "command-stateless-1",
+    status: "COMPLETE",
+    exit_code: 0,
+    output: "first live line\n",
+    next_offset: 16,
+    duration_ms: 42,
+    output_truncated: false,
+    timed_out: false,
   });
   mutable.bindWorkbenchSession = async () => ({
     ...workbenchSession,
@@ -132,6 +143,62 @@ test("routes live command binding through the durable workbench session across M
 
   await second.client.close();
   await second.server.close();
+});
+
+
+test("routes stateless command follow-up activity back to the prompt that owns the live target", async () => {
+  const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
+  const tickets = new LiveTicketStore();
+  const computer = computerFixture();
+
+  const first = await connectedServer(computer, promptSessions, tickets);
+  const opened = await first.client.callTool({ name: "cptr_open_live_workbench", arguments: {} });
+  const promptTicket = (opened._meta as { "cptr/prompt"?: { ticket?: string } } | undefined)?.["cptr/prompt"]?.ticket;
+  const sessionId = (opened.structuredContent as { session_id?: string } | undefined)?.session_id;
+  assert.ok(promptTicket);
+  assert.ok(sessionId);
+  await first.client.close();
+  await first.server.close();
+
+  const second = await connectedServer(computer, promptSessions, tickets);
+  await second.client.callTool({
+    name: "cptr_code_run_command",
+    arguments: {
+      workspace_id: "ws-1",
+      command: "printf 'first live line\\n'",
+      workbench_session_id: sessionId,
+    },
+  });
+  await second.client.close();
+  await second.server.close();
+
+  const before = promptSessions.replay(promptTicket, 0);
+  assert.ok(before);
+  const beforeCount = before.events.filter(
+    (event) => event.type === "mcp.tool" && event.payload.tool_name === "cptr_code_get_command",
+  ).length;
+  assert.equal(beforeCount, 0);
+
+  const third = await connectedServer(computer, promptSessions, tickets);
+  const followUp = await third.client.callTool({
+    name: "cptr_code_get_command",
+    arguments: { workspace_id: "ws-1", command_id: "command-stateless-1" },
+  });
+  assert.equal(followUp.isError, undefined);
+
+  const replay = promptSessions.replay(promptTicket, 0);
+  assert.ok(replay);
+  const followUpActivity = replay.events.filter(
+    (event) => event.type === "mcp.tool" && event.payload.tool_name === "cptr_code_get_command",
+  );
+  assert.deepEqual(
+    followUpActivity.map((event) => event.type === "mcp.tool" ? event.payload.status : ""),
+    ["STARTED", "COMPLETE"],
+    "a resumed stateless command poll must remain visible on the original prompt SSE stream",
+  );
+
+  await third.client.close();
+  await third.server.close();
 });
 
 
