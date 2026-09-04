@@ -18,7 +18,6 @@ import {
 import { requestHostDisplayMode, type DisplayModeBridge } from "./display-mode.js";
 import { TerminalView } from "./terminal-view.js";
 import { BrowserSurface } from "./browser-surface.js";
-import { PluginUpdateCenter } from "./plugin-update.js";
 import { CPTR_APP_VERSION } from "./version.js";
 import "./workbench.css";
 
@@ -667,9 +666,6 @@ function OwnedWorkbench() {
   const callTool = useMcpBridge();
   const [promptMetadata, setPromptMetadata] = useState<PromptMetadata | null>(() => findPromptMetadata(hostBridge()?.toolResponseMetadata));
   const liveStreamingEnabled = promptMetadata?.streamingEnabled === true;
-  const updateManifestUrl = promptMetadata?.streamUrl
-    ? new URL("/plugin/update", promptMetadata.streamUrl).toString()
-    : undefined;
   const [meta, setMeta] = useState<LiveMetadata | null>(null);
   const [surfaceMode, setSurfaceMode] = useState<"terminal" | "browser">("terminal");
   const [browserSurface, setBrowserSurface] = useState<BrowserSurfaceState | null>(null);
@@ -742,8 +738,6 @@ function OwnedWorkbench() {
     }
   };
 
-  const updateCenter = <PluginUpdateCenter callTool={callTool} manifestUrl={updateManifestUrl} onStatus={setActionStatus} />;
-
   return <main className="terminal-workbench" aria-label="CPTR live computer">
     <div className="surface-switch" role="group" aria-label="Live computer surface">
       <button type="button" aria-pressed={surfaceMode === "terminal"} onClick={() => setSurfaceMode("terminal")}>Terminal</button>
@@ -765,7 +759,6 @@ function OwnedWorkbench() {
         />
       : <TerminalView
           rows={state.transcript}
-          updateCenter={updateCenter}
           status={displayStatus}
           connection={connection}
           machineLabel={meta?.targetId || promptConnection === "prompt live" ? "CPTR Computer" : "Connecting to computer"}

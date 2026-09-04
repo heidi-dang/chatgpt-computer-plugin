@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import {
   CPTR_PLUGIN_SCHEMA_REVISION,
@@ -12,7 +12,11 @@ import { CPTR_APP_VERSION } from "../server/version.js";
 
 const packageMetadata = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version?: string };
 const serverSource = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
-const widgetSource = readFileSync(new URL("../web/src/plugin-update.tsx", import.meta.url), "utf8");
+const mcpSource = readFileSync(new URL("../server/mcp.ts", import.meta.url), "utf8");
+const workbenchSource = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+const terminalSource = readFileSync(new URL("../web/src/terminal-view.tsx", import.meta.url), "utf8");
+const workbenchCss = readFileSync(new URL("../web/src/workbench.css", import.meta.url), "utf8");
+const updateWidgetUrl = new URL("../web/src/plugin-update.tsx", import.meta.url);
 
 test("publishes a bounded CPTR update manifest for the current MCP contract", () => {
   const manifest = currentPluginUpdateManifest({ GIT_COMMIT_SHA: "abc123" });
@@ -38,12 +42,12 @@ test("serves update status and emits best-effort MCP tool-list change notificati
   assert.match(serverSource, /CPTR_NOTIFY_TOOL_LIST_CHANGED/);
 });
 
-test("Workbench resolves update status through the MCP action before the plugin-origin HTTP fallback", () => {
-  assert.match(widgetSource, /callTool\("cptr_plugin_update", \{ action: "status" \}\)/);
-  assert.match(widgetSource, /if \(!manifestUrl\) throw toolError/);
-  assert.match(widgetSource, /return fetchManifest\(manifestUrl, signal\)/);
-  assert.match(widgetSource, /Update available/);
-  assert.match(widgetSource, /Verify update/);
-  assert.match(widgetSource, /What’s new/);
-  assert.match(widgetSource, /candidate\.verification\.tool/);
+test("Workbench omits the release/update card while the MCP update contract remains available", () => {
+  assert.equal(existsSync(updateWidgetUrl), false);
+  assert.doesNotMatch(workbenchSource, /PluginUpdateCenter|updateManifestUrl|updateCenter=/);
+  assert.doesNotMatch(terminalSource, /updateCenter|terminal-update-center/);
+  assert.doesNotMatch(workbenchCss, /\.plugin-update|\.terminal-update-center/);
+  assert.match(mcpSource, /server\.registerTool\(\s*"cptr_plugin_update"/);
+  assert.match(mcpSource, /const manifest = currentPluginUpdateManifest\(\)/);
+  assert.match(serverSource, /url\.pathname === "\/plugin\/update"/);
 });

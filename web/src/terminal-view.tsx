@@ -8,7 +8,6 @@ export type TerminalViewProps = {
   machineLabel?: string;
   targetLabel: string;
   actionStatus?: string;
-  updateCenter?: React.ReactNode;
   canStop: boolean;
   follow?: boolean;
   scrollTop?: number;
@@ -218,7 +217,6 @@ export function TerminalView({
   machineLabel = "Connecting to computer",
   targetLabel,
   actionStatus = "",
-  updateCenter,
   canStop,
   follow: controlledFollow,
   scrollTop = 0,
@@ -300,7 +298,6 @@ export function TerminalView({
             <button type="button" onClick={onExpand}>Expand</button>
           </div>
         </div>
-        {updateCenter ? <div className="terminal-update-center">{updateCenter}</div> : null}
       </div>
     </header>
 

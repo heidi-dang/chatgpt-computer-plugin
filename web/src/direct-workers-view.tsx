@@ -20,7 +20,6 @@ type Props = {
   onExpand: () => void;
   onStopCommand?: () => void;
   canStopCommand?: boolean;
-  updateCenter?: React.ReactNode;
 };
 
 function statusClass(status: string): string {
@@ -56,7 +55,6 @@ export function DirectWorkersView({
   onExpand,
   onStopCommand,
   canStopCommand = false,
-  updateCenter,
 }: Props) {
   const orderedWorkers = workerOrder.map((id) => workers[id]).filter(Boolean);
   const selected = (selectedWorkerId && workers[selectedWorkerId]) || orderedWorkers[0] || null;
@@ -74,8 +72,6 @@ export function DirectWorkersView({
       </div>
       <span className="worker-connection"><span className="status-dot" />{connection}</span>
     </header>
-
-    {updateCenter}
 
     <div className="worker-lanes" role="tablist" aria-label="Direct coding workers">
       {orderedWorkers.map((worker) => <button
