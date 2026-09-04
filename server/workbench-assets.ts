@@ -23,7 +23,12 @@ export function resolveWorkbenchHotReload(
   env: Environment = process.env,
 ): WorkbenchHotReload {
   const configured = env.CPTR_HOT_RELOAD?.trim().toLowerCase();
-  const enabled = configured === undefined || !["0", "false", "off", "no"].includes(configured);
+  const runtime = env.NODE_ENV?.trim().toLowerCase();
+  const production = runtime === "production";
+  const development = runtime === "development";
+  const explicitlyEnabled = configured !== undefined && ["1", "true", "on", "yes"].includes(configured);
+  const explicitlyDisabled = configured !== undefined && ["0", "false", "off", "no"].includes(configured);
+  const enabled = !production && !explicitlyDisabled && (development || explicitlyEnabled);
   const assetHash = createHash("sha256")
     .update(assets.bundle)
     .update("\0")

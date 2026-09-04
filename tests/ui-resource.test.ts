@@ -38,7 +38,7 @@ test("publishes the configured widget domain and bounded MCP Apps metadata", asy
   assert.doesNotMatch(resource.contents[0].text, /<div id="root"><\/div>/);
 });
 
-test("publishes production-safe external assets and a loop-safe reload channel", async () => {
+test("publishes development hot-reload assets and a loop-safe reload channel when explicitly enabled", async () => {
   const resource = await createWorkbenchResource(
     "SHOULD_NOT_BE_INLINE",
     "https://mcp.example.test",

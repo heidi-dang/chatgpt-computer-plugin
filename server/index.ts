@@ -877,15 +877,11 @@ const httpServer = createServer(async (req, res) => {
       app_version: CPTR_APP_VERSION,
       workbench: {
         ready: assets.ready,
-        asset_directory: assets.directory,
-        hot_reload: reload.enabled,
         build_id: reload.buildId,
       },
       mcp_contract: {
         version: MCP_CONTRACT_VERSION,
         tool_count: MCP_CONTRACT_TOOL_COUNT,
-        session_mode: "stateful-with-stateless-migration-fallback",
-        active_sessions: mcpSessions.size,
       },
       release: process.env.GIT_COMMIT_SHA ?? process.env.RAILWAY_GIT_COMMIT_SHA ?? null,
     }));

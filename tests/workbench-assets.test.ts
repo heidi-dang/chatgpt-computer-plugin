@@ -44,37 +44,47 @@ test("reports a bounded fallback only when CPTR workbench assets are unavailable
   }
 });
 
-test("enables production-safe hot reload by default and fingerprints the deployed assets", () => {
-  const first = resolveWorkbenchHotReload(
+test("disables hot reload in production even when explicitly requested", () => {
+  const defaultProduction = resolveWorkbenchHotReload(
     { bundle: "bundle-a", styles: "styles-a" },
     { NODE_ENV: "production" },
   );
-  const same = resolveWorkbenchHotReload(
+  const forcedProduction = resolveWorkbenchHotReload(
     { bundle: "bundle-a", styles: "styles-a" },
-    { NODE_ENV: "production" },
+    { NODE_ENV: "production", CPTR_HOT_RELOAD: "1" },
   );
   const changed = resolveWorkbenchHotReload(
     { bundle: "bundle-b", styles: "styles-a" },
     { NODE_ENV: "production" },
   );
 
-  assert.equal(first.enabled, true);
-  assert.equal(first.buildId, same.buildId);
-  assert.notEqual(first.buildId, changed.buildId);
-  assert.match(first.buildId, /^[a-f0-9]{24}$/);
+  assert.equal(defaultProduction.enabled, false);
+  assert.equal(forcedProduction.enabled, false);
+  assert.equal(defaultProduction.buildId, forcedProduction.buildId);
+  assert.notEqual(defaultProduction.buildId, changed.buildId);
+  assert.match(defaultProduction.buildId, /^[a-f0-9]{24}$/);
 });
 
-test("supports explicit hot-reload disable and release-labelled asset fingerprints", () => {
-  const disabled = resolveWorkbenchHotReload(
+test("defaults hot reload off when the runtime is not explicitly development", () => {
+  const unclassifiedRuntime = resolveWorkbenchHotReload(
     { bundle: "bundle", styles: "styles" },
-    { CPTR_HOT_RELOAD: "0", CPTR_WORKBENCH_BUILD_ID: "release 42" },
-  );
-  const enabled = resolveWorkbenchHotReload(
-    { bundle: "bundle", styles: "styles" },
-    { CPTR_HOT_RELOAD: "1", CPTR_WORKBENCH_BUILD_ID: "release 42" },
+    {},
   );
 
-  assert.equal(disabled.enabled, false);
+  assert.equal(unclassifiedRuntime.enabled, false);
+});
+
+test("keeps hot reload available for development with an explicit opt-out", () => {
+  const enabled = resolveWorkbenchHotReload(
+    { bundle: "bundle", styles: "styles" },
+    { NODE_ENV: "development", CPTR_WORKBENCH_BUILD_ID: "release 42" },
+  );
+  const disabled = resolveWorkbenchHotReload(
+    { bundle: "bundle", styles: "styles" },
+    { NODE_ENV: "development", CPTR_HOT_RELOAD: "0", CPTR_WORKBENCH_BUILD_ID: "release 42" },
+  );
+
   assert.equal(enabled.enabled, true);
+  assert.equal(disabled.enabled, false);
   assert.match(enabled.buildId, /^release-42-[a-f0-9]{24}$/);
 });

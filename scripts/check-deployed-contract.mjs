@@ -147,9 +147,27 @@ if (health?.app_version !== expectedContractVersion) {
   throw new Error(`app version drift: expected ${expectedContractVersion}, got ${health?.app_version ?? "missing"}`);
 }
 if (health?.workbench?.ready !== true) throw new Error("deployed workbench is not ready");
-if (health?.workbench?.hot_reload !== true) throw new Error("deployed workbench hot reload is not enabled");
+if (health?.workbench && "asset_directory" in health.workbench) {
+  throw new Error("health response leaks the internal workbench asset directory");
+}
+if (health?.workbench && "hot_reload" in health.workbench) {
+  throw new Error("health response exposes development-only hot reload state");
+}
+if (health?.mcp_contract && ("session_mode" in health.mcp_contract || "active_sessions" in health.mcp_contract)) {
+  throw new Error("health response exposes internal MCP session details");
+}
 if (typeof health?.workbench?.build_id !== "string" || health.workbench.build_id.length < 12) {
   throw new Error("deployed workbench build fingerprint is missing");
+}
+for (const developmentPath of [
+  "/__cptr/dev/workbench.js",
+  "/__cptr/dev/workbench.css",
+  "/__cptr/dev/reload",
+]) {
+  const response = await fetch(new URL(developmentPath, endpoint), { redirect: "manual" });
+  if (response.status !== 404) {
+    throw new Error(`development route unexpectedly exposed: ${developmentPath} returned HTTP ${response.status}`);
+  }
 }
 if (health?.mcp_contract?.version !== expectedContractVersion) {
   throw new Error(`MCP contract version drift: expected ${expectedContractVersion}, got ${health?.mcp_contract?.version ?? "missing"}`);
@@ -204,8 +222,11 @@ if (!Array.isArray(connectDomains) || JSON.stringify(connectDomains) !== JSON.st
   throw new Error(`resource connect-domain drift: expected [${expectedWidgetDomain}]`);
 }
 const resourceDomains = ui?.csp?.resourceDomains;
-const expectedResourceDomains = health.workbench.hot_reload ? [expectedWidgetDomain] : [];
+const expectedResourceDomains = [];
 if (!Array.isArray(resourceDomains) || JSON.stringify(resourceDomains) !== JSON.stringify(expectedResourceDomains)) {
   throw new Error(`resource domain policy drift: expected [${expectedResourceDomains.join(", ")}]`);
+}
+if (typeof resource.text === "string" && resource.text.includes("/__cptr/dev/")) {
+  throw new Error("production Workbench resource references development-only routes");
 }
 console.log(`CPTR deployed MCP contract verified: ${expectedPlannedTools.length} planned tools, ${expectedRegisteredToolCount} registered actions, current-model reporting on every action, ${expectedResource}, and widget domain ${expectedWidgetDomain}`);
