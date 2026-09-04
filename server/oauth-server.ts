@@ -184,6 +184,7 @@ export class NativeOAuthServer {
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
         token_endpoint_auth_method: "none",
+        application_type: registration.metadata.applicationType,
       });
     } catch (error) {
       oauthError(res, 400, "invalid_client_metadata", error instanceof Error ? error.message : "invalid client metadata");
