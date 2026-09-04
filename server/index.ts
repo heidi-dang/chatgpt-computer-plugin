@@ -34,6 +34,7 @@ import { LiveTicketStore } from "./live-tickets.js";
 import { PromptTerminalGateway, PromptTerminalStore, resolveLiveTerminalStreaming } from "./prompt-terminal.js";
 import { PromptBrowserFrameGateway } from "./browser-frame-gateway.js";
 import { PromptBrowserInputGateway } from "./browser-input-gateway.js";
+import { NativeOAuthServer } from "./oauth-server.js";
 import {
   isBrowserDevicePath,
   proxyBrowserDeviceHttp,
@@ -69,20 +70,51 @@ const oauthScopes = (process.env.MCP_OAUTH_SCOPES ?? "")
   .split(/[ ,]+/)
   .map((scope) => scope.trim())
   .filter(Boolean);
+const cloudflareConfig =
+  oauthIssuer && oauthAudience && oauthAllowedEmail && oauthJwksUri
+    ? {
+        issuer: oauthIssuer,
+        audience: oauthAudience,
+        resource: oauthResource,
+        allowedEmail: oauthAllowedEmail,
+        requiredScopes: oauthScopes,
+        jwksUri: oauthJwksUri,
+      }
+    : undefined;
+const nativeOAuthSecret = process.env.MCP_NATIVE_OAUTH_SECRET?.trim();
+const nativeOAuthIssuer = (process.env.MCP_NATIVE_OAUTH_ISSUER?.trim() || publicOrigin).replace(/\/$/, "");
+const nativeOAuthStateDb = process.env.MCP_NATIVE_OAUTH_DB?.trim() || (process.env.NODE_ENV === "production" ? undefined : ":memory:");
+const nativeOAuthScopes = (process.env.MCP_NATIVE_OAUTH_SCOPES ?? "mcp")
+  .split(/[ ,]+/)
+  .map((scope) => scope.trim())
+  .filter(Boolean);
+if (nativeOAuthSecret && nativeOAuthSecret.length < 32) {
+  throw new Error("MCP_NATIVE_OAUTH_SECRET must be at least 32 characters");
+}
+if (nativeOAuthSecret && !nativeOAuthStateDb) {
+  throw new Error("MCP_NATIVE_OAUTH_DB is required when native OAuth is enabled in production");
+}
+if (nativeOAuthSecret && !cloudflareConfig) {
+  throw new Error("Native OAuth requires Cloudflare Access assertion validation for /oauth/login");
+}
+const nativeOAuthServer = nativeOAuthSecret && nativeOAuthStateDb
+  ? new NativeOAuthServer({
+      issuer: nativeOAuthIssuer,
+      resource: oauthResource,
+      scopes: nativeOAuthScopes,
+      secret: nativeOAuthSecret,
+      stateDbPath: nativeOAuthStateDb,
+    })
+  : undefined;
 const oauthConfig: McpAuthConfig = {
   staticToken: mcpAccessToken,
-  cloudflare:
-    oauthIssuer && oauthAudience && oauthAllowedEmail && oauthJwksUri
-      ? {
-          issuer: oauthIssuer,
-          audience: oauthAudience,
-          resource: oauthResource,
-          allowedEmail: oauthAllowedEmail,
-          requiredScopes: oauthScopes,
-          jwksUri: oauthJwksUri,
-        }
-      : undefined,
+  cloudflare: cloudflareConfig,
+  nativeOAuth: nativeOAuthSecret
+    ? { issuer: nativeOAuthIssuer, audience: oauthResource, secret: nativeOAuthSecret }
+    : undefined,
 };
+const advertisedAuthorizationServer = nativeOAuthServer?.issuer ?? oauthIssuer;
+const advertisedOauthScopes = nativeOAuthServer ? nativeOAuthScopes : oauthScopes;
 
 const client = clientFromEnvironment();
 const mcpDiagnostics = new McpDiagnosticsEmitter({
@@ -215,14 +247,19 @@ function writeJson(res: ServerResponse, status: number, value: unknown, headers:
 function writeMcpUnauthorized(res: ServerResponse, status: number, message: string) {
   const metadataUrl = `${publicOrigin}${oauthProtectedResourcePath}`;
   writeJson(res, status, { error: message }, {
-    "www-authenticate": createBearerChallenge(metadataUrl, oauthScopes),
+    "www-authenticate": createBearerChallenge(metadataUrl, advertisedOauthScopes),
   });
 }
 
 function authIdentity(auth: Extract<McpAuthResult, { authorized: true }>): string {
-  return auth.mechanism === "cloudflare"
-    ? `cloudflare:${auth.subject}:${auth.email}`
-    : "static:configured-token";
+  if (auth.mechanism === "cloudflare") return `cloudflare:${auth.subject}:${auth.email}`;
+  if (auth.mechanism === "native-oauth") return `oauth:${auth.subject}:${auth.clientId}`;
+  return "static:configured-token";
+}
+
+function singleHeader(req: IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name];
+  return Array.isArray(value) ? value[0] : value;
 }
 
 type ParsedJsonBody = { value: unknown; bytes: number };
@@ -896,15 +933,80 @@ const httpServer = createServer(async (req, res) => {
     (url.pathname === oauthProtectedResourcePath || url.pathname === oauthRootProtectedResourcePath) &&
     req.method === "GET"
   ) {
-    if (!oauthIssuer) {
+    if (!advertisedAuthorizationServer) {
       writeJson(res, 404, { error: "OAuth is not configured" });
       return;
     }
     writeJson(res, 200, createProtectedResourceMetadata({
       resource: oauthResource,
-      authorizationServer: oauthIssuer,
-      scopes: oauthScopes,
+      authorizationServer: advertisedAuthorizationServer,
+      scopes: advertisedOauthScopes,
     }));
+    return;
+  }
+
+  if (url.pathname === "/.well-known/oauth-authorization-server" && req.method === "GET") {
+    if (!nativeOAuthServer) {
+      writeJson(res, 404, { error: "Native OAuth is not configured" });
+      return;
+    }
+    writeJson(res, 200, nativeOAuthServer.metadata());
+    return;
+  }
+
+  if (url.pathname === "/oauth/register") {
+    if (!nativeOAuthServer) {
+      writeJson(res, 404, { error: "Native OAuth is not configured" });
+      return;
+    }
+    await nativeOAuthServer.handleRegister(req, res);
+    return;
+  }
+
+  if (url.pathname === "/oauth/authorize") {
+    if (!nativeOAuthServer || req.method !== "GET") {
+      res.writeHead(nativeOAuthServer ? 405 : 404, { "cache-control": "no-store" }).end();
+      return;
+    }
+    await nativeOAuthServer.handleAuthorize(url, res);
+    return;
+  }
+
+  if (url.pathname === "/oauth/token") {
+    if (!nativeOAuthServer) {
+      writeJson(res, 404, { error: "Native OAuth is not configured" });
+      return;
+    }
+    await nativeOAuthServer.handleToken(req, res);
+    return;
+  }
+
+  if (url.pathname === "/oauth/revoke") {
+    if (!nativeOAuthServer) {
+      writeJson(res, 404, { error: "Native OAuth is not configured" });
+      return;
+    }
+    await nativeOAuthServer.handleRevoke(req, res);
+    return;
+  }
+
+  if (url.pathname === "/oauth/login") {
+    if (!nativeOAuthServer || !cloudflareConfig) {
+      writeJson(res, 503, { error: "Native OAuth login is not configured" });
+      return;
+    }
+    const loginAuth = await authenticateMcpRequest(
+      { cloudflareAssertion: singleHeader(req, "cf-access-jwt-assertion") },
+      { staticToken: undefined, cloudflare: cloudflareConfig },
+    );
+    if (!loginAuth.authorized || loginAuth.mechanism !== "cloudflare") {
+      writeJson(res, 401, { error: "Cloudflare Access login assertion is required" });
+      return;
+    }
+    await nativeOAuthServer.handleLogin(req, url, res, {
+      subject: loginAuth.subject,
+      email: loginAuth.email,
+    });
     return;
   }
 
@@ -970,15 +1072,13 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
-  const cloudflareAssertion = Array.isArray(req.headers["cf-access-jwt-assertion"])
-    ? req.headers["cf-access-jwt-assertion"][0]
-    : req.headers["cf-access-jwt-assertion"];
+  const cloudflareAssertion = singleHeader(req, "cf-access-jwt-assertion");
   const auth = await authenticateMcpRequest(
     { authorization: req.headers.authorization, cloudflareAssertion },
     oauthConfig,
   );
   if (!auth.authorized) {
-    const status = mcpAccessToken || oauthConfig.cloudflare ? 401 : 503;
+    const status = mcpAccessToken || oauthConfig.cloudflare || oauthConfig.nativeOAuth ? 401 : 503;
     emitClientTransportFailure(req, {
       errorCode: status === 401 ? "unauthorized" : "authentication_unavailable",
       status,
@@ -1104,6 +1204,7 @@ async function shutdown(signal: string) {
   console.log(`Shutting down ChatGPT Computer MCP server (${signal})`);
   clearInterval(sessionPruner);
   await Promise.all([...mcpSessions.keys()].map((sessionId) => closeMcpSession(sessionId)));
+  nativeOAuthServer?.close();
   const telemetryDeadline = new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, 1_000);
     timer.unref?.();

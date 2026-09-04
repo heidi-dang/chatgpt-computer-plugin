@@ -74,6 +74,81 @@ test("accepts a valid Cloudflare Access assertion for the configured resource", 
   });
 });
 
+test("accepts a short-lived resource-bound native OAuth access token", async () => {
+  const secret = "s".repeat(48);
+  const assertion = await new SignJWT({ token_use: "access", client_id: "chatgpt-test-client", scope: "mcp" })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+    .setIssuer("https://mcp.example.test")
+    .setAudience("https://mcp.example.test/mcp")
+    .setSubject("test-user")
+    .setIssuedAt()
+    .setNotBefore("0s")
+    .setExpirationTime("60s")
+    .sign(new TextEncoder().encode(secret));
+
+  const result = await authenticateMcpRequest(
+    { authorization: `Bearer ${assertion}` },
+    {
+      staticToken: undefined,
+      cloudflare: undefined,
+      nativeOAuth: {
+        issuer: "https://mcp.example.test",
+        audience: "https://mcp.example.test/mcp",
+        secret,
+      },
+    },
+  );
+
+  assert.deepEqual(result, {
+    authorized: true,
+    mechanism: "native-oauth",
+    subject: "test-user",
+    clientId: "chatgpt-test-client",
+    scope: "mcp",
+  });
+});
+
+test("rejects native OAuth access tokens with wrong issuer, audience, expiry, nbf, token use, or missing subject", async () => {
+  const secret = "s".repeat(48);
+  const base = {
+    staticToken: undefined,
+    cloudflare: undefined,
+    nativeOAuth: {
+      issuer: "https://mcp.example.test",
+      audience: "https://mcp.example.test/mcp",
+      secret,
+    },
+  } as const;
+
+  const makeAssertion = async (overrides: Record<string, unknown> = {}) => {
+    const jwt = new SignJWT({
+      token_use: overrides.token_use ?? "access",
+      client_id: "chatgpt-test-client",
+      scope: "mcp",
+    })
+      .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+      .setIssuer(typeof overrides.issuer === "string" ? overrides.issuer : base.nativeOAuth.issuer)
+      .setAudience(typeof overrides.audience === "string" ? overrides.audience : base.nativeOAuth.audience)
+      .setIssuedAt()
+      .setNotBefore(typeof overrides.nbf === "string" ? overrides.nbf : "0s")
+      .setExpirationTime(typeof overrides.exp === "string" ? overrides.exp : "60s");
+    if (overrides.missingSubject !== true) jwt.setSubject("test-user");
+    return jwt.sign(new TextEncoder().encode(secret));
+  };
+
+  for (const overrides of [
+    { issuer: "https://wrong.example.test" },
+    { audience: "https://wrong.example.test/mcp" },
+    { exp: "-1s" },
+    { nbf: "10m" },
+    { token_use: "refresh" },
+    { missingSubject: true },
+  ]) {
+    const result = await authenticateMcpRequest({ authorization: `Bearer ${await makeAssertion(overrides)}` }, base);
+    assert.equal(result.authorized, false);
+  }
+});
+
 test("rejects Cloudflare assertions with wrong issuer, audience, expiry, nbf, email, or scope", async () => {
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   const jwk = await exportJWK(publicKey);

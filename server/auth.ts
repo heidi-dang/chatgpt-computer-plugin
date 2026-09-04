@@ -12,14 +12,22 @@ export type CloudflareAccessConfig = {
   jwks?: JWTVerifyGetKey;
 };
 
+export type NativeOAuthConfig = {
+  issuer: string;
+  audience: string;
+  secret: string;
+};
+
 export type McpAuthConfig = {
   staticToken: string | undefined;
   cloudflare: CloudflareAccessConfig | undefined;
+  nativeOAuth?: NativeOAuthConfig;
 };
 
 export type McpAuthResult =
   | { authorized: true; mechanism: "static" }
   | { authorized: true; mechanism: "cloudflare"; email: string; subject: string }
+  | { authorized: true; mechanism: "native-oauth"; subject: string; clientId: string; scope: string }
   | { authorized: false; reason: string };
 
 export type ProtectedResourceMetadata = {
@@ -119,5 +127,31 @@ export async function authenticateMcpRequest(
     return { authorized: true, mechanism: "static" };
   }
 
-  return reject(config.staticToken ? "Unauthorized" : "MCP authentication is not configured");
+  if (input.authorization?.startsWith(BEARER_PREFIX) && config.nativeOAuth) {
+    const assertion = input.authorization.slice(BEARER_PREFIX.length).trim();
+    if (assertion) {
+      try {
+        const { payload } = await jwtVerify(assertion, new TextEncoder().encode(config.nativeOAuth.secret), {
+          algorithms: ["HS256"],
+          issuer: config.nativeOAuth.issuer,
+          audience: config.nativeOAuth.audience,
+        });
+        if (payload.token_use !== "access") return reject("native OAuth token use is invalid");
+        const subject = typeof payload.sub === "string" ? payload.sub.trim() : "";
+        const clientId = typeof payload.client_id === "string" ? payload.client_id.trim() : "";
+        const scope = typeof payload.scope === "string" ? payload.scope.trim() : "";
+        if (!subject) return reject("native OAuth subject is missing");
+        if (!clientId) return reject("native OAuth client identity is missing");
+        return { authorized: true, mechanism: "native-oauth", subject, clientId, scope };
+      } catch {
+        return reject("native OAuth access token is invalid");
+      }
+    }
+  }
+
+  return reject(
+    config.staticToken || config.cloudflare || config.nativeOAuth
+      ? "Unauthorized"
+      : "MCP authentication is not configured",
+  );
 }
