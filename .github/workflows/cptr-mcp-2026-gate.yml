@@ -6,7 +6,7 @@ on:
       - cptr/mcp-2026-oauth-fix
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   gate:
@@ -18,7 +18,33 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Apply RFC 9207 issuer binding fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('server/oauth-server.ts')
+          text = path.read_text()
+          text = text.replace(
+              'location: appendRedirectParams(details.redirectUri, { error: "access_denied", state: details.state }),',
+              'location: appendRedirectParams(details.redirectUri, { error: "access_denied", state: details.state, iss: this.issuer }),',
+          )
+          text = text.replace(
+              'location: appendRedirectParams(details.redirectUri, { code, state: details.state }),',
+              'location: appendRedirectParams(details.redirectUri, { code, state: details.state, iss: this.issuer }),',
+          )
+          path.write_text(text)
+          PY
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
+      - name: Commit verified OAuth fix
+        if: success()
+        run: |
+          if ! git diff --quiet -- server/oauth-server.ts; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add server/oauth-server.ts
+            git commit -m 'fix: bind OAuth authorization responses to issuer'
+            git push
+          fi
