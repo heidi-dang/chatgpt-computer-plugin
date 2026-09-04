@@ -26,6 +26,7 @@ export type ProtectedResourceMetadata = {
   resource: string;
   authorization_servers: string[];
   scopes_supported?: string[];
+  bearer_methods_supported: ["header"];
 };
 
 export function isMcpRequestAuthorized(authorization: string | undefined, expectedToken: string | undefined): boolean {
@@ -34,6 +35,21 @@ export function isMcpRequestAuthorized(authorization: string | undefined, expect
   }
 
   return authorization.slice(BEARER_PREFIX.length) === expectedToken;
+}
+
+export function protectedResourceMetadataPath(resourcePath: string): string {
+  const normalizedPath = resourcePath.startsWith("/") ? resourcePath : `/${resourcePath}`;
+  return `/.well-known/oauth-protected-resource${normalizedPath}`;
+}
+
+function quotedChallengeValue(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+export function createBearerChallenge(metadataUrl: string, scopes: readonly string[] = []): string {
+  const scope = scopes.map((value) => value.trim()).filter(Boolean).join(" ");
+  const challenge = `Bearer resource_metadata="${quotedChallengeValue(metadataUrl)}"`;
+  return scope ? `${challenge}, scope="${quotedChallengeValue(scope)}"` : challenge;
 }
 
 export function createProtectedResourceMetadata(input: {
@@ -45,6 +61,7 @@ export function createProtectedResourceMetadata(input: {
     resource: input.resource,
     authorization_servers: [input.authorizationServer],
     ...(input.scopes?.length ? { scopes_supported: input.scopes } : {}),
+    bearer_methods_supported: ["header"],
   };
 }
 

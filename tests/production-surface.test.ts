@@ -21,3 +21,10 @@ test("deployed contract verifier rejects public development routes and leaked he
   assert.match(deployedContractSource, /\/__cptr\/dev\/reload/);
   assert.match(deployedContractSource, /development route unexpectedly exposed/);
 });
+
+test("MCP authentication advertises canonical path-specific RFC 9728 metadata", () => {
+  assert.match(serverSource, /protectedResourceMetadataPath\(mcpPath\)/);
+  assert.match(serverSource, /createBearerChallenge\(metadataUrl, oauthScopes\)/);
+  assert.match(serverSource, /url\.pathname === oauthProtectedResourcePath/);
+  assert.match(serverSource, /url\.pathname === oauthRootProtectedResourcePath/);
+});

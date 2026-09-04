@@ -4,7 +4,9 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import {
   authenticateMcpRequest,
+  createBearerChallenge,
   createProtectedResourceMetadata,
+  protectedResourceMetadataPath,
   type McpAuthConfig,
   type McpAuthResult,
 } from "./auth.js";
@@ -51,6 +53,8 @@ import {
 const host = process.env.HOST ?? "127.0.0.1";
 const port = Number(process.env.PORT ?? "8787");
 const mcpPath = "/mcp";
+const oauthProtectedResourcePath = protectedResourceMetadataPath(mcpPath);
+const oauthRootProtectedResourcePath = "/.well-known/oauth-protected-resource";
 const mcpAccessToken = process.env.MCP_ACCESS_TOKEN;
 const publicOrigin = resolvePublicOrigin(process.env, host, port);
 const allowedBrowserOrigins = resolveAllowedOrigins(process.env);
@@ -209,9 +213,9 @@ function writeJson(res: ServerResponse, status: number, value: unknown, headers:
 }
 
 function writeMcpUnauthorized(res: ServerResponse, status: number, message: string) {
-  const metadataUrl = `${publicOrigin}/.well-known/oauth-protected-resource`;
+  const metadataUrl = `${publicOrigin}${oauthProtectedResourcePath}`;
   writeJson(res, status, { error: message }, {
-    "www-authenticate": `Bearer resource_metadata="${metadataUrl}"`,
+    "www-authenticate": createBearerChallenge(metadataUrl, oauthScopes),
   });
 }
 
@@ -888,7 +892,10 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
-  if (url.pathname === "/.well-known/oauth-protected-resource" && req.method === "GET") {
+  if (
+    (url.pathname === oauthProtectedResourcePath || url.pathname === oauthRootProtectedResourcePath) &&
+    req.method === "GET"
+  ) {
     if (!oauthIssuer) {
       writeJson(res, 404, { error: "OAuth is not configured" });
       return;

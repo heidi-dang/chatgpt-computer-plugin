@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { isMcpRequestAuthorized } from "../server/auth.js";
-import { authenticateMcpRequest, createProtectedResourceMetadata } from "../server/auth.js";
+import {
+  authenticateMcpRequest,
+  createBearerChallenge,
+  createProtectedResourceMetadata,
+  protectedResourceMetadataPath,
+} from "../server/auth.js";
 
 test("accepts the configured bearer token", () => {
   const request = new Request("https://mcp.example.test/mcp", {
@@ -120,6 +125,28 @@ test("publishes protected-resource metadata with the configured resource and aut
       resource: "https://mcp.example.test/mcp",
       authorization_servers: ["https://heidiluong.cloudflareaccess.com"],
       scopes_supported: ["openid", "email"],
+      bearer_methods_supported: ["header"],
     },
+  );
+});
+
+test("uses the path-specific RFC 9728 metadata location for an MCP endpoint", () => {
+  assert.equal(protectedResourceMetadataPath("/mcp"), "/.well-known/oauth-protected-resource/mcp");
+});
+
+test("publishes an RFC 6750 bearer challenge with resource metadata and configured scopes", () => {
+  assert.equal(
+    createBearerChallenge(
+      "https://mcp.example.test/.well-known/oauth-protected-resource/mcp",
+      ["files:read", "tools:execute"],
+    ),
+    'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp", scope="files:read tools:execute"',
+  );
+});
+
+test("omits the scope parameter when no OAuth scopes are configured", () => {
+  assert.equal(
+    createBearerChallenge("https://mcp.example.test/.well-known/oauth-protected-resource/mcp", []),
+    'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource/mcp"',
   );
 });

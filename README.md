@@ -28,7 +28,7 @@ npm run dev
 
 The MCP endpoint is `http://${HOST}:${PORT}/mcp` and health is `/health`.
 
-The `/mcp` endpoint requires a valid Cloudflare Access assertion in production, or the optional static bearer for trusted operator smoke tests. The public protected-resource metadata endpoint is `/.well-known/oauth-protected-resource`; `/health` remains available for liveness checks.
+The `/mcp` endpoint requires a valid Cloudflare Access assertion in production, or the optional static bearer for trusted operator smoke tests. The origin publishes RFC 9728 protected-resource metadata at the canonical path-specific `/.well-known/oauth-protected-resource/mcp` location and retains the root `/.well-known/oauth-protected-resource` location for compatibility. Origin-generated `401` responses advertise the path-specific metadata URL through `WWW-Authenticate` and include configured OAuth scopes. When Cloudflare Access Managed OAuth is enabled at the edge, Cloudflare intentionally terminates the client OAuth exchange and replaces this origin challenge; the origin then validates the signed `Cf-Access-Jwt-Assertion`. Do not disable Managed OAuth until an MCP-native authorization server is deployed and the origin can validate that server's resource-bound access tokens directly. `/health` remains available for liveness checks.
 
 ## Tools
 
