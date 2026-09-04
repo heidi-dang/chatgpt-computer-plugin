@@ -282,7 +282,7 @@ export class NativeOAuthServer {
       if (!client.redirectUris.includes(details.redirectUri)) throw new Error("client registration changed during authorization");
       if (decision !== "approve") {
         res.writeHead(302, {
-          location: appendRedirectParams(details.redirectUri, { error: "access_denied", state: details.state }),
+          location: appendRedirectParams(details.redirectUri, { error: "access_denied", state: details.state, iss: this.issuer }),
           "cache-control": "no-store",
         }).end();
         return;
@@ -298,7 +298,7 @@ export class NativeOAuthServer {
       };
       const code = this.state.issueAuthorizationCode(codeRecord, this.authorizationCodeTtlMs);
       res.writeHead(302, {
-        location: appendRedirectParams(details.redirectUri, { code, state: details.state }),
+        location: appendRedirectParams(details.redirectUri, { code, state: details.state, iss: this.issuer }),
         "cache-control": "no-store",
       }).end();
     } catch (error) {
