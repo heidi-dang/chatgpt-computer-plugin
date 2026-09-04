@@ -7,6 +7,7 @@ export type McpLatencyEdge =
 
 export type McpLatencyMetric = "observed_request_time" | "adapter_handoff" | "backend_api_rtt";
 export type McpLatencyOperationClass = "immediate" | "bounded_wait" | "long_operation";
+export type McpLatencySetupKind = "request_adapter" | "stateful_setup" | "stateless_setup";
 
 export type McpFailureStage =
   | "client_transport"
@@ -31,6 +32,8 @@ export type McpLatencyDiagnostic = {
   operation_class?: McpLatencyOperationClass;
   requested_wait_ms?: number | null;
   health_eligible?: boolean;
+  setup_kind?: McpLatencySetupKind | null;
+  setup_cached?: boolean | null;
 };
 
 export type McpUsageDiagnostic = {
@@ -148,6 +151,11 @@ function copyLatency(event: McpLatencyDiagnostic): McpLatencyDiagnostic {
         : "immediate",
     requested_wait_ms: boundedNumber(event.requested_wait_ms, 86_400_000),
     health_eligible: event.health_eligible !== false,
+    setup_kind:
+      event.setup_kind === "stateful_setup" || event.setup_kind === "stateless_setup"
+        ? event.setup_kind
+        : event.setup_kind === "request_adapter" ? "request_adapter" : null,
+    setup_cached: typeof event.setup_cached === "boolean" ? event.setup_cached : null,
   };
 }
 

@@ -1,12 +1,15 @@
 import { z } from "zod";
 
 const configuredCommandInlineWaitMax = Number.parseInt(
-  process.env.CPTR_COMMAND_INLINE_WAIT_MAX_SECONDS ?? "3600",
+  process.env.CPTR_COMMAND_INLINE_WAIT_MAX_SECONDS ?? "60",
   10,
 );
+// Long-running command/test/SSH work is resumable by command ID. Keep inline
+// waits bounded so the MCP transport never becomes a one-hour job runner.
+// Administrators may lower this ceiling but cannot raise it above 60 seconds.
 export const commandInlineWaitMaxSeconds = Number.isFinite(configuredCommandInlineWaitMax)
-  ? Math.max(60, configuredCommandInlineWaitMax)
-  : 3600;
+  ? Math.max(0, Math.min(60, configuredCommandInlineWaitMax))
+  : 60;
 
 export const workspaceIdSchema = { workspace_id: z.string().min(1).max(200) };
 
@@ -46,7 +49,7 @@ export const factoryApprovalSchema = {
 export const factoryStopSchema = {
   run_id: factoryRunId,
   idempotency_key: factoryIdempotencyKey,
-  timeout_ms: z.number().int().min(100).max(120_000).optional(),
+  timeout_ms: z.number().int().min(100).max(15_000).default(15_000),
 };
 const optionalWorkerTargetSchema = {
   worker_id: z.string().min(1).max(200).optional().describe(

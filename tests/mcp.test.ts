@@ -3,7 +3,13 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { ComputerClient } from "../server/client/computer-client.js";
-import { MCP_CONTRACT_TOOL_COUNT, MCP_CONTRACT_VERSION, createMcpServer } from "../server/mcp.js";
+import {
+  MCP_CONTRACT_TOOL_COUNT,
+  MCP_CONTRACT_VERSION,
+  MCP_REGISTERED_TOOL_BUDGET,
+  createMcpServer,
+  getMcpToolSurfaceProfile,
+} from "../server/mcp.js";
 import { PromptTerminalStore } from "../server/prompt-terminal.js";
 import { CPTR_APP_VERSION } from "../server/version.js";
 
@@ -28,6 +34,13 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(client.getServerVersion()?.version, CPTR_APP_VERSION);
   const listed = await client.listTools();
   const tools = new Map(listed.tools.map((tool) => [tool.name, tool]));
+  const surface = getMcpToolSurfaceProfile(server);
+  assert.equal(surface?.registered_tools, 90);
+  assert.equal(surface?.direct_tools, 71);
+  assert.equal(surface?.delegated_tools, 19);
+  assert.equal(surface?.budget, MCP_REGISTERED_TOOL_BUDGET);
+  assert.equal(MCP_REGISTERED_TOOL_BUDGET, 90);
+  assert.equal((surface?.registration_ms ?? -1) >= 0, true);
 
   assert.deepEqual(
     [
@@ -180,8 +193,12 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   const commandStatusSchema = tools.get("cptr_code_get_command")?.inputSchema as
     | { properties?: Record<string, { maximum?: number }> }
     | undefined;
-  assert.equal(commandInputSchema?.properties?.wait_seconds?.maximum, 3600);
-  assert.equal(commandStatusSchema?.properties?.wait_seconds?.maximum, 3600);
+  assert.equal(commandInputSchema?.properties?.wait_seconds?.maximum, 60);
+  assert.equal(commandStatusSchema?.properties?.wait_seconds?.maximum, 60);
+  assert.match(tools.get("cptr_code_run_command")?.description ?? "", /ID\/resume-first/);
+  assert.match(tools.get("cptr_code_get_command")?.description ?? "", /retain the returned command_id/);
+  assert.match(tools.get("cptr_ssh_run_command")?.description ?? "", /wait_seconds at 0/);
+  assert.match(tools.get("cptr_workspace_run_test_target")?.description ?? "", /matching status\/output action/);
   assert.notEqual(tools.get("cptr_start_task")?.inputSchema.properties?.execution_policy, undefined);
   assert.notEqual(tools.get("cptr_execute_task")?.inputSchema.properties?.execution_policy, undefined);
   assert.notEqual(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.execution_policy, undefined);
@@ -224,7 +241,9 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(factoryInput("cptr_factory_evidence")?.properties?.limit?.maximum, 100);
   assert.equal(factoryInput("cptr_factory_message")?.properties?.content?.maxLength, 50_000);
   assert.equal(factoryInput("cptr_factory_approve")?.properties?.note?.maxLength, 4_000);
-  assert.equal(factoryInput("cptr_factory_stop")?.properties?.timeout_ms?.maximum, 120_000);
+  assert.equal(factoryInput("cptr_factory_stop")?.properties?.timeout_ms?.maximum, 15_000);
+  assert.match(tools.get("cptr_factory_stop")?.description ?? "", /run-ID\/status-first/);
+  assert.match(tools.get("cptr_factory_stop")?.description ?? "", /capped at 15 seconds/);
   for (const forbidden of [
     "cptr_factory_transition",
     "cptr_factory_set_gate",

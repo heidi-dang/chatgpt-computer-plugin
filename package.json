@@ -1,7 +1,7 @@
 {
   "name": "chatgpt-computer-plugin",
   "private": true,
-  "version": "1.4.4",
+  "version": "1.4.5",
   "type": "module",
   "scripts": {
     "dev": "node scripts/dev.mjs",
@@ -12,6 +12,7 @@
     "check:mcp-traffic-integration": "node scripts/check-mcp-traffic-integration.mjs",
     "check:mcp-traffic-acceptance": "node scripts/run-mcp-traffic-acceptance.mjs",
     "check:mcp-live-activity": "node scripts/check-mcp-live-activity-integration.mjs",
+    "benchmark:mcp-latency": "tsx scripts/benchmark-mcp-latency.ts",
     "build": "npm run build:web && tsc -p tsconfig.json && npm run copy:web",
     "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p web/tsconfig.json"

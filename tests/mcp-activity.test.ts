@@ -344,6 +344,7 @@ test("plugin process wires MCP activity delivery into stateful and stateless ses
   assert.match(source, /diagnostics: mcpDiagnostics/);
   assert.match(source, /function createSessionServer\(\)/);
   assert.match(source, /handleStatefulInitialize[\s\S]*createSessionServer\(\)/);
-  assert.match(source, /handleStatelessCompatibilityRequest[\s\S]*createSessionServer\(\)/);
+  assert.match(source, /new StatelessServerPool\([\s\S]*createSessionServer/);
+  assert.match(source, /handleStatelessCompatibilityRequest[\s\S]*statelessServerPool\.take\(\)/);
   assert.match(source, /mcpActivity\.close\(\)/);
 });

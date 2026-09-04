@@ -348,6 +348,10 @@ test("MCP traffic HTTP boundary instruments stateful sessions and stateless requ
   assert.match(source, /mcpTraffic\.requestFailed/);
   assert.match(source, /mcpRequestContext\.run/);
   assert.match(source, /handleStatelessCompatibilityRequest/);
+  assert.match(source, /statelessServerPool\.take\(\)/);
+  assert.match(source, /setup_kind: "stateless_setup"/);
+  assert.match(source, /setup_cached: pooledServer\.pooled/);
+  assert.match(source, /statelessServerPool\.scheduleReplenish\(\)/);
   assert.doesNotMatch(source, /handleStatelessCompatibilityRequest[\s\S]{0,1000}sessionOpened/);
 });
 

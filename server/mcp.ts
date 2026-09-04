@@ -497,6 +497,30 @@ const DELEGATED_AGENT_TOOL_NAMES = new Set([
   "cptr_cancel_task",
 ]);
 
+const RESUMABLE_COMMAND_TOOL_NAMES = new Set([
+  "cptr_workspace_run_test_target",
+  "cptr_code_run_command",
+  "cptr_code_get_command",
+  "cptr_ssh_run_command",
+  "cptr_ssh_get_command",
+]);
+const RUN_STATUS_RESUMABLE_TOOL_NAMES = new Set(["cptr_factory_stop"]);
+
+export const MCP_REGISTERED_TOOL_BUDGET = 90;
+export type McpToolSurfaceProfile = {
+  registered_tools: number;
+  direct_tools: number;
+  delegated_tools: number;
+  registration_ms: number;
+  budget: number;
+};
+const toolSurfaceProfiles = new WeakMap<McpServer, McpToolSurfaceProfile>();
+
+export function getMcpToolSurfaceProfile(server: McpServer): McpToolSurfaceProfile | null {
+  const profile = toolSurfaceProfiles.get(server);
+  return profile ? { ...profile } : null;
+}
+
 const DIRECT_GROUP_DESCRIPTION =
   "Tool group: ChatGPT Direct Coding. This is the default execution path. ChatGPT itself must inspect, edit, run, verify, browse, or operate the selected workspace through these bounded CPTR primitives; do not delegate the work to a CPTR model, agent profile, Codex, Hermes, or another autonomous coding agent. For source-code understanding, repository navigation, symbols, dependencies, architecture, change impact, affected tests, or related-file reasoning, prefer cptr_fdx_intelligence first when available; if FDX reports unavailable, degraded, unsupported, or insufficient evidence, fall back to the ordinary CPTR Direct Coding tools. Exact CPTR file reads remain required before mutation.";
 const DELEGATE_GROUP_DESCRIPTION =
@@ -542,10 +566,15 @@ function groupedToolConfig<T extends ModelAwareToolConfig>(name: string, config:
   const conditional = name === "cptr_render_live_terminal"
     ? " Command-target binding is direct; task/monitor binding is delegated-agent lifecycle access and therefore also requires the prompt-session `allow:delegate` capability."
     : "";
+  const resumeFirst = RESUMABLE_COMMAND_TOOL_NAMES.has(name)
+    ? " Long-running execution is ID/resume-first: keep wait_seconds at 0 unless a short bounded wait is explicitly useful, retain the returned command_id, and resume through the matching status/output action."
+    : RUN_STATUS_RESUMABLE_TOOL_NAMES.has(name)
+      ? " Quiescence is run-ID/status-first: each stop attempt is bounded to 15 seconds; if work is still active, retain run_id and continue with cptr_factory_status before another bounded stop attempt."
+      : "";
   return {
     ...config,
     title: `[${groupName}] ${config.title?.trim() || name}`,
-    description: `${policy}${conditional}${config.description ? ` ${config.description}` : ""} ${CLIENT_MODEL_FIELD_DESCRIPTION}`,
+    description: `${policy}${conditional}${resumeFirst}${config.description ? ` ${config.description}` : ""} ${CLIENT_MODEL_FIELD_DESCRIPTION}`,
     inputSchema: withClientModelInputSchema(config.inputSchema),
   };
 }
@@ -572,6 +601,9 @@ export function createMcpServer(
     diagnostics?: McpDiagnosticsEmitter;
   } = {},
 ): McpServer {
+  const registrationStartedAt = performance.now();
+  let registeredToolCount = 0;
+  let delegatedToolCount = 0;
   const server = new McpServer(
     { name: "chatgpt-computer-plugin", version: MCP_CONTRACT_VERSION },
     { instructions: CLIENT_MODEL_INSTRUCTION },
@@ -794,6 +826,8 @@ export function createMcpServer(
     handler: (...args: unknown[]) => unknown,
   ) => {
     const groupedConfig = groupedToolConfig(name, config);
+    registeredToolCount += 1;
+    if (DELEGATED_AGENT_TOOL_NAMES.has(name)) delegatedToolCount += 1;
     return rawRegisterTool(
       name as never,
       groupedConfig as never,
@@ -1632,7 +1666,7 @@ export function createMcpServer(
     "cptr_factory_stop",
     {
       title: "Stop a Dark Factory run",
-      description: "Stop an owner-scoped Dark Factory run only after CPTR proves its owned worker execution is quiescent. The backend refuses cancellation completion while commands or worker assignments remain unresolved.",
+      description: "Stop an owner-scoped Dark Factory run only after CPTR proves its owned worker execution is quiescent. The backend refuses cancellation completion while commands or worker assignments remain unresolved. Each MCP stop attempt is capped at 15 seconds; use cptr_factory_status and retry by run_id if quiescence needs longer.",
       inputSchema: factoryStopSchema,
       outputSchema: factoryRunControlOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
@@ -3072,5 +3106,18 @@ export function createMcpServer(
     async (input) => activityResult(await client.getDiff(input), "cptr_get_diff"),
   );
 
+  const surfaceProfile: McpToolSurfaceProfile = {
+    registered_tools: registeredToolCount,
+    direct_tools: registeredToolCount - delegatedToolCount,
+    delegated_tools: delegatedToolCount,
+    registration_ms: Math.max(0, performance.now() - registrationStartedAt),
+    budget: MCP_REGISTERED_TOOL_BUDGET,
+  };
+  if (surfaceProfile.registered_tools > MCP_REGISTERED_TOOL_BUDGET) {
+    throw new Error(
+      `MCP tool surface budget exceeded: ${surfaceProfile.registered_tools}/${MCP_REGISTERED_TOOL_BUDGET}`,
+    );
+  }
+  toolSurfaceProfiles.set(server, surfaceProfile);
   return server;
 }

@@ -104,6 +104,8 @@ test("latency diagnostics preserve bounded operation classification without leak
     operation_class: "bounded_wait",
     requested_wait_ms: 5_000,
     health_eligible: false,
+    setup_kind: "stateless_setup",
+    setup_cached: true,
   });
   await emitter.flush();
   await emitter.close();
@@ -112,6 +114,8 @@ test("latency diagnostics preserve bounded operation classification without leak
   assert.equal(delivered[0]?.[0]?.operation_class, "bounded_wait");
   assert.equal(delivered[0]?.[0]?.requested_wait_ms, 5_000);
   assert.equal(delivered[0]?.[0]?.health_eligible, false);
+  assert.equal(delivered[0]?.[0]?.setup_kind, "stateless_setup");
+  assert.equal(delivered[0]?.[0]?.setup_cached, true);
   assert.equal(JSON.stringify(delivered).includes("prompt"), false);
 });
 

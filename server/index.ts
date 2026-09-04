@@ -25,6 +25,7 @@ import {
 } from "./mcp-traffic.js";
 import { MCP_CONTRACT_TOOL_COUNT, MCP_CONTRACT_VERSION, createMcpServer } from "./mcp.js";
 import { currentPluginUpdateManifest } from "./release.js";
+import { StatelessServerPool } from "./stateless-server-pool.js";
 import { CPTR_APP_VERSION } from "./version.js";
 import { LiveGateway } from "./live-gateway.js";
 import { LiveTicketStore } from "./live-tickets.js";
@@ -311,7 +312,7 @@ function mcpOperationMetadata(body: unknown): McpOperationMetadata {
     requestedWaitMs = Math.max(0, Number(args.timeout_seconds ?? 15) * 1000);
     intentionalWait = true;
   } else if (toolName === "cptr_factory_stop") {
-    requestedWaitMs = Math.max(0, Number(args.timeout_ms ?? 0));
+    requestedWaitMs = Math.max(0, Number(args.timeout_ms ?? 15_000));
     intentionalWait = true;
   }
 
@@ -469,6 +470,8 @@ async function handleWithTraffic(
     metric_type: "adapter_handoff",
     duration_ms: Math.max(0, Date.now() - adapterSetupStartedAt),
     status: "ok",
+    setup_kind: "request_adapter",
+    setup_cached: null,
   });
   let failed = false;
   try {
@@ -611,6 +614,12 @@ function createSessionServer() {
   });
 }
 
+const configuredStatelessPoolSize = Number.parseInt(process.env.CPTR_MCP_STATELESS_PREWARM_SERVERS ?? "2", 10);
+const statelessServerPool = new StatelessServerPool(
+  createSessionServer,
+  Number.isFinite(configuredStatelessPoolSize) ? configuredStatelessPoolSize : 2,
+);
+
 async function handleStatefulInitialize(
   req: IncomingMessage,
   res: ServerResponse,
@@ -622,6 +631,7 @@ async function handleStatefulInitialize(
   await pruneMcpSessions();
   await evictMcpSessionIfFull();
   const trafficClient = trafficClientFromRequest(req, body);
+  const setupStartedAt = Date.now();
   let initializedSessionId: string | null = null;
   let transport!: StreamableHTTPServerTransport;
   const server = createSessionServer();
@@ -659,6 +669,16 @@ async function handleStatefulInitialize(
   };
   try {
     await server.connect(transport);
+    mcpDiagnostics.latency({
+      request_id: null,
+      correlation_id: null,
+      edge_id: "mcp-connector-cptr-mcp",
+      metric_type: "adapter_handoff",
+      duration_ms: Math.max(0, Date.now() - setupStartedAt),
+      status: "ok",
+      setup_kind: "stateful_setup",
+      setup_cached: false,
+    });
     await handleWithTraffic(
       req,
       res,
@@ -685,7 +705,9 @@ async function handleStatelessCompatibilityRequest(
   requestStartedAt: number,
 ): Promise<void> {
   const trafficClient = trafficClientFromRequest(req, body);
-  const server = createSessionServer();
+  const setupStartedAt = Date.now();
+  const pooledServer = statelessServerPool.take();
+  const server = pooledServer.value;
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
@@ -697,6 +719,16 @@ async function handleStatelessCompatibilityRequest(
   res.once("close", close);
   try {
     await server.connect(transport);
+    mcpDiagnostics.latency({
+      request_id: null,
+      correlation_id: null,
+      edge_id: "mcp-connector-cptr-mcp",
+      metric_type: "adapter_handoff",
+      duration_ms: Math.max(0, Date.now() - setupStartedAt),
+      status: "ok",
+      setup_kind: "stateless_setup",
+      setup_cached: pooledServer.pooled,
+    });
     await handleWithTraffic(
       req,
       res,
@@ -710,6 +742,7 @@ async function handleStatelessCompatibilityRequest(
       res.removeListener("close", close);
       close();
     }
+    statelessServerPool.scheduleReplenish();
   }
 }
 
