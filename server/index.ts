@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { isInitializeRequest } from "@modelcontextprotocol/server";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import {
   authenticateMcpRequest,
   createBearerChallenge,
@@ -484,6 +484,7 @@ async function handleWithTraffic(
 ): Promise<void> {
   const adapterSetupStartedAt = Date.now();
   const operation = mcpOperationMetadata(input.body);
+  /* @mcp-codemod-error This object looks like a v1 handler-context mock (requestId, sessionId). v2 nests the context — reshape it (requestId → mcpReq.id; sessionId stays top-level), e.g. { sendRequest: fn } → { mcpReq: { send: fn } }. Passed as-is to a migrated handler that reads ctx.mcpReq.*, the v1 shape throws "Cannot read properties of undefined". */
   const context: McpRequestContextValue = {
     requestId: randomUUID(),
     correlationId: randomUUID(),
@@ -495,6 +496,7 @@ async function handleWithTraffic(
     rawToolArguments: rawToolArguments(input.body),
     outcome: { failed: false, errorCode: null },
   };
+  /* @mcp-codemod-error This object looks like a v1 handler-context mock (requestId, sessionId). v2 nests the context — reshape it (requestId → mcpReq.id; sessionId stays top-level), e.g. { sendRequest: fn } → { mcpReq: { send: fn } }. Passed as-is to a migrated handler that reads ctx.mcpReq.*, the v1 shape throws "Cannot read properties of undefined". */
   mcpTraffic.requestStarted({
     requestId: context.requestId,
     correlationId: context.correlationId,
@@ -599,7 +601,7 @@ async function handleWithTraffic(
 }
 
 type McpSessionRecord = {
-  transport: StreamableHTTPServerTransport;
+  transport: NodeStreamableHTTPServerTransport;
   server: ReturnType<typeof createMcpServer>;
   authIdentity: string;
   trafficClient: TrafficClient;
@@ -674,9 +676,9 @@ async function handleStatefulInitialize(
   const trafficClient = trafficClientFromRequest(req, body);
   const setupStartedAt = Date.now();
   let initializedSessionId: string | null = null;
-  let transport!: StreamableHTTPServerTransport;
+  let transport!: NodeStreamableHTTPServerTransport;
   const server = createSessionServer();
-  transport = new StreamableHTTPServerTransport({
+  transport = new NodeStreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     enableJsonResponse: true,
     onsessioninitialized: (sessionId) => {
@@ -749,7 +751,7 @@ async function handleStatelessCompatibilityRequest(
   const setupStartedAt = Date.now();
   const pooledServer = statelessServerPool.take();
   const server = pooledServer.value;
-  const transport = new StreamableHTTPServerTransport({
+  const transport = new NodeStreamableHTTPServerTransport({
     sessionIdGenerator: undefined,
     enableJsonResponse: true,
   });
