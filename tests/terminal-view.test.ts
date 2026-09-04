@@ -49,10 +49,11 @@ test("default widget matches the ChatGPT Terminal live surface", () => {
   assert.match(html, /term-success/);
   assert.match(html, /term-overflow/);
   assert.equal(html.includes("terminal-seq"), false);
-  assert.match(html, />Stop</);
-  assert.match(html, />Copy</);
-  assert.match(html, />Pin</);
-  assert.match(html, />Expand</);
+  assert.doesNotMatch(html, />Stop</);
+  assert.doesNotMatch(html, />Copy</);
+  assert.doesNotMatch(html, />Pin</);
+  assert.doesNotMatch(html, />Expand</);
+  assert.doesNotMatch(html, /aria-label="Terminal actions"/);
   assert.equal(html.includes("2 lines"), false);
   assert.equal(html.includes("›_"), false);
 });
@@ -177,6 +178,11 @@ test("terminal CSS preserves the reference desktop and mobile geometry", () => {
   assert.equal(css.includes("82vh"), false);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.terminal-output\s*\{[\s\S]*font-size:\s*11\.5px/);
   assert.match(css, /@media \(max-width: 390px\)[\s\S]*\.terminal-output\s*\{\s*font-size:\s*11px/);
+  assert.match(css, /-webkit-text-size-adjust:\s*100%/);
+  assert.match(css, /touch-action:\s*pan-y/);
+  assert.match(css, /safe-area-inset-left/);
+  assert.match(css, /@media \(max-width: 560px\) and \(orientation: landscape\)/);
+  assert.equal(css.includes(".terminal-toolbar"), false);
   assert.equal(css.includes(".terminal-seq"), false);
   for (const obsoleteSelector of [".terminal-card", ".terminal-meta", ".terminal-actions", ".terminal-mark", ".terminal-target", ".terminal-viewport"]) {
     assert.equal(css.includes(obsoleteSelector), false, `${obsoleteSelector} must not override the reference terminal surface`);

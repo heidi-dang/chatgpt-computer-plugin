@@ -7,16 +7,16 @@ export type TerminalViewProps = {
   connection: string;
   machineLabel?: string;
   targetLabel: string;
-  actionStatus?: string;
-  canStop: boolean;
   follow?: boolean;
   scrollTop?: number;
   onFollowChange?: (follow: boolean) => void;
   onScrollTopChange?: (scrollTop: number) => void;
-  onStop: () => void;
-  onCopy: () => void;
-  onPin: () => void;
-  onExpand: () => void;
+  /** Legacy action props are accepted for compatibility but are intentionally not rendered. */
+  canStop?: boolean;
+  onStop?: () => void;
+  onCopy?: () => void;
+  onPin?: () => void;
+  onExpand?: () => void;
 };
 
 type TerminalDisplayState = "connecting" | "working" | "live" | "waiting" | "reconnecting" | "offline" | "exited" | "closed" | "failed";
@@ -216,16 +216,10 @@ export function TerminalView({
   connection,
   machineLabel = "Connecting to computer",
   targetLabel,
-  actionStatus = "",
-  canStop,
   follow: controlledFollow,
   scrollTop = 0,
   onFollowChange,
   onScrollTopChange,
-  onStop,
-  onCopy,
-  onPin,
-  onExpand,
 }: TerminalViewProps) {
   const output = useRef<HTMLPreElement>(null);
   const scrollFrame = useRef<number | null>(null);
@@ -289,15 +283,6 @@ export function TerminalView({
           </span>
         </div>
         <div className="terminal-path" title={targetLabel}>{targetLabel}</div>
-        <div className="terminal-toolbar">
-          <span className="action-status" role="status" aria-live="polite">{actionStatus}</span>
-          <div className="terminal-actions" role="group" aria-label="Terminal actions">
-            <button type="button" disabled={!canStop} onClick={onStop}>Stop</button>
-            <button type="button" onClick={onCopy}>Copy</button>
-            <button type="button" onClick={onPin}>Pin</button>
-            <button type="button" onClick={onExpand}>Expand</button>
-          </div>
-        </div>
       </div>
     </header>
 

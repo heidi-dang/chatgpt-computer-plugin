@@ -15,7 +15,7 @@ import {
   type WorkbenchEvent,
   type WorkbenchState,
 } from "./state.js";
-import { requestHostDisplayMode, type DisplayModeBridge } from "./display-mode.js";
+import type { DisplayModeBridge } from "./display-mode.js";
 import { TerminalView } from "./terminal-view.js";
 import { BrowserSurface } from "./browser-surface.js";
 import { CPTR_APP_VERSION } from "./version.js";
@@ -663,7 +663,7 @@ function targetLabel(meta: LiveMetadata | null): string {
 function OwnedWorkbench() {
   const [state, setState] = useState(initialWorkbenchState);
   const [actionStatus, setActionStatus] = useState("");
-  const callTool = useMcpBridge();
+  useMcpBridge();
   const [promptMetadata, setPromptMetadata] = useState<PromptMetadata | null>(() => findPromptMetadata(hostBridge()?.toolResponseMetadata));
   const liveStreamingEnabled = promptMetadata?.streamingEnabled === true;
   const [meta, setMeta] = useState<LiveMetadata | null>(null);
@@ -674,8 +674,6 @@ function OwnedWorkbench() {
   const targetConnection = useLiveSession(meta, setMeta, setState, liveStreamingEnabled);
   const connection = meta?.targetId && !isTerminalWorkbenchStatus(state.status) ? targetConnection : promptConnection;
   const visibleTarget = useRef<string | null>(null);
-  const isCommand = meta?.targetType === "command" && !!meta.targetId && !!meta.workspaceId;
-  const canControl = !!meta?.targetType && ["RUNNING", "WORKING", "CONNECTING", "APPROVAL_REQUIRED"].includes(state.status);
   const displayStatus = meta?.targetType && meta.targetId ? state.status : "CONNECTING";
 
   useEffect(() => {
@@ -686,57 +684,6 @@ function OwnedWorkbench() {
   }, [meta?.targetType, meta?.targetId, meta?.workspaceId]);
 
   useWorkbenchAutoSize();
-
-  const stop = async () => {
-    if (!meta?.targetType || !meta.targetId) return;
-    setActionStatus("requesting stop…");
-    try {
-      if (isCommand) {
-        await callTool("cptr_code_cancel_command", {
-          workspace_id: meta.workspaceId!,
-          command_id: meta.targetId,
-        });
-      } else if (meta.targetType === "task") {
-        await callTool("cptr_cancel_task", { task_id: meta.targetId });
-      } else {
-        await callTool("cptr_cancel_autonomous", { monitor_id: meta.targetId });
-      }
-      setActionStatus("stop requested");
-    } catch {
-      setActionStatus("stop request failed");
-    }
-  };
-
-  const copyTranscript = async () => {
-    try {
-      await navigator.clipboard.writeText(state.transcript.map((row) => row.text).join("\n"));
-      setActionStatus("transcript copied");
-    } catch {
-      setActionStatus("copy unavailable");
-    }
-  };
-
-  const pin = async () => {
-    try {
-      const granted = await requestHostDisplayMode(hostBridge(), "pip");
-      if (!granted) setActionStatus("pinning is unavailable in this host");
-      else if (granted === "pip") setActionStatus("terminal pinned");
-      else setActionStatus(`host granted ${granted} mode`);
-    } catch {
-      setActionStatus("could not pin live terminal");
-    }
-  };
-
-  const expand = async () => {
-    try {
-      const granted = await requestHostDisplayMode(hostBridge(), "fullscreen");
-      if (!granted) setActionStatus("expanded display is unavailable in this host");
-      else if (granted !== "fullscreen") setActionStatus(`host granted ${granted} mode`);
-      else setActionStatus("");
-    } catch {
-      setActionStatus("could not expand live terminal");
-    }
-  };
 
   return <main className="terminal-workbench" aria-label="CPTR live computer">
     <div className="surface-switch" role="group" aria-label="Live computer surface">
@@ -763,16 +710,10 @@ function OwnedWorkbench() {
           connection={connection}
           machineLabel={meta?.targetId || promptConnection === "prompt live" ? "CPTR Computer" : "Connecting to computer"}
           targetLabel={targetLabel(meta)}
-          actionStatus={actionStatus}
-          canStop={canControl}
           follow={terminalViewState.follow}
           scrollTop={terminalViewState.scrollTop}
           onFollowChange={(follow) => setTerminalViewState((current) => ({ ...current, follow }))}
           onScrollTopChange={(scrollTop) => setTerminalViewState((current) => ({ ...current, scrollTop }))}
-          onStop={() => void stop()}
-          onCopy={() => void copyTranscript()}
-          onPin={() => void pin()}
-          onExpand={() => void expand()}
         />}
   </main>;
 }
