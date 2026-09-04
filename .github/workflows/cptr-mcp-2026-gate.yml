@@ -11,40 +11,158 @@ permissions:
 jobs:
   gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-      - name: Apply RFC 9207 issuer binding fix
+      - name: Migrate MCP SDK v1 imports to v2
+        run: npx --yes @modelcontextprotocol/codemod@latest v1-to-v2 .
+      - name: Reject unresolved codemod markers
+        run: |
+          if grep -R -n --exclude-dir=node_modules --exclude-dir=.git '@mcp-codemod-error' .; then
+            echo 'Unresolved MCP v2 codemod markers found.' >&2
+            exit 1
+          fi
+      - name: Add strict MCP 2026-07-28 HTTP serving path
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          path = Path('server/oauth-server.ts')
+
+          path = Path('server/index.ts')
           text = path.read_text()
+
+          if 'import { createMcpHandler } from "@modelcontextprotocol/server";' not in text:
+              text = text.replace(
+                  'import { randomUUID } from "node:crypto";\n',
+                  'import { randomUUID } from "node:crypto";\nimport { createMcpHandler } from "@modelcontextprotocol/server";\nimport { toNodeHandler } from "@modelcontextprotocol/node";\n',
+                  1,
+              )
+
+          single_header = '''function singleHeader(req: IncomingMessage, name: string): string | undefined {
+            const value = req.headers[name];
+            return Array.isArray(value) ? value[0] : value;
+          }
+          '''
+          cors_helper = '''function singleHeader(req: IncomingMessage, name: string): string | undefined {
+            const value = req.headers[name];
+            return Array.isArray(value) ? value[0] : value;
+          }
+
+          function mcpCorsAllowedHeaders(req: IncomingMessage): string {
+            const defaults = [
+              "Content-Type",
+              "Authorization",
+              "Accept",
+              "Mcp-Session-Id",
+              "MCP-Protocol-Version",
+              "Mcp-Method",
+              "Mcp-Name",
+            ];
+            const requested = singleHeader(req, "access-control-request-headers");
+            if (!requested) return defaults.join(", ");
+            const fixed = new Set(defaults.map((header) => header.toLowerCase()));
+            const allowed = requested
+              .split(",")
+              .map((header) => header.trim())
+              .filter(Boolean)
+              .filter((header) => fixed.has(header.toLowerCase()) || /^mcp-param-[!#$%&'*+.^_`|~0-9a-z-]+$/i.test(header));
+            // MCP 2026 Mcp-Param-* names are method-specific, so reflect only
+            // validated requested parameter headers for an already-allowed Origin.
+            return allowed.length ? allowed.join(", ") : defaults.join(", ");
+          }
+          '''
+          if 'function mcpCorsAllowedHeaders' not in text:
+              if single_header not in text:
+                  raise SystemExit('singleHeader insertion point not found')
+              text = text.replace(single_header, cors_helper, 1)
+
+          marker = '\n}\n\nconst configuredStatelessPoolSize ='
+          modern_handler = '''
+          }
+
+          const modernMcpHandler = createMcpHandler(createSessionServer, {
+            legacy: "reject",
+            responseMode: "json",
+            onerror: (error) => {
+              console.error("MCP 2026 handler error", error.message);
+            },
+          });
+          const modernMcpNodeHandler = toNodeHandler(modernMcpHandler);
+
+          const configuredStatelessPoolSize ='''
+          if 'const modernMcpHandler = createMcpHandler' not in text:
+              if marker not in text:
+                  raise SystemExit('modern handler insertion point not found')
+              text = text.replace(marker, modern_handler, 1)
+
           text = text.replace(
-              'location: appendRedirectParams(details.redirectUri, { error: "access_denied", state: details.state }),',
-              'location: appendRedirectParams(details.redirectUri, { error: "access_denied", state: details.state, iss: this.issuer }),',
+              '"Access-Control-Allow-Headers": "Content-Type, Authorization, Accept, Mcp-Session-Id, MCP-Protocol-Version",',
+              '"Access-Control-Allow-Headers": mcpCorsAllowedHeaders(req),',
           )
           text = text.replace(
-              'location: appendRedirectParams(details.redirectUri, { code, state: details.state }),',
-              'location: appendRedirectParams(details.redirectUri, { code, state: details.state, iss: this.issuer }),',
+              'res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Mcp-Session-Id, MCP-Protocol-Version");',
+              'res.setHeader("Access-Control-Allow-Headers", mcpCorsAllowedHeaders(req));',
           )
+
+          route_marker = '''  const identity = authIdentity(auth);
+
+          res.setHeader("Access-Control-Allow-Headers", mcpCorsAllowedHeaders(req));
+          '''
+          modern_route = '''  const identity = authIdentity(auth);
+
+          res.setHeader("Access-Control-Allow-Headers", mcpCorsAllowedHeaders(req));
+
+          const requestedProtocolVersion = singleHeader(req, "mcp-protocol-version");
+          const requestedMcpMethod = singleHeader(req, "mcp-method");
+          if (requestedProtocolVersion === "2026-07-28" || requestedMcpMethod) {
+            const requestedMcpName = singleHeader(req, "mcp-name");
+            const contentLengthHeader = singleHeader(req, "content-length");
+            const declaredLength = contentLengthHeader ? Number(contentLengthHeader) : Number.NaN;
+            const modernTrafficBody = {
+              method: requestedMcpMethod ?? "server/discover",
+              ...(requestedMcpName ? { params: { name: requestedMcpName } } : {}),
+            };
+            await handleWithTraffic(
+              req,
+              res,
+              {
+                body: modernTrafficBody,
+                requestBytes: Number.isFinite(declaredLength) && declaredLength >= 0 ? declaredLength : null,
+                sessionId: null,
+                client: trafficClientFromRequest(req, modernTrafficBody),
+                requestStartedAt,
+              },
+              async () => {
+                await modernMcpNodeHandler(req, res);
+              },
+            );
+            return;
+          }
+          '''
+          if 'requestedProtocolVersion === "2026-07-28"' not in text:
+              if route_marker not in text:
+                  raise SystemExit('modern route insertion point not found')
+              text = text.replace(route_marker, modern_route, 1)
+
           path.write_text(text)
           PY
-      - run: npm ci
+      - name: Refresh lockfile and install migrated SDK
+        run: npm install
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
-      - name: Commit verified OAuth fix
+      - name: Commit verified MCP 2026 migration
         if: success()
         run: |
-          if ! git diff --quiet -- server/oauth-server.ts; then
+          if ! git diff --quiet; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add server/oauth-server.ts
-            git commit -m 'fix: bind OAuth authorization responses to issuer'
+            git add -A
+            git commit -m 'feat: support MCP 2026-07-28 protocol'
             git push
           fi
