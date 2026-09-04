@@ -9,6 +9,7 @@ export type OAuthClientMetadata = {
   clientName: string;
   redirectUris: string[];
   tokenEndpointAuthMethod: "none";
+  applicationType: "native" | "web";
 };
 
 export type DynamicClientRegistrationInput = {
@@ -17,6 +18,7 @@ export type DynamicClientRegistrationInput = {
   grant_types?: unknown;
   response_types?: unknown;
   token_endpoint_auth_method?: unknown;
+  application_type?: unknown;
 };
 
 const DCR_PREFIX = "urn:cptr:oauth-client:";
@@ -64,6 +66,7 @@ function normalizedClientMetadata(input: {
   grantTypes?: unknown;
   responseTypes?: unknown;
   tokenEndpointAuthMethod?: unknown;
+  applicationType?: unknown;
 }): OAuthClientMetadata {
   const clientName = typeof input.clientName === "string" ? input.clientName.trim() : "";
   if (!clientName || clientName.length > 160) throw new Error("client_name is required");
@@ -78,7 +81,17 @@ function normalizedClientMetadata(input: {
   }
   const authMethod = input.tokenEndpointAuthMethod ?? "none";
   if (authMethod !== "none") throw new Error("only public clients using token_endpoint_auth_method=none are supported");
-  return { clientId: input.clientId, clientName, redirectUris: normalizedRedirects, tokenEndpointAuthMethod: "none" };
+  const applicationType = input.applicationType ?? "web";
+  if (applicationType !== "native" && applicationType !== "web") {
+    throw new Error("application_type must be native or web");
+  }
+  return {
+    clientId: input.clientId,
+    clientName,
+    redirectUris: normalizedRedirects,
+    tokenEndpointAuthMethod: "none",
+    applicationType,
+  };
 }
 
 export async function issueDynamicClientId(
@@ -92,6 +105,7 @@ export async function issueDynamicClientId(
     grantTypes: input.grant_types,
     responseTypes: input.response_types,
     tokenEndpointAuthMethod: input.token_endpoint_auth_method,
+    applicationType: input.application_type,
   });
   const issuedAt = Math.floor(Date.now() / 1000);
   const registration = await new SignJWT({
@@ -99,6 +113,7 @@ export async function issueDynamicClientId(
     client_name: provisional.clientName,
     redirect_uris: provisional.redirectUris,
     token_endpoint_auth_method: "none",
+    application_type: provisional.applicationType,
   })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setIssuer(config.issuer)
@@ -126,6 +141,7 @@ async function resolveDynamicClientId(
     clientName: payload.client_name,
     redirectUris: payload.redirect_uris,
     tokenEndpointAuthMethod: payload.token_endpoint_auth_method,
+    applicationType: payload.application_type,
   });
 }
 
@@ -225,6 +241,7 @@ async function resolveCimdClientId(clientId: string): Promise<OAuthClientMetadat
     grantTypes: record.grant_types,
     responseTypes: record.response_types,
     tokenEndpointAuthMethod: record.token_endpoint_auth_method,
+    applicationType: record.application_type,
   });
   if (metadataCache.size >= MAX_CACHE_ENTRIES) metadataCache.delete(metadataCache.keys().next().value as string);
   metadataCache.set(clientId, { metadata, expiresAt: Date.now() + cacheMs });
