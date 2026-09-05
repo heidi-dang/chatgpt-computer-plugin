@@ -344,13 +344,14 @@ export class NativeOAuthServer {
       return;
     }
     try {
-      if (req.headers.authorization) throw new Error("token endpoint client authentication is not supported for public MCP clients");
       const form = await readForm(req);
+      console.log("DEBUG /oauth/token HEADERS:", JSON.stringify(req.headers));
+      console.log("DEBUG /oauth/token BODY:", JSON.stringify(Object.fromEntries(form.entries())));
       const grantType = form.get("grant_type") ?? "";
       const clientId = form.get("client_id")?.trim() ?? "";
-      const resource = form.get("resource")?.trim() ?? "";
-      if (!clientId || !resource) throw new Error("client_id and resource are required");
-      if (resource !== this.resource) throw new Error("resource does not match this MCP server");
+      const resource = form.get("resource")?.trim() || this.resource;
+      if (!clientId) throw new Error("client_id is required");
+      if (resource && resource !== this.resource) throw new Error("resource does not match this MCP server");
       await resolveOAuthClient(clientId, { issuer: this.issuer, secret: this.secret });
 
       if (grantType === "authorization_code") {
@@ -360,7 +361,7 @@ export class NativeOAuthServer {
         if (!code || !PKCE_VERIFIER.test(verifier)) throw new Error("code and a valid PKCE code_verifier are required");
         const record = this.state.consumeAuthorizationCode(code);
         if (!record) throw new Error("authorization code is invalid, expired, or already used");
-        if (record.clientId !== clientId || record.redirectUri !== redirectUri || record.resource !== resource) {
+        if (record.clientId !== clientId || record.redirectUri !== redirectUri || (resource && record.resource !== resource)) {
           throw new Error("authorization code binding does not match the token request");
         }
         if (!safeEqual(pkceS256(verifier), record.codeChallenge)) throw new Error("PKCE verification failed");
