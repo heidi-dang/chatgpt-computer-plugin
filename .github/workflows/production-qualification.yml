@@ -4,9 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       expected_release_sha:
-        description: Immutable Git SHA that AWS must be serving
+        description: Full 40-character Git SHA expected to be live
         required: true
         type: string
+  schedule:
+    - cron: "43 3 * * *"
 
 concurrency:
   group: production-qualification
@@ -16,16 +18,53 @@ permissions:
   contents: read
 
 jobs:
-  qualify:
-    name: Public edge and deployed MCP
+  public-edge:
+    name: Public OAuth/MCP edge canary
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
+    env:
+      CPTR_DEPLOYED_MCP_URL: ${{ vars.CPTR_DEPLOYED_MCP_URL }}
+      CPTR_DEPLOYED_PUBLIC_ORIGIN: ${{ vars.CPTR_DEPLOYED_PUBLIC_ORIGIN }}
+    steps:
+      - name: Require production endpoint configuration
+        run: |
+          test -n "$CPTR_DEPLOYED_MCP_URL" || test -n "$CPTR_DEPLOYED_PUBLIC_ORIGIN"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_release_sha || github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify public edge through Cloudflare
+        run: npm run check:public-edge
+
+  authenticated-contract:
+    name: Authenticated MCP 2026 contract
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: public-edge
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       CPTR_DEPLOYED_MCP_URL: ${{ vars.CPTR_DEPLOYED_MCP_URL }}
       CPTR_DEPLOYED_PUBLIC_ORIGIN: ${{ vars.CPTR_DEPLOYED_PUBLIC_ORIGIN }}
       CPTR_DEPLOYED_MCP_TOKEN: ${{ secrets.CPTR_DEPLOYED_MCP_TOKEN }}
       CPTR_EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
     steps:
+      - name: Require immutable release and bearer configuration
+        run: |
+          test -n "$CPTR_DEPLOYED_MCP_URL"
+          test -n "$CPTR_DEPLOYED_MCP_TOKEN"
+          printf '%s' "$CPTR_EXPECTED_RELEASE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+
       - name: Checkout expected release
         uses: actions/checkout@v4
         with:
@@ -40,15 +79,5 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Verify required production configuration
-        shell: bash
-        run: |
-          test -n "$CPTR_DEPLOYED_MCP_URL"
-          test -n "$CPTR_DEPLOYED_MCP_TOKEN"
-          test -n "$CPTR_EXPECTED_RELEASE_SHA"
-
-      - name: Verify public OAuth and MCP edge
-        run: npm run check:public-edge
-
-      - name: Verify deployed MCP 2026 contract and release SHA
+      - name: Verify deployed MCP 2026 contract and exact release SHA
         run: npm run check:deployed-contract

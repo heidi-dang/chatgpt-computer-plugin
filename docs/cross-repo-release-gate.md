@@ -83,7 +83,7 @@ The plugin repository has three independent workflows:
 
 - **Plugin CI** — typecheck, test, production build.
 - **Cross-repo contract** — checks out backend `main` and extension `main`, then requires exact browser-contract convergence. It also runs daily so drift caused by a later merge in another repository is detected even when the plugin repository did not change.
-- **Production qualification** — manual post-deploy gate that checks the public edge first and then the authenticated MCP `2026-07-28` contract at an operator-supplied immutable release SHA.
+- **Production qualification** — runs a daily unauthenticated public-edge canary through Cloudflare and also supports a manual post-deploy gate that checks the authenticated MCP `2026-07-28` contract at an operator-supplied immutable release SHA.
 
 The Chrome extension has its own CI workflow running `npm run check` on pull requests and `main`.
 
@@ -193,6 +193,35 @@ The verifier uses the official MCP v2 client and pins negotiation to `2026-07-28
 
 The release is rejected if any of these drift.
 
+## Host systemd release qualification
+
+Production must have exactly one systemd drop-in with authority to select the immutable release. Historical drop-ins may remain only if they do not redefine `WorkingDirectory`, `ExecStart`, `NODE_ENV`, `CPTR_HOT_RELOAD`, `CPTR_WORKBENCH_BUILD_ID`, or `GIT_COMMIT_SHA`.
+
+Run the host gate on AWS with operator-configured values rather than hardcoded paths:
+
+```bash
+CPTR_SYSTEMD_UNIT="$CPTR_SYSTEMD_UNIT" \
+CPTR_RELEASE_ROOT="$CPTR_RELEASE_ROOT" \
+CPTR_RELEASE_DROPIN_PATH="$CPTR_RELEASE_DROPIN_PATH" \
+CPTR_NODE_BIN="$CPTR_NODE_BIN" \
+CPTR_EXPECTED_RELEASE_SHA="$CPTR_EXPECTED_RELEASE_SHA" \
+npm run check:host-release
+```
+
+The gate requires:
+
+- a full 40-character target Git SHA
+- effective `WorkingDirectory` equal to that immutable release directory
+- effective `ExecStart` pointing to that release's compiled server
+- the configured canonical release drop-in to be active
+- no second drop-in with release-selection authority
+- `NODE_ENV=production`
+- `CPTR_HOT_RELOAD=0`
+- build ID and `GIT_COMMIT_SHA` equal to the target SHA
+- systemd `active/running`
+
+This specifically prevents lexical drop-in ordering from silently selecting an old release.
+
 ## Release-SHA convergence
 
 The intended revision must be one immutable Git SHA. Set that SHA as `CPTR_EXPECTED_RELEASE_SHA` for post-deploy verification.
@@ -232,13 +261,14 @@ The production plugin deployment is accepted only in this order:
 4. Build immutable release from the recorded SHA.
 5. Install production dependencies/build artifacts without mutating source.
 6. Switch `cptr-mcp.service` to that immutable release and restart the service.
-7. Verify systemd reports active/running and the expected release directory.
-8. Run `npm run check:public-edge` through Cloudflare.
-9. Run `npm run check:deployed-contract` with `CPTR_EXPECTED_RELEASE_SHA`.
-10. Verify `cptr_plugin_update` reports the expected contract/release.
-11. If MCP action schemas changed, perform ChatGPT's native app Refresh/review and verify again.
+7. Run `npm run check:host-release` and require exactly one release-authority systemd drop-in.
+8. Verify systemd reports active/running and the expected release directory.
+9. Run `npm run check:public-edge` through Cloudflare.
+10. Run `npm run check:deployed-contract` with `CPTR_EXPECTED_RELEASE_SHA`.
+11. Verify `cptr_plugin_update` reports the expected contract/release.
+12. If MCP action schemas changed, perform ChatGPT's native app Refresh/review and verify again.
 
-Do not skip gates 8–10 because the health endpoint is green.
+Do not skip gates 7–11 because the health endpoint is green.
 
 ## Rollback
 
@@ -288,6 +318,7 @@ A cross-repo change is complete only when:
 - all three browser manifests are identical and implementation-consistent
 - extension working tree has no generated release pollution
 - public OAuth/MCP edge qualification passes
+- host systemd release qualification proves one release-authority drop-in
 - deployed contract pins MCP `2026-07-28` and passes
 - deployed SHA equals the intended SHA
 - documentation describes any new invariant or migration rule

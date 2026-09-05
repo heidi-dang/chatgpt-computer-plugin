@@ -10,6 +10,7 @@
     "copy:web": "node scripts/copy-workbench-assets.mjs",
     "check:cross-repo-contract": "node scripts/check-cross-repo-browser-contract.mjs",
     "check:public-edge": "node scripts/check-public-edge.mjs",
+    "check:host-release": "node scripts/check-host-release.mjs",
     "check:deployed-contract": "node scripts/check-deployed-contract.mjs",
     "check:release": "npm run typecheck && npm test && npm run build && npm run check:cross-repo-contract",
     "check:mcp-traffic-integration": "node scripts/check-mcp-traffic-integration.mjs",
