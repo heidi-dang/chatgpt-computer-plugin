@@ -132,8 +132,12 @@ if (discoverChallenge.status !== 401) {
   throw new Error(`unauthenticated MCP 2026 discovery returned HTTP ${discoverChallenge.status}, expected 401; body=${sample || "<empty>"}`);
 }
 const challenge = discoverChallenge.headers.get("www-authenticate") ?? "";
+const advertisedResourceMetadata = challenge.match(/resource_metadata="([^"]+)"/)?.[1] ?? null;
 if (!challenge.includes("resource_metadata=") || !challenge.includes("/.well-known/oauth-protected-resource/mcp")) {
-  throw new Error("MCP 401 challenge does not point to canonical RFC 9728 protected-resource metadata");
+  throw new Error(
+    `MCP 401 challenge does not point to canonical RFC 9728 protected-resource metadata; got ${advertisedResourceMetadata ?? "<missing>"}. ` +
+    "If the URL is under /.well-known/cloudflare-access-protected-resource/, Cloudflare Access Managed OAuth is intercepting /mcp and must be disabled for that route.",
+  );
 }
 
 console.log(`CPTR public edge verified at ${origin}: health, RFC 9728, OAuth metadata, DCR, token POST/WAF path, and MCP 2026 auth challenge.`);

@@ -52,6 +52,68 @@ test("DCR preserves MCP 2026 application_type for native clients", async () => {
   }
 });
 
+test("DCR accepts Claude, Gemini, and Grok-compatible redirect shapes", async () => {
+  const oauth = new NativeOAuthServer({
+    issuer: "https://mcp.example.test",
+    resource: "https://mcp.example.test/mcp",
+    scopes: ["mcp"],
+    secret: "s".repeat(48),
+    stateDbPath: ":memory:",
+  });
+  const authServer = await listen(async (req, res) => {
+    if (req.url === "/oauth/register") return oauth.handleRegister(req, res);
+    res.writeHead(404).end();
+  });
+
+  const clients = [
+    {
+      client_name: "Claude",
+      redirect_uris: [
+        "https://claude.ai/api/mcp/auth_callback",
+        "https://claude.com/api/mcp/auth_callback",
+      ],
+      application_type: "web",
+    },
+    {
+      client_name: "Gemini CLI",
+      redirect_uris: ["http://localhost:43123/oauth/callback"],
+      application_type: "native",
+    },
+    {
+      client_name: "Grok hosted MCP connector",
+      redirect_uris: ["https://grok.com/connectors/oauth/callback"],
+      application_type: "web",
+    },
+  ] as const;
+
+  try {
+    for (const client of clients) {
+      const response = await fetch(`${authServer.origin}/oauth/register`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...client,
+          grant_types: ["authorization_code", "refresh_token"],
+          response_types: ["code"],
+          token_endpoint_auth_method: "none",
+        }),
+      });
+      assert.equal(response.status, 201, `${client.client_name} registration should succeed`);
+      const body = await response.json() as {
+        client_id?: string;
+        redirect_uris?: string[];
+        application_type?: string;
+      };
+      assert.match(body.client_id ?? "", /^urn:cptr:oauth-client:/);
+      assert.deepEqual(body.redirect_uris, [...client.redirect_uris]);
+      assert.equal(body.application_type, client.application_type);
+    }
+  } finally {
+    await authServer.close();
+    oauth.close();
+  }
+});
+
 test("authorization response returns RFC 9207 iss bound to the OAuth issuer", async () => {
   const issuer = "https://mcp.example.test";
   const resource = `${issuer}/mcp`;

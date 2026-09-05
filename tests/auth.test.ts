@@ -3,6 +3,7 @@ import test from "node:test";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { isMcpRequestAuthorized } from "../server/auth.js";
 import {
+  authenticateCloudflareLoginIdentity,
   authenticateMcpRequest,
   createBearerChallenge,
   createProtectedResourceMetadata,
@@ -72,6 +73,23 @@ test("accepts a valid Cloudflare Access assertion for the configured resource", 
     email: "heidi.dang.dev@gmail.com",
     subject: "test-subject",
   });
+});
+
+test("Cloudflare-backed OAuth login fails closed without an Access assertion", async () => {
+  const { publicKey } = await generateKeyPair("RS256");
+  const jwk = await exportJWK(publicKey);
+  const jwks = createLocalJWKSet({ keys: [{ ...jwk, kid: "test-key", alg: "RS256", use: "sig" }] });
+
+  const identity = await authenticateCloudflareLoginIdentity(undefined, {
+    issuer: "https://issuer.example.test",
+    audience: "test-audience",
+    resource: "https://mcp.example.test/mcp",
+    allowedEmail: "user@example.test",
+    requiredScopes: [],
+    jwks,
+  });
+
+  assert.equal(identity, null);
 });
 
 test("accepts a short-lived resource-bound native OAuth access token", async () => {

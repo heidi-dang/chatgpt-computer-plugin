@@ -155,3 +155,15 @@ export async function authenticateMcpRequest(
       : "MCP authentication is not configured",
   );
 }
+
+export async function authenticateCloudflareLoginIdentity(
+  assertion: string | undefined,
+  config: CloudflareAccessConfig,
+): Promise<{ subject: string; email: string } | null> {
+  const result = await authenticateMcpRequest(
+    { cloudflareAssertion: assertion },
+    { staticToken: undefined, cloudflare: config },
+  );
+  if (!result.authorized || result.mechanism !== "cloudflare") return null;
+  return { subject: result.subject, email: result.email };
+}
