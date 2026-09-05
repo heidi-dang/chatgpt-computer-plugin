@@ -345,8 +345,6 @@ export class NativeOAuthServer {
     }
     try {
       const form = await readForm(req);
-      console.log("DEBUG /oauth/token HEADERS:", JSON.stringify(req.headers));
-      console.log("DEBUG /oauth/token BODY:", JSON.stringify(Object.fromEntries(form.entries())));
       const grantType = form.get("grant_type") ?? "";
       const clientId = form.get("client_id")?.trim() ?? "";
       const resource = form.get("resource")?.trim() || this.resource;

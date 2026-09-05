@@ -1,0 +1,54 @@
+name: Production qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_release_sha:
+        description: Immutable Git SHA that AWS must be serving
+        required: true
+        type: string
+
+concurrency:
+  group: production-qualification
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    name: Public edge and deployed MCP
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CPTR_DEPLOYED_MCP_URL: ${{ vars.CPTR_DEPLOYED_MCP_URL }}
+      CPTR_DEPLOYED_PUBLIC_ORIGIN: ${{ vars.CPTR_DEPLOYED_PUBLIC_ORIGIN }}
+      CPTR_DEPLOYED_MCP_TOKEN: ${{ secrets.CPTR_DEPLOYED_MCP_TOKEN }}
+      CPTR_EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
+    steps:
+      - name: Checkout expected release
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.expected_release_sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify required production configuration
+        shell: bash
+        run: |
+          test -n "$CPTR_DEPLOYED_MCP_URL"
+          test -n "$CPTR_DEPLOYED_MCP_TOKEN"
+          test -n "$CPTR_EXPECTED_RELEASE_SHA"
+
+      - name: Verify public OAuth and MCP edge
+        run: npm run check:public-edge
+
+      - name: Verify deployed MCP 2026 contract and release SHA
+        run: npm run check:deployed-contract

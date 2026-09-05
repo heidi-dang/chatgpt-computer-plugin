@@ -4,6 +4,10 @@ Thin MCP adapter for `heidi-dang/computer`. CPTR remains responsible for executi
 
 Task and autonomous creation results hydrate an inline MCP Apps Live Workbench. The widget is a view over CPTR's server-authoritative event stream; it does not run workers or replace the existing MCP tools. The MCP connection may end while CPTR continues the server-side autonomous monitor.
 
+## Cross-repo release gate
+
+The plugin, CPTR backend, and paired Chrome extension are one compatibility unit. Follow [`docs/cross-repo-release-gate.md`](docs/cross-repo-release-gate.md) for the shared browser protocol manifest, CI/release order, Cloudflare/OAuth boundary, public-edge qualification, MCP `2026-07-28` deployed-contract verification, release-SHA convergence, rollback, and incident evidence requirements. A healthy `/health` response or a currently connected ChatGPT app is not sufficient release evidence by itself.
+
 ## Setup
 
 ```bash
@@ -25,6 +29,7 @@ The public plugin origin also forwards only `/api/browser-device/v1/*` HTTP/WebS
 npm run build
 npm test
 npm run typecheck
+npm run check:cross-repo-contract
 npm run dev
 ```
 

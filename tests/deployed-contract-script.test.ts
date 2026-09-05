@@ -24,3 +24,10 @@ test("deployed contract verifier tracks the current 90-action update-center cont
   assert.match(source, /const expectedContractVersion = packageMetadata\.version;/);
   assert.match(source, /health\?\.app_version !== expectedContractVersion/);
 });
+
+test("deployed contract verifier pins the modern MCP 2026-07-28 era", () => {
+  assert.match(source, /versionNegotiation/);
+  assert.match(source, /2026-07-28/);
+  assert.doesNotMatch(source, /2026-01-26/);
+  assert.doesNotMatch(source, /rpc\("initialize"/);
+});

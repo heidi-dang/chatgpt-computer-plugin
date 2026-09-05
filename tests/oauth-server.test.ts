@@ -187,3 +187,42 @@ test("DCR authorization-code flow binds resource and PKCE and rotates refresh to
     oauth.close();
   }
 });
+
+test("OAuth token handling never logs credentials or grant material", async () => {
+  const oauth = new NativeOAuthServer({
+    issuer: "https://mcp.example.test",
+    resource: "https://mcp.example.test/mcp",
+    scopes: ["mcp"],
+    secret: "s".repeat(48),
+    stateDbPath: ":memory:",
+  });
+  const authServer = await listen(async (req, res) => {
+    if (req.url === "/oauth/token") return oauth.handleToken(req, res);
+    res.writeHead(404).end();
+  });
+  const originalLog = console.log;
+  const captured: unknown[][] = [];
+  console.log = (...args: unknown[]) => { captured.push(args); };
+
+  try {
+    const response = await fetch(`${authServer.origin}/oauth/token`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        authorization: "Bearer must-not-be-logged",
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: "invalid-client",
+        refresh_token: "refresh-secret-must-not-be-logged",
+        resource: "https://mcp.example.test/mcp",
+      }),
+    });
+    assert.equal(response.status, 400);
+    assert.deepEqual(captured, []);
+  } finally {
+    console.log = originalLog;
+    await authServer.close();
+    oauth.close();
+  }
+});

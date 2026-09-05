@@ -38,7 +38,8 @@ test("package.json is the canonical CPTR Computer application version", () => {
 test("server, deployment verifier, and Workbench derive version from the canonical package version", () => {
   assert.match(indexSource, /app_version: CPTR_APP_VERSION/);
   assert.match(deployedCheckSource, /const expectedContractVersion = packageMetadata\.version/);
-  assert.match(deployedCheckSource, /clientInfo: \{ name: "cptr-deployed-contract-check", version: expectedContractVersion \}/);
+  assert.match(deployedCheckSource, /\{ name: "cptr-deployed-contract-check", version: expectedContractVersion \}/);
+  assert.match(deployedCheckSource, /versionNegotiation: \{ mode: \{ pin: "2026-07-28" \} \}/);
   assert.match(buildSource, /__CPTR_APP_VERSION__: JSON\.stringify\(version\)/);
   assert.match(devSource, /__CPTR_APP_VERSION__: JSON\.stringify\(appVersion\)/);
   assert.match(workbenchSource, /clientInfo: \{ name: "cptr-live-terminal", version: CPTR_APP_VERSION \}/);

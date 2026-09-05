@@ -1,7 +1,9 @@
 import { readFileSync } from "node:fs";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 
 const endpoint = process.env.CPTR_DEPLOYED_MCP_URL?.trim();
 const token = process.env.CPTR_DEPLOYED_MCP_TOKEN?.trim();
+const expectedReleaseSha = process.env.CPTR_EXPECTED_RELEASE_SHA?.trim();
 const packageMetadata = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
 const expectedContractVersion = packageMetadata.version;
 if (typeof expectedContractVersion !== "string" || !expectedContractVersion.trim()) {
@@ -112,23 +114,6 @@ if (!endpoint || !token) {
   throw new Error("Set CPTR_DEPLOYED_MCP_URL and CPTR_DEPLOYED_MCP_TOKEN before running the deployed contract check.");
 }
 
-let nextId = 1;
-async function rpc(method, params) {
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      Accept: "application/json, text/event-stream",
-    },
-    body: JSON.stringify({ jsonrpc: "2.0", id: nextId++, method, params }),
-  });
-  if (!response.ok) throw new Error(`${method} failed with HTTP ${response.status}`);
-  const payload = await response.json();
-  if (payload.error) throw new Error(`${method} returned ${payload.error.message ?? "an RPC error"}`);
-  return payload.result ?? payload;
-}
-
 function exactSet(actual, expected, label) {
   const actualSorted = [...actual].sort();
   const expectedSorted = [...expected].sort();
@@ -145,6 +130,9 @@ if (!healthResponse.ok) throw new Error(`health check failed with HTTP ${healthR
 const health = await healthResponse.json();
 if (health?.app_version !== expectedContractVersion) {
   throw new Error(`app version drift: expected ${expectedContractVersion}, got ${health?.app_version ?? "missing"}`);
+}
+if (expectedReleaseSha && health?.release !== expectedReleaseSha) {
+  throw new Error(`release SHA drift: expected ${expectedReleaseSha}, got ${health?.release ?? "missing"}`);
 }
 if (health?.workbench?.ready !== true) throw new Error("deployed workbench is not ready");
 if (health?.workbench && "asset_directory" in health.workbench) {
@@ -176,16 +164,28 @@ if (health?.mcp_contract?.tool_count !== expectedPlannedTools.length) {
   throw new Error(`MCP health planned-tool-count drift: expected ${expectedPlannedTools.length}, got ${health?.mcp_contract?.tool_count ?? "missing"}`);
 }
 
-const initialized = await rpc("initialize", {
-  protocolVersion: "2026-01-26",
-  capabilities: {},
-  clientInfo: { name: "cptr-deployed-contract-check", version: expectedContractVersion },
+const client = new Client(
+  { name: "cptr-deployed-contract-check", version: expectedContractVersion },
+  {
+    capabilities: {},
+    versionNegotiation: { mode: { pin: "2026-07-28" } },
+  },
+);
+const transport = new StreamableHTTPClientTransport(new URL(endpoint), {
+  authProvider: { token: async () => token },
 });
-const serverInstructions = typeof initialized?.instructions === "string" ? initialized.instructions : "";
-if (!serverInstructions.includes("client_model") || !serverInstructions.includes("current model")) {
-  throw new Error("MCP initialize instructions do not require current-model self-reporting via client_model");
+await client.connect(transport);
+if (client.getProtocolEra() !== "modern") {
+  throw new Error(`MCP protocol-era drift: expected modern, got ${client.getProtocolEra()}`);
 }
-const tools = await rpc("tools/list", {});
+if (client.getNegotiatedProtocolVersion() !== "2026-07-28") {
+  throw new Error(`MCP protocol-version drift: expected 2026-07-28, got ${client.getNegotiatedProtocolVersion() ?? "missing"}`);
+}
+const serverInstructions = client.getInstructions() ?? "";
+if (!serverInstructions.includes("client_model") || !serverInstructions.includes("current model")) {
+  throw new Error("MCP discover instructions do not require current-model self-reporting via client_model");
+}
+const tools = await client.listTools();
 exactSet((tools.tools ?? []).map((tool) => tool.name), expectedTools, "tool contract");
 if ((tools.tools ?? []).length !== expectedRegisteredToolCount) {
   throw new Error(`MCP registered-tool-count drift: expected ${expectedRegisteredToolCount}, got ${(tools.tools ?? []).length}`);
@@ -202,11 +202,11 @@ const uiTools = (tools.tools ?? [])
 if (JSON.stringify(uiTools) !== JSON.stringify(["cptr_open_live_workbench"])) {
   throw new Error(`live-terminal UI ownership drift: expected only cptr_open_live_workbench, got [${uiTools.join(", ") || "none"}]`);
 }
-const resources = await rpc("resources/list", {});
+const resources = await client.listResources();
 if (!(resources.resources ?? []).some((resource) => resource.uri === expectedResource)) {
   throw new Error(`resource contract drift: ${expectedResource} is unavailable`);
 }
-const resourceResult = await rpc("resources/read", { uri: expectedResource });
+const resourceResult = await client.readResource({ uri: expectedResource });
 const resource = (resourceResult.contents ?? []).find((content) => content.uri === expectedResource);
 if (!resource) throw new Error(`resource contract drift: ${expectedResource} has no readable content`);
 if (resource.mimeType !== "text/html;profile=mcp-app") {
@@ -229,4 +229,5 @@ if (!Array.isArray(resourceDomains) || JSON.stringify(resourceDomains) !== JSON.
 if (typeof resource.text === "string" && resource.text.includes("/__cptr/dev/")) {
   throw new Error("production Workbench resource references development-only routes");
 }
-console.log(`CPTR deployed MCP contract verified: ${expectedPlannedTools.length} planned tools, ${expectedRegisteredToolCount} registered actions, current-model reporting on every action, ${expectedResource}, and widget domain ${expectedWidgetDomain}`);
+await client.close();
+console.log(`CPTR deployed MCP contract verified: MCP 2026-07-28 modern era, ${expectedPlannedTools.length} planned tools, ${expectedRegisteredToolCount} registered actions, current-model reporting on every action, ${expectedResource}, and widget domain ${expectedWidgetDomain}`);

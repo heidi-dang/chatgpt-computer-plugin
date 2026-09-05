@@ -1,0 +1,49 @@
+name: Cross-repo contract
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * *"
+
+concurrency:
+  group: cross-repo-contract-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  browser-contract:
+    name: Browser protocol convergence
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout plugin
+        uses: actions/checkout@v4
+        with:
+          path: plugin
+
+      - name: Checkout backend main
+        uses: actions/checkout@v4
+        with:
+          repository: heidi-dang/computer
+          ref: main
+          path: computer
+          token: ${{ secrets.CPTR_CROSS_REPO_TOKEN || github.token }}
+
+      - name: Checkout extension main
+        uses: actions/checkout@v4
+        with:
+          repository: heidi-dang/chatgpt-chrome-extension
+          ref: main
+          path: extension
+          token: ${{ secrets.CPTR_CROSS_REPO_TOKEN || github.token }}
+
+      - name: Verify exact browser contract convergence
+        env:
+          CPTR_BACKEND_REPO: ${{ github.workspace }}/computer
+          CPTR_EXTENSION_REPO: ${{ github.workspace }}/extension
+        run: node plugin/scripts/check-cross-repo-browser-contract.mjs

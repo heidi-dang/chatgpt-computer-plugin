@@ -2,12 +2,33 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { BROWSER_ACTIONS, actionMutatesBrowser } from "../server/browser-contract.js";
 import { ComputerApiError, ComputerClient } from "../server/client/computer-client.js";
 
 const toolsSource = readFileSync(new URL("../server/schemas/tools.ts", import.meta.url), "utf8");
 const clientSource = readFileSync(new URL("../server/client/computer-client.ts", import.meta.url), "utf8");
 const stateSource = readFileSync(new URL("../web/src/state.ts", import.meta.url), "utf8");
 const indexSource = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
+const browserContract = JSON.parse(
+  readFileSync(new URL("../contracts/browser-protocol-v1.json", import.meta.url), "utf8"),
+) as {
+  contract: string;
+  contract_revision: number;
+  protocol_version: number;
+  browser_actions: string[];
+  mutating_browser_actions: string[];
+};
+
+test("plugin browser implementation matches the checked-in cross-repo protocol manifest", () => {
+  assert.equal(browserContract.contract, "cptr-browser-device");
+  assert.equal(browserContract.contract_revision, 1);
+  assert.equal(browserContract.protocol_version, 1);
+  assert.deepEqual(browserContract.browser_actions, [...BROWSER_ACTIONS]);
+  assert.deepEqual(
+    browserContract.mutating_browser_actions,
+    BROWSER_ACTIONS.filter((action) => actionMutatesBrowser(action)),
+  );
+});
 
 test("paired Chrome contract removes pairing codes and uses an explicit browser action enum", () => {
   assert.doesNotMatch(toolsSource, /pairing_code/);
