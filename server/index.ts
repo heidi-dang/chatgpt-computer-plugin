@@ -807,6 +807,9 @@ let hotReloadClients = 0;
 const maxHotReloadClients = 32;
 
 const httpServer = createServer(async (req, res) => {
+  const ua = req.headers['user-agent'];
+  const ip = req.headers['cf-connecting-ip'] || req.socket.remoteAddress;
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} - UA: ${ua} - IP: ${ip}`);
   const requestStartedAt = Date.now();
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? `${host}:${port}`}`);
   const requestOrigin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
