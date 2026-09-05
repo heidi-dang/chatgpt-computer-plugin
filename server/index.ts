@@ -15,6 +15,7 @@ import {
   toWebRequest,
 } from "@modelcontextprotocol/node";
 import {
+  authenticateCloudflareLoginIdentity,
   authenticateMcpRequest,
   createBearerChallenge,
   createProtectedResourceMetadata,
@@ -1226,18 +1227,16 @@ const httpServer = createServer(async (req, res) => {
     let email = oauthAllowedEmail ?? "dev@example.com";
 
     if (cloudflareConfig) {
-      const loginAuth = await authenticateMcpRequest(
-        { cloudflareAssertion: singleHeader(req, "cf-access-jwt-assertion") },
-        { staticToken: undefined, cloudflare: cloudflareConfig },
+      const identity = await authenticateCloudflareLoginIdentity(
+        singleHeader(req, "cf-access-jwt-assertion"),
+        cloudflareConfig,
       );
-      if (loginAuth.authorized && loginAuth.mechanism === "cloudflare") {
-        subject = loginAuth.subject;
-        email = loginAuth.email;
-      } else {
-        console.warn(
-          "Cloudflare assertion missing or invalid, bypassing to default identity",
-        );
+      if (!identity) {
+        writeJson(res, 401, { error: "Cloudflare Access authentication required" });
+        return;
       }
+      subject = identity.subject;
+      email = identity.email;
     }
 
     await nativeOAuthServer.handleLogin(req, url, res, {
