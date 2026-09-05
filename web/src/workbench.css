@@ -109,7 +109,8 @@ button:focus-visible, .terminal-output:focus-visible { outline: 2px solid #7fb8f
 .terminal-status[data-state="closed"],
 .terminal-status[data-state="exited"],
 .terminal-status[data-state="failed"],
-.terminal-status[data-state="offline"] { color: #8c959f; }
+.terminal-status[data-state="offline"],
+.terminal-status[data-state="disconnected"] { color: #8c959f; }
 .terminal-path {
   margin-top: 5px;
   overflow: hidden;
@@ -204,13 +205,9 @@ button:focus-visible, .terminal-output:focus-visible { outline: 2px solid #7fb8f
   white-space: nowrap;
 }
 .terminal-footer span:nth-child(2) { color: #3fb950; }
-[data-state="waiting"] .terminal-footer span:nth-child(2) { color: #3fb950; }
-[data-state="reconnecting"] .terminal-footer span:nth-child(2),
-[data-state="connecting"] .terminal-footer span:nth-child(2) { color: #d29922; }
-[data-state="closed"] .terminal-footer span:nth-child(2),
-[data-state="exited"] .terminal-footer span:nth-child(2),
-[data-state="failed"] .terminal-footer span:nth-child(2),
-[data-state="offline"] .terminal-footer span:nth-child(2) { color: #8c959f; }
+[data-transport="reconnecting"] .terminal-footer span:nth-child(2),
+[data-transport="connecting"] .terminal-footer span:nth-child(2) { color: #d29922; }
+[data-transport="offline"] .terminal-footer span:nth-child(2) { color: #8c959f; }
 .terminal-exit { margin-left: auto; }
 .terminal-exit[data-success="true"] { color: #56d364; }
 .terminal-exit[data-success="false"] { color: #ff7b72; }

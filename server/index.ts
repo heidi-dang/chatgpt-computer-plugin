@@ -1,7 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { createMcpHandler, isInitializeRequest, isLegacyRequest } from "@modelcontextprotocol/server";
-import { NodeStreamableHTTPServerTransport, toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
+import {
+  createMcpHandler,
+  isInitializeRequest,
+  isLegacyRequest,
+} from "@modelcontextprotocol/server";
+import {
+  NodeStreamableHTTPServerTransport,
+  toNodeHandler,
+  toWebRequest,
+} from "@modelcontextprotocol/node";
 import {
   authenticateMcpRequest,
   createBearerChallenge,
@@ -16,7 +28,10 @@ import {
   type BackendRequestObservation,
 } from "./client/computer-client.js";
 import { McpActivityEmitter } from "./mcp-activity.js";
-import { McpDiagnosticsEmitter, sanitizeDiagnosticSummary } from "./mcp-diagnostics.js";
+import {
+  McpDiagnosticsEmitter,
+  sanitizeDiagnosticSummary,
+} from "./mcp-diagnostics.js";
 import {
   McpTrafficEmitter,
   mcpRequestContext,
@@ -25,13 +40,21 @@ import {
   type McpRequestContextValue,
   type TrafficClient,
 } from "./mcp-traffic.js";
-import { MCP_CONTRACT_TOOL_COUNT, MCP_CONTRACT_VERSION, createMcpServer } from "./mcp.js";
+import {
+  MCP_CONTRACT_TOOL_COUNT,
+  MCP_CONTRACT_VERSION,
+  createMcpServer,
+} from "./mcp.js";
 import { currentPluginUpdateManifest } from "./release.js";
 import { StatelessServerPool } from "./stateless-server-pool.js";
 import { CPTR_APP_VERSION } from "./version.js";
 import { LiveGateway } from "./live-gateway.js";
 import { LiveTicketStore } from "./live-tickets.js";
-import { PromptTerminalGateway, PromptTerminalStore, resolveLiveTerminalStreaming } from "./prompt-terminal.js";
+import {
+  PromptTerminalGateway,
+  PromptTerminalStore,
+  resolveLiveTerminalStreaming,
+} from "./prompt-terminal.js";
 import { PromptBrowserFrameGateway } from "./browser-frame-gateway.js";
 import { PromptBrowserInputGateway } from "./browser-input-gateway.js";
 import { NativeOAuthServer } from "./oauth-server.js";
@@ -41,7 +64,10 @@ import {
   proxyBrowserDeviceUpgrade,
   rejectBrowserDeviceUpgrade,
 } from "./browser-device-proxy.js";
-import { loadWorkbenchAssets, resolveWorkbenchHotReload } from "./workbench-assets.js";
+import {
+  loadWorkbenchAssets,
+  resolveWorkbenchHotReload,
+} from "./workbench-assets.js";
 import {
   corsHeaders,
   isAllowedBrowserOrigin,
@@ -60,12 +86,16 @@ const mcpAccessToken = process.env.MCP_ACCESS_TOKEN;
 const publicOrigin = resolvePublicOrigin(process.env, host, port);
 const allowedBrowserOrigins = resolveAllowedOrigins(process.env);
 const cptrBaseUrl = process.env.CPTR_BASE_URL ?? "";
-const oauthResource = process.env.MCP_OAUTH_RESOURCE ?? `${publicOrigin}${mcpPath}`;
+const oauthResource =
+  process.env.MCP_OAUTH_RESOURCE ?? `${publicOrigin}${mcpPath}`;
 const oauthIssuer = process.env.CLOUDFLARE_ACCESS_ISSUER;
 const oauthAudience = process.env.CLOUDFLARE_ACCESS_AUDIENCE;
 const oauthAllowedEmail = process.env.MCP_OAUTH_ALLOWED_EMAIL;
-const oauthJwksUri = process.env.CLOUDFLARE_ACCESS_JWKS_URI ??
-  (oauthIssuer ? `${oauthIssuer.replace(/\/$/, "")}/cdn-cgi/access/certs` : undefined);
+const oauthJwksUri =
+  process.env.CLOUDFLARE_ACCESS_JWKS_URI ??
+  (oauthIssuer
+    ? `${oauthIssuer.replace(/\/$/, "")}/cdn-cgi/access/certs`
+    : undefined);
 const oauthScopes = (process.env.MCP_OAUTH_SCOPES ?? "")
   .split(/[ ,]+/)
   .map((scope) => scope.trim())
@@ -82,8 +112,12 @@ const cloudflareConfig =
       }
     : undefined;
 const nativeOAuthSecret = process.env.MCP_NATIVE_OAUTH_SECRET?.trim();
-const nativeOAuthIssuer = (process.env.MCP_NATIVE_OAUTH_ISSUER?.trim() || publicOrigin).replace(/\/$/, "");
-const nativeOAuthStateDb = process.env.MCP_NATIVE_OAUTH_DB?.trim() || (process.env.NODE_ENV === "production" ? undefined : ":memory:");
+const nativeOAuthIssuer = (
+  process.env.MCP_NATIVE_OAUTH_ISSUER?.trim() || publicOrigin
+).replace(/\/$/, "");
+const nativeOAuthStateDb =
+  process.env.MCP_NATIVE_OAUTH_DB?.trim() ||
+  (process.env.NODE_ENV === "production" ? undefined : ":memory:");
 const nativeOAuthScopes = (process.env.MCP_NATIVE_OAUTH_SCOPES ?? "mcp")
   .split(/[ ,]+/)
   .map((scope) => scope.trim())
@@ -92,29 +126,40 @@ if (nativeOAuthSecret && nativeOAuthSecret.length < 32) {
   throw new Error("MCP_NATIVE_OAUTH_SECRET must be at least 32 characters");
 }
 if (nativeOAuthSecret && !nativeOAuthStateDb) {
-  throw new Error("MCP_NATIVE_OAUTH_DB is required when native OAuth is enabled in production");
+  throw new Error(
+    "MCP_NATIVE_OAUTH_DB is required when native OAuth is enabled in production",
+  );
 }
 if (nativeOAuthSecret && !cloudflareConfig) {
-  throw new Error("Native OAuth requires Cloudflare Access assertion validation for /oauth/login");
+  throw new Error(
+    "Native OAuth requires Cloudflare Access assertion validation for /oauth/login",
+  );
 }
-const nativeOAuthServer = nativeOAuthSecret && nativeOAuthStateDb
-  ? new NativeOAuthServer({
-      issuer: nativeOAuthIssuer,
-      resource: oauthResource,
-      scopes: nativeOAuthScopes,
-      secret: nativeOAuthSecret,
-      stateDbPath: nativeOAuthStateDb,
-    })
-  : undefined;
+const nativeOAuthServer =
+  nativeOAuthSecret && nativeOAuthStateDb
+    ? new NativeOAuthServer({
+        issuer: nativeOAuthIssuer,
+        resource: oauthResource,
+        scopes: nativeOAuthScopes,
+        secret: nativeOAuthSecret,
+        stateDbPath: nativeOAuthStateDb,
+      })
+    : undefined;
 const oauthConfig: McpAuthConfig = {
   staticToken: mcpAccessToken,
   cloudflare: cloudflareConfig,
   nativeOAuth: nativeOAuthSecret
-    ? { issuer: nativeOAuthIssuer, audience: oauthResource, secret: nativeOAuthSecret }
+    ? {
+        issuer: nativeOAuthIssuer,
+        audience: oauthResource,
+        secret: nativeOAuthSecret,
+      }
     : undefined,
 };
 const advertisedAuthorizationServer = nativeOAuthServer?.issuer ?? oauthIssuer;
-const advertisedOauthScopes = nativeOAuthServer ? nativeOAuthScopes : oauthScopes;
+const advertisedOauthScopes = nativeOAuthServer
+  ? nativeOAuthScopes
+  : oauthScopes;
 
 const client = clientFromEnvironment();
 const mcpDiagnostics = new McpDiagnosticsEmitter({
@@ -169,7 +214,9 @@ const mcpActivity = new McpActivityEmitter({
 client.setRequestObserver((observation: BackendRequestObservation) => {
   const context = mcpRequestContext.getStore();
   if (!context) return;
-  const failed = observation.error !== null || (observation.status !== null && observation.status >= 400);
+  const failed =
+    observation.error !== null ||
+    (observation.status !== null && observation.status >= 400);
   mcpDiagnostics.latency({
     request_id: context.requestId,
     correlation_id: context.correlationId,
@@ -190,7 +237,9 @@ client.setRequestObserver((observation: BackendRequestObservation) => {
     stage: "cptr_backend",
     error_code: error?.code ?? "backend_http_error",
     http_status: observation.status ?? error?.status ?? null,
-    retryable: error?.retriable ?? (observation.status === null ? true : observation.status >= 500),
+    retryable:
+      error?.retriable ??
+      (observation.status === null ? true : observation.status >= 500),
     started_at_ms: Math.max(0, Date.now() - observation.durationMs),
     duration_ms: observation.durationMs,
     request_bytes: null,
@@ -216,8 +265,14 @@ const promptSessions = new PromptTerminalStore({
   streamingEnabled: true,
 });
 const promptGateway = new PromptTerminalGateway(promptSessions);
-const browserFrameGateway = new PromptBrowserFrameGateway(client, promptSessions);
-const browserInputGateway = new PromptBrowserInputGateway(client, promptSessions);
+const browserFrameGateway = new PromptBrowserFrameGateway(
+  client,
+  promptSessions,
+);
+const browserInputGateway = new PromptBrowserInputGateway(
+  client,
+  promptSessions,
+);
 
 function currentWorkbenchAssets() {
   return loadWorkbenchAssets();
@@ -231,29 +286,56 @@ const initialAssets = currentWorkbenchAssets();
 const initialHotReload = resolveWorkbenchHotReload(initialAssets);
 if (initialHotReload.enabled) allowedBrowserOrigins.add(publicOrigin);
 if (!initialAssets.ready) {
-  console.error(`CPTR Live Workbench bundle is unavailable; searched: ${initialAssets.searchedDirectories.join(", ")}`);
+  console.error(
+    `CPTR Live Workbench bundle is unavailable; searched: ${initialAssets.searchedDirectories.join(", ")}`,
+  );
 } else {
-  console.log(`CPTR Live Workbench bundle loaded from ${initialAssets.directory}`);
+  console.log(
+    `CPTR Live Workbench bundle loaded from ${initialAssets.directory}`,
+  );
 }
 
-function writeJson(res: ServerResponse, status: number, value: unknown, headers: Record<string, string> = {}) {
-  res.writeHead(status, {
-    "content-type": "application/json",
-    "cache-control": "no-store",
-    ...headers,
-  }).end(JSON.stringify(value));
+function writeJson(
+  res: ServerResponse,
+  status: number,
+  value: unknown,
+  headers: Record<string, string> = {},
+) {
+  res
+    .writeHead(status, {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+      ...headers,
+    })
+    .end(JSON.stringify(value));
 }
 
-function writeMcpUnauthorized(res: ServerResponse, status: number, message: string) {
+function writeMcpUnauthorized(
+  res: ServerResponse,
+  status: number,
+  message: string,
+) {
   const metadataUrl = `${publicOrigin}${oauthProtectedResourcePath}`;
-  writeJson(res, status, { error: message }, {
-    "www-authenticate": createBearerChallenge(metadataUrl, advertisedOauthScopes),
-  });
+  writeJson(
+    res,
+    status,
+    { error: message },
+    {
+      "www-authenticate": createBearerChallenge(
+        metadataUrl,
+        advertisedOauthScopes,
+      ),
+    },
+  );
 }
 
-function authIdentity(auth: Extract<McpAuthResult, { authorized: true }>): string {
-  if (auth.mechanism === "cloudflare") return `cloudflare:${auth.subject}:${auth.email}`;
-  if (auth.mechanism === "native-oauth") return `oauth:${auth.subject}:${auth.clientId}`;
+function authIdentity(
+  auth: Extract<McpAuthResult, { authorized: true }>,
+): string {
+  if (auth.mechanism === "cloudflare")
+    return `cloudflare:${auth.subject}:${auth.email}`;
+  if (auth.mechanism === "native-oauth")
+    return `oauth:${auth.subject}:${auth.clientId}`;
   return "static:configured-token";
 }
 
@@ -264,7 +346,10 @@ function singleHeader(req: IncomingMessage, name: string): string | undefined {
 
 type ParsedJsonBody = { value: unknown; bytes: number };
 
-async function readJsonBody(req: IncomingMessage, maxBytes = 2_000_000): Promise<ParsedJsonBody> {
+async function readJsonBody(
+  req: IncomingMessage,
+  maxBytes = 2_000_000,
+): Promise<ParsedJsonBody> {
   const chunks: Buffer[] = [];
   let bytes = 0;
   for await (const chunk of req) {
@@ -279,7 +364,7 @@ async function readJsonBody(req: IncomingMessage, maxBytes = 2_000_000): Promise
 
 function jsonRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : null;
 }
 
@@ -293,18 +378,19 @@ function trafficClientFromRequest(
   const params = jsonRecord(record?.params);
   const clientInfo = jsonRecord(params?.clientInfo);
   if (clientInfo) {
-    return normalizeMcpClient({ name: clientInfo.name, version: clientInfo.version });
+    return normalizeMcpClient({
+      name: clientInfo.name,
+      version: clientInfo.version,
+    });
   }
   const userAgent = Array.isArray(req.headers["user-agent"])
     ? req.headers["user-agent"][0]
     : req.headers["user-agent"];
   const key = String(userAgent ?? "").toLowerCase();
-  if (key.includes("chatgpt")) return normalizeMcpClient({ name: "ChatGPT" });
-  if (key.includes("claude")) return normalizeMcpClient({ name: "Claude" });
-  if (key.includes("gemini")) return normalizeMcpClient({ name: "Gemini" });
-  if (key.includes("codex")) return normalizeMcpClient({ name: "Codex" });
-  if (key.includes("inspector")) return normalizeMcpClient({ name: "MCP Inspector" });
-  return normalizeMcpClient({ name: "ChatGPT" });
+  if (key.includes("chatgpt") || key.includes("openai")) {
+    return normalizeMcpClient({ name: "ChatGPT" });
+  }
+  return normalizeMcpClient(undefined);
 }
 
 function trafficMethod(req: IncomingMessage, body: unknown): string | null {
@@ -333,9 +419,10 @@ type McpOperationMetadata = {
 function mcpOperationMetadata(body: unknown): McpOperationMetadata {
   const record = jsonRecord(body);
   const params = jsonRecord(record?.params);
-  const toolName = record?.method === "tools/call" && typeof params?.name === "string"
-    ? params.name.slice(0, 256)
-    : null;
+  const toolName =
+    record?.method === "tools/call" && typeof params?.name === "string"
+      ? params.name.slice(0, 256)
+      : null;
   const args = jsonRecord(params?.arguments) ?? {};
   let requestedWaitMs = 0;
   let intentionalWait = false;
@@ -343,7 +430,15 @@ function mcpOperationMetadata(body: unknown): McpOperationMetadata {
   if (toolName === "cptr_execute_task") {
     requestedWaitMs = Math.max(0, Number(args.wait_seconds ?? 5) * 1000);
     intentionalWait = true;
-  } else if (["cptr_code_run_command", "cptr_code_get_command", "cptr_workspace_run_test_target", "cptr_ssh_run_command", "cptr_ssh_get_command"].includes(toolName ?? "")) {
+  } else if (
+    [
+      "cptr_code_run_command",
+      "cptr_code_get_command",
+      "cptr_workspace_run_test_target",
+      "cptr_ssh_run_command",
+      "cptr_ssh_get_command",
+    ].includes(toolName ?? "")
+  ) {
     requestedWaitMs = Math.max(0, Number(args.wait_seconds ?? 0) * 1000);
     intentionalWait = requestedWaitMs > 0;
   } else if (toolName === "cptr_user_chrome" && args.action === "command") {
@@ -360,7 +455,11 @@ function mcpOperationMetadata(body: unknown): McpOperationMetadata {
   if (!Number.isFinite(requestedWaitMs)) requestedWaitMs = 0;
   return {
     toolName,
-    operationClass: intentionalWait ? (requestedWaitMs >= 30_000 ? "long_operation" : "bounded_wait") : "immediate",
+    operationClass: intentionalWait
+      ? requestedWaitMs >= 30_000
+        ? "long_operation"
+        : "bounded_wait"
+      : "immediate",
     requestedWaitMs: intentionalWait ? Math.round(requestedWaitMs) : null,
     healthEligible: !intentionalWait,
   };
@@ -398,10 +497,12 @@ function emitClientTransportFailure(
 
 function responseChunkBytes(chunk: unknown, encoding?: unknown): number {
   if (typeof chunk === "string") {
-    const value = typeof encoding === "string" ? encoding as BufferEncoding : "utf8";
+    const value =
+      typeof encoding === "string" ? (encoding as BufferEncoding) : "utf8";
     return Buffer.byteLength(chunk, value);
   }
-  if (Buffer.isBuffer(chunk) || chunk instanceof Uint8Array) return chunk.byteLength;
+  if (Buffer.isBuffer(chunk) || chunk instanceof Uint8Array)
+    return chunk.byteLength;
   return 0;
 }
 
@@ -412,9 +513,13 @@ type ResponseObservation = {
   restore: () => void;
 };
 
-function responseChunkBuffer(chunk: unknown, encoding?: unknown): Buffer | null {
+function responseChunkBuffer(
+  chunk: unknown,
+  encoding?: unknown,
+): Buffer | null {
   if (typeof chunk === "string") {
-    const value = typeof encoding === "string" ? encoding as BufferEncoding : "utf8";
+    const value =
+      typeof encoding === "string" ? (encoding as BufferEncoding) : "utf8";
     return Buffer.from(chunk, value);
   }
   if (Buffer.isBuffer(chunk)) return chunk;
@@ -436,11 +541,17 @@ function trackResponse(res: ServerResponse): ResponseObservation {
     const remaining = maxCapturedBytes - captured.byteLength;
     captured = Buffer.concat([captured, buffer.subarray(0, remaining)]);
   };
-  res.write = function (this: ServerResponse, ...args: Parameters<ServerResponse["write"]>) {
+  res.write = function (
+    this: ServerResponse,
+    ...args: Parameters<ServerResponse["write"]>
+  ) {
     observe(args[0], args[1]);
     return originalWrite.apply(this, args as never);
   } as ServerResponse["write"];
-  res.end = function (this: ServerResponse, ...args: Parameters<ServerResponse["end"]>) {
+  res.end = function (
+    this: ServerResponse,
+    ...args: Parameters<ServerResponse["end"]>
+  ) {
     observe(args[0], args[1]);
     return originalEnd.apply(this, args as never);
   } as ServerResponse["end"];
@@ -456,7 +567,9 @@ function trackResponse(res: ServerResponse): ResponseObservation {
         if (!error) return null;
         return {
           code: String(error.code ?? "json_rpc_error").slice(0, 64),
-          message: sanitizeDiagnosticSummary(String(error.message ?? "MCP JSON-RPC error")),
+          message: sanitizeDiagnosticSummary(
+            String(error.message ?? "MCP JSON-RPC error"),
+          ),
         };
       } catch {
         return null;
@@ -529,7 +642,9 @@ async function handleWithTraffic(
       );
     } else if (statusCode >= 400 || jsonRpcError) {
       failed = true;
-      const errorCode = jsonRpcError ? "tool_error" : normalizeTrafficErrorCode({ status: statusCode });
+      const errorCode = jsonRpcError
+        ? "tool_error"
+        : normalizeTrafficErrorCode({ status: statusCode });
       context.outcome.failed = true;
       context.outcome.errorCode = errorCode;
       mcpTraffic.requestFailed(
@@ -556,7 +671,10 @@ async function handleWithTraffic(
           : "MCP connector request failed.",
       });
     } else {
-      mcpTraffic.requestFinished({ ...context, responseBytes: responseObservation.bytes() });
+      mcpTraffic.requestFinished({
+        ...context,
+        responseBytes: responseObservation.bytes(),
+      });
     }
   } catch (error) {
     failed = true;
@@ -564,7 +682,10 @@ async function handleWithTraffic(
       context.outcome.failed = true;
       context.outcome.errorCode = normalizeTrafficErrorCode(error);
     }
-    mcpTraffic.requestFailed({ ...context, responseBytes: responseObservation.bytes() }, error);
+    mcpTraffic.requestFailed(
+      { ...context, responseBytes: responseObservation.bytes() },
+      error,
+    );
     mcpDiagnostics.failure({
       request_id: context.requestId,
       correlation_id: context.correlationId,
@@ -609,8 +730,15 @@ type McpSessionRecord = {
 };
 
 const mcpSessions = new Map<string, McpSessionRecord>();
-const maxMcpSessions = Math.max(1, Number(process.env.CPTR_MCP_MAX_SESSIONS ?? "128") || 128);
-const mcpSessionIdleMs = Math.max(60_000, Number(process.env.CPTR_MCP_SESSION_IDLE_MS ?? String(30 * 60_000)) || 30 * 60_000);
+const maxMcpSessions = Math.max(
+  1,
+  Number(process.env.CPTR_MCP_MAX_SESSIONS ?? "128") || 128,
+);
+const mcpSessionIdleMs = Math.max(
+  60_000,
+  Number(process.env.CPTR_MCP_SESSION_IDLE_MS ?? String(30 * 60_000)) ||
+    30 * 60_000,
+);
 
 function removeMcpSession(sessionId: string): McpSessionRecord | undefined {
   const record = mcpSessions.get(sessionId);
@@ -636,8 +764,9 @@ async function pruneMcpSessions(now = Date.now()): Promise<void> {
 
 async function evictMcpSessionIfFull(): Promise<void> {
   if (mcpSessions.size < maxMcpSessions) return;
-  const oldest = [...mcpSessions.entries()]
-    .sort((a, b) => a[1].lastSeenAt - b[1].lastSeenAt)[0]?.[0];
+  const oldest = [...mcpSessions.entries()].sort(
+    (a, b) => a[1].lastSeenAt - b[1].lastSeenAt,
+  )[0]?.[0];
   if (oldest) await closeMcpSession(oldest);
 }
 
@@ -657,10 +786,15 @@ function createSessionServer() {
   });
 }
 
-const configuredStatelessPoolSize = Number.parseInt(process.env.CPTR_MCP_STATELESS_PREWARM_SERVERS ?? "2", 10);
+const configuredStatelessPoolSize = Number.parseInt(
+  process.env.CPTR_MCP_STATELESS_PREWARM_SERVERS ?? "2",
+  10,
+);
 const statelessServerPool = new StatelessServerPool(
   createSessionServer,
-  Number.isFinite(configuredStatelessPoolSize) ? configuredStatelessPoolSize : 2,
+  Number.isFinite(configuredStatelessPoolSize)
+    ? configuredStatelessPoolSize
+    : 2,
 );
 
 // createMcpHandler is the explicit MCP 2026-07-28 serving entry. Legacy 2025
@@ -739,7 +873,13 @@ async function handleStatefulInitialize(
     await handleWithTraffic(
       req,
       res,
-      { body, requestBytes, sessionId: null, client: trafficClient, requestStartedAt },
+      {
+        body,
+        requestBytes,
+        sessionId: null,
+        client: trafficClient,
+        requestStartedAt,
+      },
       async () => {
         await transport.handleRequest(req, res, body);
       },
@@ -789,7 +929,13 @@ async function handleStatelessCompatibilityRequest(
     await handleWithTraffic(
       req,
       res,
-      { body, requestBytes, sessionId: null, client: trafficClient, requestStartedAt },
+      {
+        body,
+        requestBytes,
+        sessionId: null,
+        client: trafficClient,
+        requestStartedAt,
+      },
       async () => {
         await transport.handleRequest(req, res, body);
       },
@@ -807,12 +953,18 @@ let hotReloadClients = 0;
 const maxHotReloadClients = 32;
 
 const httpServer = createServer(async (req, res) => {
-  const ua = req.headers['user-agent'];
-  const ip = req.headers['cf-connecting-ip'] || req.socket.remoteAddress;
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} - UA: ${ua} - IP: ${ip}`);
+  const ua = req.headers["user-agent"];
+  const ip = req.headers["cf-connecting-ip"] || req.socket.remoteAddress;
+  console.log(
+    `[${new Date().toISOString()}] ${req.method} ${req.url} - UA: ${ua} - IP: ${ip}`,
+  );
   const requestStartedAt = Date.now();
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? `${host}:${port}`}`);
-  const requestOrigin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+  const url = new URL(
+    req.url ?? "/",
+    `http://${req.headers.host ?? `${host}:${port}`}`,
+  );
+  const requestOrigin =
+    typeof req.headers.origin === "string" ? req.headers.origin : undefined;
   const workbenchBrowserRequest =
     url.pathname === "/live/stream" ||
     url.pathname === "/live/snapshot" ||
@@ -828,26 +980,36 @@ const httpServer = createServer(async (req, res) => {
   const isOauthConsentPath = url.pathname === "/oauth/login";
   const browserOriginAllowed = workbenchBrowserRequest
     ? isAllowedWorkbenchBrowserOrigin(requestOrigin, allowedBrowserOrigins)
-    : (isOauthConsentPath && requestOrigin === publicOrigin) || isAllowedBrowserOrigin(requestOrigin, allowedBrowserOrigins);
+    : (isOauthConsentPath && requestOrigin === publicOrigin) ||
+      isAllowedBrowserOrigin(requestOrigin, allowedBrowserOrigins);
   if (!browserOriginAllowed) {
-    console.warn(`Access denied for origin ${requestOrigin || "none"} on ${req.method} ${url.pathname}`);
-    res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" })
+    console.warn(
+      `Access denied for origin ${requestOrigin || "none"} on ${req.method} ${url.pathname}`,
+    );
+    res
+      .writeHead(403, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      })
       .end(JSON.stringify({ error: "browser origin is not allowed" }));
     return;
   }
   const originHeaders = workbenchBrowserRequest
     ? workbenchCorsHeaders(requestOrigin, allowedBrowserOrigins)
     : corsHeaders(requestOrigin, allowedBrowserOrigins);
-  for (const [header, value] of Object.entries(originHeaders)) res.setHeader(header, value);
+  for (const [header, value] of Object.entries(originHeaders))
+    res.setHeader(header, value);
 
   if (isBrowserDevicePath(url.pathname)) {
     if (req.method === "OPTIONS") {
-      res.writeHead(204, {
-        ...originHeaders,
-        "access-control-allow-headers": "Content-Type, Accept",
-        "access-control-allow-methods": "GET, POST, OPTIONS",
-        "cache-control": "no-store",
-      }).end();
+      res
+        .writeHead(204, {
+          ...originHeaders,
+          "access-control-allow-headers": "Content-Type, Accept",
+          "access-control-allow-methods": "GET, POST, OPTIONS",
+          "cache-control": "no-store",
+        })
+        .end();
       return;
     }
     if (!req.method || !["GET", "POST"].includes(req.method)) {
@@ -859,27 +1021,45 @@ const httpServer = createServer(async (req, res) => {
   }
 
   const hotReload = currentWorkbenchHotReload();
-  if (hotReload.enabled && req.method === "GET" && url.pathname === "/__cptr/dev/workbench.js") {
+  if (
+    hotReload.enabled &&
+    req.method === "GET" &&
+    url.pathname === "/__cptr/dev/workbench.js"
+  ) {
     const assets = currentWorkbenchAssets();
-    res.writeHead(assets.ready ? 200 : 503, {
-      ...originHeaders,
-      "content-type": "text/javascript; charset=utf-8",
-      "cache-control": "no-store",
-    }).end(assets.bundle);
+    res
+      .writeHead(assets.ready ? 200 : 503, {
+        ...originHeaders,
+        "content-type": "text/javascript; charset=utf-8",
+        "cache-control": "no-store",
+      })
+      .end(assets.bundle);
     return;
   }
-  if (hotReload.enabled && req.method === "GET" && url.pathname === "/__cptr/dev/workbench.css") {
+  if (
+    hotReload.enabled &&
+    req.method === "GET" &&
+    url.pathname === "/__cptr/dev/workbench.css"
+  ) {
     const assets = currentWorkbenchAssets();
-    res.writeHead(assets.ready ? 200 : 503, {
-      ...originHeaders,
-      "content-type": "text/css; charset=utf-8",
-      "cache-control": "no-store",
-    }).end(assets.styles);
+    res
+      .writeHead(assets.ready ? 200 : 503, {
+        ...originHeaders,
+        "content-type": "text/css; charset=utf-8",
+        "cache-control": "no-store",
+      })
+      .end(assets.styles);
     return;
   }
-  if (hotReload.enabled && req.method === "GET" && url.pathname === "/__cptr/dev/reload") {
+  if (
+    hotReload.enabled &&
+    req.method === "GET" &&
+    url.pathname === "/__cptr/dev/reload"
+  ) {
     if (hotReloadClients >= maxHotReloadClients) {
-      writeJson(res, 429, { error: "workbench reload stream capacity reached" });
+      writeJson(res, 429, {
+        error: "workbench reload stream capacity reached",
+      });
       return;
     }
     hotReloadClients += 1;
@@ -917,11 +1097,14 @@ const httpServer = createServer(async (req, res) => {
   }
 
   if (url.pathname === mcpPath && req.method === "OPTIONS") {
-    res.writeHead(204, {
-      ...originHeaders,
-      "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept, Mcp-Session-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name, Mcp-Param",
-      "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-    }).end();
+    res
+      .writeHead(204, {
+        ...originHeaders,
+        "Access-Control-Allow-Headers":
+          "Content-Type, Authorization, Accept, Mcp-Session-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name, Mcp-Param",
+        "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+      })
+      .end();
     return;
   }
 
@@ -934,39 +1117,57 @@ const httpServer = createServer(async (req, res) => {
     const assets = currentWorkbenchAssets();
     const reload = resolveWorkbenchHotReload(assets);
     const status = assets.ready ? 200 : 503;
-    res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }).end(JSON.stringify({
-      status: assets.ready ? "ok" : "degraded",
-      app_version: CPTR_APP_VERSION,
-      workbench: {
-        ready: assets.ready,
-        build_id: reload.buildId,
-      },
-      mcp_contract: {
-        version: MCP_CONTRACT_VERSION,
-        tool_count: MCP_CONTRACT_TOOL_COUNT,
-      },
-      release: process.env.GIT_COMMIT_SHA ?? process.env.RAILWAY_GIT_COMMIT_SHA ?? null,
-    }));
+    res
+      .writeHead(status, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      })
+      .end(
+        JSON.stringify({
+          status: assets.ready ? "ok" : "degraded",
+          app_version: CPTR_APP_VERSION,
+          workbench: {
+            ready: assets.ready,
+            build_id: reload.buildId,
+          },
+          mcp_contract: {
+            version: MCP_CONTRACT_VERSION,
+            tool_count: MCP_CONTRACT_TOOL_COUNT,
+          },
+          release:
+            process.env.GIT_COMMIT_SHA ??
+            process.env.RAILWAY_GIT_COMMIT_SHA ??
+            null,
+        }),
+      );
     return;
   }
 
   if (
-    (url.pathname === oauthProtectedResourcePath || url.pathname === oauthRootProtectedResourcePath) &&
+    (url.pathname === oauthProtectedResourcePath ||
+      url.pathname === oauthRootProtectedResourcePath) &&
     req.method === "GET"
   ) {
     if (!advertisedAuthorizationServer) {
       writeJson(res, 404, { error: "OAuth is not configured" });
       return;
     }
-    writeJson(res, 200, createProtectedResourceMetadata({
-      resource: oauthResource,
-      authorizationServer: advertisedAuthorizationServer,
-      scopes: advertisedOauthScopes,
-    }));
+    writeJson(
+      res,
+      200,
+      createProtectedResourceMetadata({
+        resource: oauthResource,
+        authorizationServer: advertisedAuthorizationServer,
+        scopes: advertisedOauthScopes,
+      }),
+    );
     return;
   }
 
-  if (url.pathname === "/.well-known/oauth-authorization-server" && req.method === "GET") {
+  if (
+    url.pathname === "/.well-known/oauth-authorization-server" &&
+    req.method === "GET"
+  ) {
     if (!nativeOAuthServer) {
       writeJson(res, 404, { error: "Native OAuth is not configured" });
       return;
@@ -986,7 +1187,11 @@ const httpServer = createServer(async (req, res) => {
 
   if (url.pathname === "/oauth/authorize") {
     if (!nativeOAuthServer || req.method !== "GET") {
-      res.writeHead(nativeOAuthServer ? 405 : 404, { "cache-control": "no-store" }).end();
+      res
+        .writeHead(nativeOAuthServer ? 405 : 404, {
+          "cache-control": "no-store",
+        })
+        .end();
       return;
     }
     await nativeOAuthServer.handleAuthorize(url, res);
@@ -1016,10 +1221,10 @@ const httpServer = createServer(async (req, res) => {
       writeJson(res, 503, { error: "Native OAuth login is not configured" });
       return;
     }
-    
+
     let subject = "local-dev-user";
     let email = oauthAllowedEmail ?? "dev@example.com";
-    
+
     if (cloudflareConfig) {
       const loginAuth = await authenticateMcpRequest(
         { cloudflareAssertion: singleHeader(req, "cf-access-jwt-assertion") },
@@ -1029,10 +1234,12 @@ const httpServer = createServer(async (req, res) => {
         subject = loginAuth.subject;
         email = loginAuth.email;
       } else {
-        console.warn("Cloudflare assertion missing or invalid, bypassing to default identity");
+        console.warn(
+          "Cloudflare assertion missing or invalid, bypassing to default identity",
+        );
       }
     }
-    
+
     await nativeOAuthServer.handleLogin(req, url, res, {
       subject,
       email,
@@ -1053,12 +1260,15 @@ const httpServer = createServer(async (req, res) => {
     url.pathname === "/live/prompt/browser-stream"
   ) {
     if (req.method === "OPTIONS") {
-      res.writeHead(204, {
-        ...originHeaders,
-        "access-control-allow-headers": "Authorization, Accept, Last-Event-ID, Content-Type",
-        "access-control-allow-methods": "GET, POST, OPTIONS",
-        "cache-control": "no-store",
-      }).end();
+      res
+        .writeHead(204, {
+          ...originHeaders,
+          "access-control-allow-headers":
+            "Authorization, Accept, Last-Event-ID, Content-Type",
+          "access-control-allow-methods": "GET, POST, OPTIONS",
+          "cache-control": "no-store",
+        })
+        .end();
       return;
     }
     if (url.pathname === "/live/renew") {
@@ -1077,7 +1287,11 @@ const httpServer = createServer(async (req, res) => {
       promptGateway.handleRenew(req, res);
       return;
     }
-    if (url.pathname === "/live/prompt/browser-input" || url.pathname === "/live/prompt/browser-return" || url.pathname === "/live/prompt/browser-stream") {
+    if (
+      url.pathname === "/live/prompt/browser-input" ||
+      url.pathname === "/live/prompt/browser-return" ||
+      url.pathname === "/live/prompt/browser-stream"
+    ) {
       if (req.method !== "POST") {
         res.writeHead(405, { "cache-control": "no-store" }).end();
         return;
@@ -1089,15 +1303,23 @@ const httpServer = createServer(async (req, res) => {
       res.writeHead(405, { "cache-control": "no-store" }).end();
       return;
     }
-    if (url.pathname === "/live/snapshot") await liveGateway.handleSnapshot(req, res);
-    else if (url.pathname === "/live/stream") await liveGateway.handle(req, res);
-    else if (url.pathname === "/live/prompt/snapshot") promptGateway.handleSnapshot(req, res);
-    else if (url.pathname === "/live/prompt/browser-frame") await browserFrameGateway.handle(req, res);
+    if (url.pathname === "/live/snapshot")
+      await liveGateway.handleSnapshot(req, res);
+    else if (url.pathname === "/live/stream")
+      await liveGateway.handle(req, res);
+    else if (url.pathname === "/live/prompt/snapshot")
+      promptGateway.handleSnapshot(req, res);
+    else if (url.pathname === "/live/prompt/browser-frame")
+      await browserFrameGateway.handle(req, res);
     else await promptGateway.handleStream(req, res);
     return;
   }
 
-  if (url.pathname !== mcpPath || !req.method || !["GET", "POST", "DELETE"].includes(req.method)) {
+  if (
+    url.pathname !== mcpPath ||
+    !req.method ||
+    !["GET", "POST", "DELETE"].includes(req.method)
+  ) {
     res.writeHead(404).end("Not Found");
     return;
   }
@@ -1108,27 +1330,50 @@ const httpServer = createServer(async (req, res) => {
     oauthConfig,
   );
   if (!auth.authorized) {
-    const status = mcpAccessToken || oauthConfig.cloudflare || oauthConfig.nativeOAuth ? 401 : 503;
+    const status =
+      mcpAccessToken || oauthConfig.cloudflare || oauthConfig.nativeOAuth
+        ? 401
+        : 503;
     emitClientTransportFailure(req, {
       errorCode: status === 401 ? "unauthorized" : "authentication_unavailable",
       status,
       retryable: status >= 500,
-      summary: status === 401 ? "MCP authentication failed." : "MCP authentication is unavailable.",
+      summary:
+        status === 401
+          ? "MCP authentication failed."
+          : "MCP authentication is unavailable.",
     });
-    writeMcpUnauthorized(res, status, status === 503 ? "MCP authentication is not configured" : "Unauthorized");
+    writeMcpUnauthorized(
+      res,
+      status,
+      status === 503 ? "MCP authentication is not configured" : "Unauthorized",
+    );
     return;
   }
   const identity = authIdentity(auth);
 
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, Accept, Mcp-Session-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name, Mcp-Param");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, Accept, Mcp-Session-Id, MCP-Protocol-Version, Mcp-Method, Mcp-Name, Mcp-Param",
+  );
   res.setHeader("Access-Control-Expose-Headers", "Mcp-Session-Id");
 
   try {
-    const parsedPostBody = req.method === "POST" ? await readJsonBody(req) : undefined;
-    const classificationRequest = await toWebRequest(req, parsedPostBody?.value);
-    const legacyRequest = await isLegacyRequest(classificationRequest, parsedPostBody?.value);
+    const parsedPostBody =
+      req.method === "POST" ? await readJsonBody(req) : undefined;
+    const classificationRequest = await toWebRequest(
+      req,
+      parsedPostBody?.value,
+    );
+    const legacyRequest = await isLegacyRequest(
+      classificationRequest,
+      parsedPostBody?.value,
+    );
     if (!legacyRequest) {
-      const trafficClient = trafficClientFromRequest(req, parsedPostBody?.value);
+      const trafficClient = trafficClientFromRequest(
+        req,
+        parsedPostBody?.value,
+      );
       await handleWithTraffic(
         req,
         res,
@@ -1159,7 +1404,9 @@ const httpServer = createServer(async (req, res) => {
           retryable: false,
           summary: "MCP session was not found.",
         });
-        writeJson(res, 404, { error: "MCP session not found; initialize a new session" });
+        writeJson(res, 404, {
+          error: "MCP session not found; initialize a new session",
+        });
         return;
       }
       if (session.authIdentity !== identity) {
@@ -1173,9 +1420,10 @@ const httpServer = createServer(async (req, res) => {
         return;
       }
       session.lastSeenAt = Date.now();
-      const parsed = req.method === "POST"
-        ? parsedPostBody ?? { value: undefined, bytes: 0 }
-        : { value: undefined, bytes: 0 };
+      const parsed =
+        req.method === "POST"
+          ? (parsedPostBody ?? { value: undefined, bytes: 0 })
+          : { value: undefined, bytes: 0 };
       await handleWithTraffic(
         req,
         res,
@@ -1197,14 +1445,27 @@ const httpServer = createServer(async (req, res) => {
     if (req.method === "POST") {
       const parsed = parsedPostBody ?? { value: undefined, bytes: 0 };
       if (isInitializeRequest(parsed.value)) {
-        await handleStatefulInitialize(req, res, parsed.value, parsed.bytes, identity, requestStartedAt);
+        await handleStatefulInitialize(
+          req,
+          res,
+          parsed.value,
+          parsed.bytes,
+          identity,
+          requestStartedAt,
+        );
         return;
       }
       // Migration compatibility for a ChatGPT connection created before the
       // current contract. After connector metadata Refresh, initialize-capable
       // clients receive an Mcp-Session-Id and all prompt activity stays scoped.
       res.setHeader("X-CPTR-Contract-Refresh", `required-v${CPTR_APP_VERSION}`);
-      await handleStatelessCompatibilityRequest(req, res, parsed.value, parsed.bytes, requestStartedAt);
+      await handleStatelessCompatibilityRequest(
+        req,
+        res,
+        parsed.value,
+        parsed.bytes,
+        requestStartedAt,
+      );
       return;
     }
 
@@ -1214,48 +1475,76 @@ const httpServer = createServer(async (req, res) => {
       retryable: false,
       summary: "MCP session ID is required.",
     });
-    writeJson(res, 400, { error: "MCP session ID is required for this request" });
+    writeJson(res, 400, {
+      error: "MCP session ID is required for this request",
+    });
   } catch (error) {
     const malformedJson = error instanceof SyntaxError;
-    const oversized = error instanceof Error && error.message === "MCP request body is too large";
+    const oversized =
+      error instanceof Error &&
+      error.message === "MCP request body is too large";
     if (malformedJson || oversized) {
       emitClientTransportFailure(req, {
         errorCode: oversized ? "request_too_large" : "malformed_json",
         status: oversized ? 413 : 400,
         retryable: false,
-        summary: oversized ? "MCP request body is too large." : "MCP request body is malformed JSON.",
+        summary: oversized
+          ? "MCP request body is too large."
+          : "MCP request body is malformed JSON.",
       });
     }
-    console.error("MCP request failed", error instanceof Error ? error.message : "unknown error");
-    if (!res.headersSent) writeJson(res, malformedJson ? 400 : oversized ? 413 : 500, { error: malformedJson ? "Malformed JSON" : oversized ? "Request body too large" : "Internal server error" });
+    console.error(
+      "MCP request failed",
+      error instanceof Error ? error.message : "unknown error",
+    );
+    if (!res.headersSent)
+      writeJson(res, malformedJson ? 400 : oversized ? 413 : 500, {
+        error: malformedJson
+          ? "Malformed JSON"
+          : oversized
+            ? "Request body too large"
+            : "Internal server error",
+      });
   }
 });
 
 httpServer.on("upgrade", (req, socket, head) => {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? `${host}:${port}`}`);
+  const url = new URL(
+    req.url ?? "/",
+    `http://${req.headers.host ?? `${host}:${port}`}`,
+  );
   if (!isBrowserDevicePath(url.pathname)) {
     socket.destroy();
     return;
   }
-  const requestOrigin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+  const requestOrigin =
+    typeof req.headers.origin === "string" ? req.headers.origin : undefined;
   // Device WebSockets are browser-only and always require the exact configured
   // extension origin in addition to the device credential sent in the first frame.
-  if (!requestOrigin || !isAllowedBrowserOrigin(requestOrigin, allowedBrowserOrigins)) {
+  if (
+    !requestOrigin ||
+    !isAllowedBrowserOrigin(requestOrigin, allowedBrowserOrigins)
+  ) {
     rejectBrowserDeviceUpgrade(socket);
     return;
   }
   proxyBrowserDeviceUpgrade(req, socket, head, cptrBaseUrl);
 });
 
-const sessionPruner = setInterval(() => {
-  void pruneMcpSessions();
-}, Math.min(60_000, Math.max(10_000, Math.floor(mcpSessionIdleMs / 4))));
+const sessionPruner = setInterval(
+  () => {
+    void pruneMcpSessions();
+  },
+  Math.min(60_000, Math.max(10_000, Math.floor(mcpSessionIdleMs / 4))),
+);
 sessionPruner.unref();
 
 async function shutdown(signal: string) {
   console.log(`Shutting down ChatGPT Computer MCP server (${signal})`);
   clearInterval(sessionPruner);
-  await Promise.all([...mcpSessions.keys()].map((sessionId) => closeMcpSession(sessionId)));
+  await Promise.all(
+    [...mcpSessions.keys()].map((sessionId) => closeMcpSession(sessionId)),
+  );
   await modernMcpHandler.close().catch(() => undefined);
   nativeOAuthServer?.close();
   const telemetryDeadline = new Promise<void>((resolve) => {
@@ -1270,7 +1559,9 @@ async function shutdown(signal: string) {
       console.warn("MCP activity telemetry shutdown did not complete cleanly");
     }),
     mcpDiagnostics.close().catch(() => {
-      console.warn("MCP diagnostics telemetry shutdown did not complete cleanly");
+      console.warn(
+        "MCP diagnostics telemetry shutdown did not complete cleanly",
+      );
     }),
   ]);
   await Promise.race([closeTelemetry, telemetryDeadline]);
@@ -1284,5 +1575,7 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 }
 
 httpServer.listen(port, host, () => {
-  console.log(`ChatGPT Computer MCP server listening on http://${host}:${port}${mcpPath}`);
+  console.log(
+    `ChatGPT Computer MCP server listening on http://${host}:${port}${mcpPath}`,
+  );
 });

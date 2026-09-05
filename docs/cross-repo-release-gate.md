@@ -253,6 +253,19 @@ The production service should:
 
 A release should be built and verified before the service pointer/`ExecStart` is changed. Preserve the prior immutable release for rollback until the new post-deploy gates pass.
 
+## Live Terminal lifecycle invariant
+
+The Workbench deliberately keeps its prompt SSE transport resumable across ChatGPT turn boundaries. Transport connectivity and active ChatGPT work are separate states and must never be collapsed into one badge:
+
+- `WORKING`/target lifecycle states mean a CPTR tool, command, task, or browser lease is actively owned by the current interaction.
+- `DISCONNECTED` means the ChatGPT turn has no active CPTR work target or tool lifecycle, even when the persistent prompt transport is still healthy.
+- `SSE LIVE`, `SSE CONNECTING`, `SSE RECONNECTING`, and `SSE OFFLINE` describe only transport health in the footer.
+- After the final unbound MCP tool completes, fails, is cancelled, or is blocked, the header must return to `DISCONNECTED`; it must not remain `CONNECTING` or become `LIVE` merely because the SSE connection is open.
+- Do not close the persistent prompt SSE simply to obtain a `DISCONNECTED` header. That would break cross-turn resume and iOS suspension recovery.
+- A bound task/monitor/command keeps its authoritative target lifecycle until it reaches a terminal state; browser control separately uses its lease/released lifecycle.
+
+The UI regression gate in `tests/terminal-view.test.ts` explicitly verifies `DISCONNECTED + SSE LIVE` and `DISCONNECTED + SSE RECONNECTING` so future transport work cannot reintroduce the stuck-CONNECTING bug.
+
 ## Deployment acceptance sequence
 
 The production plugin deployment is accepted only in this order:

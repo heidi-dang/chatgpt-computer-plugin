@@ -62,7 +62,8 @@ export type McpRequestContextValue = {
   outcome: { failed: boolean; errorCode: McpTrafficErrorCode | null };
 };
 
-export const mcpRequestContext = new AsyncLocalStorage<McpRequestContextValue>();
+export const mcpRequestContext =
+  new AsyncLocalStorage<McpRequestContextValue>();
 
 let processSequence = 0;
 
@@ -71,7 +72,12 @@ function nextSequence(): number {
   return processSequence;
 }
 
-function boundedInt(raw: string | undefined, fallback: number, minimum: number, maximum: number): number {
+function boundedInt(
+  raw: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
   const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(minimum, Math.min(maximum, parsed));
@@ -79,7 +85,10 @@ function boundedInt(raw: string | undefined, fallback: number, minimum: number, 
 
 function boundedText(value: unknown, maximum: number): string | null {
   if (typeof value !== "string") return null;
-  const trimmed = value.trim().replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ");
+  const trimmed = value
+    .trim()
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ");
   return trimmed ? trimmed.slice(0, maximum) : null;
 }
 
@@ -93,20 +102,25 @@ function slug(value: string): string {
   );
 }
 
-export function normalizeMcpClient(input: { name?: unknown; version?: unknown } | null | undefined): TrafficClient {
+export function isActiveMcpClientId(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const clientId = value.trim().toLowerCase();
+  return (
+    clientId === "chatgpt" ||
+    (clientId.startsWith("chatgpt-session-") &&
+      clientId.length > "chatgpt-session-".length)
+  );
+}
+
+export function normalizeMcpClient(
+  input: { name?: unknown; version?: unknown } | null | undefined,
+): TrafficClient {
   const rawName = boundedText(input?.name, 80) ?? "Unknown MCP Client";
   const key = rawName.toLowerCase();
-  const known = key.includes("chatgpt") || key === "openai"
-    ? { id: "chatgpt", label: "ChatGPT" }
-    : key.includes("claude")
-      ? { id: "claude", label: "Claude" }
-      : key.includes("gemini")
-        ? { id: "gemini", label: "Gemini" }
-        : key.includes("codex")
-          ? { id: "codex", label: "Codex" }
-          : key.includes("inspector")
-            ? { id: "mcp-inspector", label: "MCP Inspector" }
-            : { id: slug(rawName), label: rawName };
+  const known =
+    key.includes("chatgpt") || key === "openai"
+      ? { id: "chatgpt", label: "ChatGPT" }
+      : { id: slug(rawName), label: rawName };
   return {
     ...known,
     version: boundedText(input?.version, 64),
@@ -127,15 +141,21 @@ export function enrichMcpClientSession(
     workspaceName?: unknown;
   },
 ): TrafficClient {
-  if (client.id !== "chatgpt" && !client.id.startsWith("chatgpt-session-")) return client;
+  if (client.id !== "chatgpt" && !client.id.startsWith("chatgpt-session-"))
+    return client;
   const sessionId = boundedText(input.sessionId, 96);
   if (!sessionId) return client;
-  const sessionName = boundedText(input.sessionName, 160) ?? client.session_name;
+  const sessionName =
+    boundedText(input.sessionName, 160) ?? client.session_name;
   const model = boundedText(input.model, 120) ?? client.model;
-  const workspaceId = boundedText(input.workspaceId, 200) ?? client.workspace_id;
-  const workspaceName = boundedText(input.workspaceName, 160) ?? client.workspace_name;
+  const workspaceId =
+    boundedText(input.workspaceId, 200) ?? client.workspace_id;
+  const workspaceName =
+    boundedText(input.workspaceName, 160) ?? client.workspace_name;
   const sessionSlug = slug(sessionId).slice(0, 96);
-  const label = boundedText(sessionName ? `ChatGPT · ${sessionName}` : "ChatGPT", 80) ?? "ChatGPT";
+  const label =
+    boundedText(sessionName ? `ChatGPT · ${sessionName}` : "ChatGPT", 80) ??
+    "ChatGPT";
   return {
     ...client,
     id: `chatgpt-session-${sessionSlug}`,
@@ -150,13 +170,20 @@ export function enrichMcpClientSession(
 export function normalizeTrafficErrorCode(error: unknown): McpTrafficErrorCode {
   if (!error || typeof error !== "object") return "internal_error";
   const record = error as Record<string, unknown>;
-  const status = typeof record.status === "number" ? record.status : Number(record.status);
+  const status =
+    typeof record.status === "number" ? record.status : Number(record.status);
   if (status === 401 || status === 403) return "unauthorized";
-  if (status === 400 || status === 409 || status === 422) return "validation_error";
+  if (status === 400 || status === 409 || status === 422)
+    return "validation_error";
   const name = String(record.name ?? "").toLowerCase();
   const code = String(record.code ?? "").toLowerCase();
   const kind = String(record.kind ?? "").toLowerCase();
-  if (name.includes("timeout") || name.includes("abort") || code === "etimedout" || code === "timeout") {
+  if (
+    name.includes("timeout") ||
+    name.includes("abort") ||
+    code === "etimedout" ||
+    code === "timeout"
+  ) {
     return "timeout";
   }
   if (kind === "tool_error" || code === "tool_error") return "tool_error";
@@ -176,7 +203,10 @@ function safeClient(client: TrafficClient): TrafficClient {
   };
 }
 
-function nullableBoundedInt(value: number | null | undefined, maximum: number): number | null {
+function nullableBoundedInt(
+  value: number | null | undefined,
+  maximum: number,
+): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   return Math.max(0, Math.min(maximum, Math.round(value)));
 }
@@ -205,7 +235,10 @@ function copyEvent(event: McpTrafficEvent): McpTrafficEvent {
 export type McpTrafficEmitterOptions = {
   deliver: (events: McpTrafficEvent[]) => Promise<void>;
   env?: Record<string, string | undefined>;
-  onDeliveryFailure?: (error: unknown, events: readonly McpTrafficEvent[]) => void;
+  onDeliveryFailure?: (
+    error: unknown,
+    events: readonly McpTrafficEvent[],
+  ) => void;
 };
 
 export class McpTrafficEmitter {
@@ -213,7 +246,10 @@ export class McpTrafficEmitter {
   private readonly batchSize: number;
   private readonly flushMs: number;
   private readonly maxQueue: number;
-  private readonly onDeliveryFailure?: (error: unknown, events: readonly McpTrafficEvent[]) => void;
+  private readonly onDeliveryFailure?: (
+    error: unknown,
+    events: readonly McpTrafficEvent[],
+  ) => void;
   private queue: McpTrafficEvent[] = [];
   private dropped = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -223,14 +259,33 @@ export class McpTrafficEmitter {
   constructor(options: McpTrafficEmitterOptions) {
     const env = options.env ?? process.env;
     this.deliver = options.deliver;
-    this.batchSize = boundedInt(env.CPTR_MCP_TRAFFIC_PLUGIN_BATCH_SIZE, 20, 1, 100);
-    this.flushMs = boundedInt(env.CPTR_MCP_TRAFFIC_PLUGIN_FLUSH_MS, 1000, 25, 10_000);
-    this.maxQueue = boundedInt(env.CPTR_MCP_TRAFFIC_PLUGIN_MAX_QUEUE, 1000, 10, 10_000);
+    this.batchSize = boundedInt(
+      env.CPTR_MCP_TRAFFIC_PLUGIN_BATCH_SIZE,
+      20,
+      1,
+      100,
+    );
+    this.flushMs = boundedInt(
+      env.CPTR_MCP_TRAFFIC_PLUGIN_FLUSH_MS,
+      1000,
+      25,
+      10_000,
+    );
+    this.maxQueue = boundedInt(
+      env.CPTR_MCP_TRAFFIC_PLUGIN_MAX_QUEUE,
+      1000,
+      10,
+      10_000,
+    );
     this.onDeliveryFailure = options.onDeliveryFailure;
   }
 
   stats(): { queued: number; dropped: number; delivering: boolean } {
-    return { queued: this.queue.length, dropped: this.dropped, delivering: this.deliveryPromise !== null };
+    return {
+      queued: this.queue.length,
+      dropped: this.dropped,
+      delivering: this.deliveryPromise !== null,
+    };
   }
 
   sessionOpened(sessionId: string, client: TrafficClient): void {
@@ -293,7 +348,12 @@ export class McpTrafficEmitter {
     return requestId;
   }
 
-  requestFinished(input: McpRequestContextValue & { durationMs?: number | null; responseBytes?: number | null }): void {
+  requestFinished(
+    input: McpRequestContextValue & {
+      durationMs?: number | null;
+      responseBytes?: number | null;
+    },
+  ): void {
     this.emit({
       event_type: "request_finished",
       session_id: input.sessionId,
@@ -311,7 +371,10 @@ export class McpTrafficEmitter {
   }
 
   requestFailed(
-    input: McpRequestContextValue & { durationMs?: number | null; responseBytes?: number | null },
+    input: McpRequestContextValue & {
+      durationMs?: number | null;
+      responseBytes?: number | null;
+    },
     error: unknown,
   ): void {
     this.emit({
@@ -333,7 +396,10 @@ export class McpTrafficEmitter {
     });
   }
 
-  toolStarted(toolName: string, context: McpRequestContextValue | undefined = mcpRequestContext.getStore()): void {
+  toolStarted(
+    toolName: string,
+    context: McpRequestContextValue | undefined = mcpRequestContext.getStore(),
+  ): void {
     if (!context) return;
     this.emitTool("tool_started", "started", toolName, context, null, null);
   }
@@ -344,7 +410,14 @@ export class McpTrafficEmitter {
     durationMs: number | null = null,
   ): void {
     if (!context) return;
-    this.emitTool("tool_finished", "complete", toolName, context, durationMs, null);
+    this.emitTool(
+      "tool_finished",
+      "complete",
+      toolName,
+      context,
+      durationMs,
+      null,
+    );
   }
 
   toolFailed(
@@ -354,7 +427,14 @@ export class McpTrafficEmitter {
     durationMs: number | null = null,
   ): void {
     if (!context) return;
-    this.emitTool("tool_failed", "error", toolName, context, durationMs, normalizeTrafficErrorCode(error));
+    this.emitTool(
+      "tool_failed",
+      "error",
+      toolName,
+      context,
+      durationMs,
+      normalizeTrafficErrorCode(error),
+    );
   }
 
   async flush(): Promise<void> {
@@ -408,8 +488,13 @@ export class McpTrafficEmitter {
     });
   }
 
-  private emit(input: Omit<McpTrafficEvent, "version" | "event_id" | "sequence" | "timestamp_ms">): void {
-    if (this.closed) return;
+  private emit(
+    input: Omit<
+      McpTrafficEvent,
+      "version" | "event_id" | "sequence" | "timestamp_ms"
+    >,
+  ): void {
+    if (this.closed || !isActiveMcpClientId(input.client.id)) return;
     const event = copyEvent({
       version: 1,
       event_id: randomUUID(),

@@ -86,6 +86,29 @@ test("terminal empty state uses the reference waiting transcript without synthet
   assert.equal(html.includes("terminal-empty"), false);
 });
 
+test("idle prompt lifecycle renders DISCONNECTED while keeping the persistent SSE transport visible", () => {
+  const live = renderToStaticMarkup(React.createElement(TerminalView, {
+    rows: [],
+    status: "DISCONNECTED",
+    connection: "prompt live",
+    machineLabel: "CPTR Computer",
+    targetLabel: "Waiting for terminal session…",
+  }));
+  assert.match(live, />DISCONNECTED</);
+  assert.match(live, /SSE LIVE/);
+  assert.doesNotMatch(live, /<span>LIVE<\/span>/);
+
+  const reconnecting = renderToStaticMarkup(React.createElement(TerminalView, {
+    rows: [],
+    status: "DISCONNECTED",
+    connection: "reconnecting prompt activity",
+    machineLabel: "CPTR Computer",
+    targetLabel: "Waiting for terminal session…",
+  }));
+  assert.match(reconnecting, />DISCONNECTED</);
+  assert.match(reconnecting, /SSE RECONNECTING/);
+});
+
 test("terminal final command state exposes the real exit code in the compact footer", () => {
   const html = renderToStaticMarkup(React.createElement(TerminalView, {
     rows: [{
@@ -203,10 +226,12 @@ test("Workbench reports intrinsic height through both ChatGPT host sizing paths 
   assert.match(source, /params: \{ height \}/);
   assert.doesNotMatch(source, /requestHostDisplayMode\(hostBridge\(\), "pip"\)[\s\S]*autoPinAttempted/);
   assert.doesNotMatch(source, /hasWorkers\s*\?\s*<DirectWorkersView/);
-  assert.match(source, /const promptConnection = usePromptActivity\(/);
-  assert.match(source, /const connection = meta\?\.targetId && !isTerminalWorkbenchStatus\(state\.status\) \? targetConnection : promptConnection/);
+  assert.match(source, /const promptActivity = usePromptActivity\(/);
+  assert.match(source, /const connection = meta\?\.targetId && !isTerminalWorkbenchStatus\(state\.status\) \? targetConnection : promptActivity\.connection/);
+  assert.match(source, /const displayStatus = meta\?\.targetType && meta\.targetId \? state\.status : promptActivity\.status/);
   assert.doesNotMatch(source, /meta\?\.targetId \? targetConnection : "connecting terminal session"/);
-  assert.match(source, /promptConnection === "prompt live" \? "CPTR Computer" : "Connecting to computer"/);
+  assert.doesNotMatch(source, /displayStatus = meta\?\.targetType && meta\.targetId \? state\.status : "CONNECTING"/);
+  assert.match(source, /promptActivity\.connection === "prompt live" \? "CPTR Computer" : "Connecting to computer"/);
   assert.match(source, /"Waiting for terminal session…"/);
 });
 
@@ -220,6 +245,7 @@ test("terminal view bounds rendered DOM rows and uses a dedicated connection liv
   assert.match(source, /className="terminal-latest"/);
   assert.match(source, /aria-live="off"/);
   assert.match(source, /terminal-status[^\n]*role="status" aria-live="polite"/);
+  assert.match(source, /data-transport=\{transport\}/);
 });
 
 test("terminal view memoizes stable rows and frame-coalesces follow scrolling", () => {

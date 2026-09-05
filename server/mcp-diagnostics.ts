@@ -1,13 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { isActiveMcpClientId } from "./mcp-traffic.js";
 
 export type McpLatencyEdge =
-  | "client-mcp-connector"
-  | "mcp-connector-cptr-mcp"
-  | "cptr-mcp-cptr-backend";
+  "client-mcp-connector" | "mcp-connector-cptr-mcp" | "cptr-mcp-cptr-backend";
 
-export type McpLatencyMetric = "observed_request_time" | "adapter_handoff" | "backend_api_rtt";
-export type McpLatencyOperationClass = "immediate" | "bounded_wait" | "long_operation";
-export type McpLatencySetupKind = "request_adapter" | "stateful_setup" | "stateless_setup";
+export type McpLatencyMetric =
+  "observed_request_time" | "adapter_handoff" | "backend_api_rtt";
+export type McpLatencyOperationClass =
+  "immediate" | "bounded_wait" | "long_operation";
+export type McpLatencySetupKind =
+  "request_adapter" | "stateful_setup" | "stateless_setup";
 
 export type McpFailureStage =
   | "client_transport"
@@ -79,7 +81,8 @@ export type McpFailureDiagnostic = {
   summary: string;
 };
 
-export type McpDiagnosticEvent = McpLatencyDiagnostic | McpFailureDiagnostic | McpUsageDiagnostic;
+export type McpDiagnosticEvent =
+  McpLatencyDiagnostic | McpFailureDiagnostic | McpUsageDiagnostic;
 
 export type McpDiagnosticsEmitterOptions = {
   deliver: (events: McpDiagnosticEvent[]) => Promise<void>;
@@ -89,24 +92,40 @@ export type McpDiagnosticsEmitterOptions = {
   maxQueue?: number;
 };
 
-function boundedInt(raw: string | undefined, fallback: number, minimum: number, maximum: number): number {
+function boundedInt(
+  raw: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
   const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(minimum, Math.min(maximum, parsed));
 }
 
-function boundedOverride(value: number | undefined, fallback: number, minimum: number, maximum: number): number {
+function boundedOverride(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
   if (value === undefined || !Number.isFinite(value)) return fallback;
   return Math.max(minimum, Math.min(maximum, Math.round(value)));
 }
 
 function boundedText(value: unknown, maximum: number): string | null {
   if (typeof value !== "string") return null;
-  const trimmed = value.trim().replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ");
+  const trimmed = value
+    .trim()
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ");
   return trimmed ? trimmed.slice(0, maximum) : null;
 }
 
-function boundedNumber(value: number | null | undefined, maximum: number): number | null {
+function boundedNumber(
+  value: number | null | undefined,
+  maximum: number,
+): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   return Math.max(0, Math.min(maximum, Math.round(value)));
 }
@@ -137,7 +156,8 @@ function copyLatency(event: McpLatencyDiagnostic): McpLatencyDiagnostic {
     kind: "latency",
     version: 1,
     event_id: boundedText(event.event_id, 128) ?? randomUUID(),
-    timestamp_ms: boundedNumber(event.timestamp_ms, Number.MAX_SAFE_INTEGER) ?? Date.now(),
+    timestamp_ms:
+      boundedNumber(event.timestamp_ms, Number.MAX_SAFE_INTEGER) ?? Date.now(),
     request_id: boundedText(event.request_id, 128),
     correlation_id: boundedText(event.correlation_id, 128),
     edge_id: event.edge_id,
@@ -146,16 +166,21 @@ function copyLatency(event: McpLatencyDiagnostic): McpLatencyDiagnostic {
     status: event.status,
     tool_name: boundedText(event.tool_name, 256),
     operation_class:
-      event.operation_class === "bounded_wait" || event.operation_class === "long_operation"
+      event.operation_class === "bounded_wait" ||
+      event.operation_class === "long_operation"
         ? event.operation_class
         : "immediate",
     requested_wait_ms: boundedNumber(event.requested_wait_ms, 86_400_000),
     health_eligible: event.health_eligible !== false,
     setup_kind:
-      event.setup_kind === "stateful_setup" || event.setup_kind === "stateless_setup"
+      event.setup_kind === "stateful_setup" ||
+      event.setup_kind === "stateless_setup"
         ? event.setup_kind
-        : event.setup_kind === "request_adapter" ? "request_adapter" : null,
-    setup_cached: typeof event.setup_cached === "boolean" ? event.setup_cached : null,
+        : event.setup_kind === "request_adapter"
+          ? "request_adapter"
+          : null,
+    setup_cached:
+      typeof event.setup_cached === "boolean" ? event.setup_cached : null,
   };
 }
 
@@ -164,17 +189,21 @@ function copyUsage(event: McpUsageDiagnostic): McpUsageDiagnostic {
     kind: "usage",
     version: 1,
     event_id: boundedText(event.event_id, 128) ?? randomUUID(),
-    timestamp_ms: boundedNumber(event.timestamp_ms, Number.MAX_SAFE_INTEGER) ?? Date.now(),
+    timestamp_ms:
+      boundedNumber(event.timestamp_ms, Number.MAX_SAFE_INTEGER) ?? Date.now(),
     request_id: boundedText(event.request_id, 128),
     correlation_id: boundedText(event.correlation_id, 128),
     session_id: boundedText(event.session_id, 128),
     client_id: (boundedText(event.client_id, 128) ?? "chatgpt").toLowerCase(),
     model_reported: boundedText(event.model_reported, 120),
     model_canonical: boundedText(event.model_canonical, 64),
-    model_source: event.model_source === "self_reported" ? "self_reported" : "unavailable",
+    model_source:
+      event.model_source === "self_reported" ? "self_reported" : "unavailable",
     tool_name: boundedText(event.tool_name, 256) ?? "unknown-tool",
-    input_tokens_estimated: boundedNumber(event.input_tokens_estimated, 100_000_000) ?? 0,
-    output_tokens_estimated: boundedNumber(event.output_tokens_estimated, 100_000_000) ?? 0,
+    input_tokens_estimated:
+      boundedNumber(event.input_tokens_estimated, 100_000_000) ?? 0,
+    output_tokens_estimated:
+      boundedNumber(event.output_tokens_estimated, 100_000_000) ?? 0,
     cached_input_tokens_estimated: null,
     estimator_method: boundedText(event.estimator_method, 160) ?? "unknown",
     estimator_exact_for_model: event.estimator_exact_for_model === true,
@@ -198,7 +227,9 @@ function copyFailure(event: McpFailureDiagnostic): McpFailureDiagnostic {
     http_status: boundedHttpStatus(event.http_status),
     retryable: typeof event.retryable === "boolean" ? event.retryable : null,
     started_at_ms: boundedNumber(event.started_at_ms, Number.MAX_SAFE_INTEGER),
-    completed_at_ms: boundedNumber(event.completed_at_ms, Number.MAX_SAFE_INTEGER) ?? Date.now(),
+    completed_at_ms:
+      boundedNumber(event.completed_at_ms, Number.MAX_SAFE_INTEGER) ??
+      Date.now(),
     duration_ms: boundedNumber(event.duration_ms, 86_400_000),
     request_bytes: boundedNumber(event.request_bytes, 100_000_000),
     response_bytes: boundedNumber(event.response_bytes, 100_000_000),
@@ -225,9 +256,24 @@ export class McpDiagnosticsEmitter {
 
   constructor(options: McpDiagnosticsEmitterOptions) {
     const env = options.env ?? process.env;
-    const envBatchSize = boundedInt(env.CPTR_MCP_DIAGNOSTICS_PLUGIN_BATCH_SIZE, 20, 1, 100);
-    const envFlushMs = boundedInt(env.CPTR_MCP_DIAGNOSTICS_PLUGIN_FLUSH_MS, 1000, 25, 10_000);
-    const envMaxQueue = boundedInt(env.CPTR_MCP_DIAGNOSTICS_PLUGIN_MAX_QUEUE, 500, 10, 5_000);
+    const envBatchSize = boundedInt(
+      env.CPTR_MCP_DIAGNOSTICS_PLUGIN_BATCH_SIZE,
+      20,
+      1,
+      100,
+    );
+    const envFlushMs = boundedInt(
+      env.CPTR_MCP_DIAGNOSTICS_PLUGIN_FLUSH_MS,
+      1000,
+      25,
+      10_000,
+    );
+    const envMaxQueue = boundedInt(
+      env.CPTR_MCP_DIAGNOSTICS_PLUGIN_MAX_QUEUE,
+      500,
+      10,
+      5_000,
+    );
     this.deliver = options.deliver;
     this.batchSize = boundedOverride(options.batchSize, envBatchSize, 1, 100);
     this.flushMs = boundedOverride(options.flushMs, envFlushMs, 1, 10_000);
@@ -235,11 +281,18 @@ export class McpDiagnosticsEmitter {
   }
 
   stats(): { queued: number; dropped: number; delivering: boolean } {
-    return { queued: this.queue.length, dropped: this.dropped, delivering: this.deliveryPromise !== null };
+    return {
+      queued: this.queue.length,
+      dropped: this.dropped,
+      delivering: this.deliveryPromise !== null,
+    };
   }
 
   latency(
-    input: Omit<McpLatencyDiagnostic, "kind" | "version" | "event_id" | "timestamp_ms">,
+    input: Omit<
+      McpLatencyDiagnostic,
+      "kind" | "version" | "event_id" | "timestamp_ms"
+    >,
   ): void {
     this.emit({
       kind: "latency",
@@ -251,7 +304,10 @@ export class McpDiagnosticsEmitter {
   }
 
   failure(
-    input: Omit<McpFailureDiagnostic, "kind" | "version" | "diagnostic_id" | "completed_at_ms">,
+    input: Omit<
+      McpFailureDiagnostic,
+      "kind" | "version" | "diagnostic_id" | "completed_at_ms"
+    >,
   ): void {
     this.emit({
       kind: "failure",
@@ -263,7 +319,10 @@ export class McpDiagnosticsEmitter {
   }
 
   usage(
-    input: Omit<McpUsageDiagnostic, "kind" | "version" | "event_id" | "timestamp_ms">,
+    input: Omit<
+      McpUsageDiagnostic,
+      "kind" | "version" | "event_id" | "timestamp_ms"
+    >,
   ): void {
     this.emit({
       kind: "usage",
@@ -302,7 +361,11 @@ export class McpDiagnosticsEmitter {
   }
 
   private emit(event: McpDiagnosticEvent): void {
-    if (this.closed) return;
+    if (
+      this.closed ||
+      (event.kind !== "latency" && !isActiveMcpClientId(event.client_id))
+    )
+      return;
     if (this.queue.length >= this.maxQueue) {
       this.queue.shift();
       this.dropped += 1;

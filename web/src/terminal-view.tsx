@@ -19,7 +19,7 @@ export type TerminalViewProps = {
   onExpand?: () => void;
 };
 
-type TerminalDisplayState = "connecting" | "working" | "live" | "waiting" | "reconnecting" | "offline" | "exited" | "closed" | "failed";
+type TerminalDisplayState = "connecting" | "working" | "live" | "waiting" | "reconnecting" | "offline" | "disconnected" | "exited" | "closed" | "failed";
 type TerminalTransportState = "live" | "connecting" | "reconnecting" | "offline";
 
 type RichToken = {
@@ -191,6 +191,7 @@ function displayState(status: string, connection: string): TerminalDisplayState 
   if (["FAILED", "BLOCKED", "REJECTED", "COMPLETE_WITH_TOOL_ERRORS"].includes(normalizedStatus)) return "failed";
   if (normalizedStatus === "CANCELLED") return "closed";
   if (normalizedStatus === "COMPLETE") return "waiting";
+  if (normalizedStatus === "DISCONNECTED") return "disconnected";
 
   const transport = transportState(connection);
   if (["RUNNING", "WORKING"].includes(normalizedStatus)) {
@@ -271,7 +272,7 @@ export function TerminalView({
     });
   };
 
-  return <section className="terminal-shell" data-state={state} aria-label="CPTR live terminal">
+  return <section className="terminal-shell" data-state={state} data-transport={transport} aria-label="CPTR live terminal">
     <header className="terminal-header">
       <div className="terminal-identity">
         <div className="terminal-kicker">CHATGPT LIVE TERMINAL</div>

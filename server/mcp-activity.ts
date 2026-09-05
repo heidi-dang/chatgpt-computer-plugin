@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { TrafficClient } from "./mcp-traffic.js";
+import { isActiveMcpClientId, type TrafficClient } from "./mcp-traffic.js";
 
 export type McpActivityPhase = "started" | "complete" | "failed";
 export type McpActivityClient = Pick<TrafficClient, "id" | "label" | "version">;
@@ -54,7 +54,10 @@ export type McpActivityEmitterOptions = {
   batchSize?: number;
   flushMs?: number;
   maxQueue?: number;
-  onDeliveryFailure?: (error: unknown, events: readonly McpActivityEvent[]) => void;
+  onDeliveryFailure?: (
+    error: unknown,
+    events: readonly McpActivityEvent[],
+  ) => void;
 };
 
 let processSequence = 0;
@@ -64,20 +67,33 @@ function nextSequence(): number {
   return processSequence;
 }
 
-function boundedInt(raw: string | undefined, fallback: number, minimum: number, maximum: number): number {
+function boundedInt(
+  raw: string | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
   const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(minimum, Math.min(maximum, parsed));
 }
 
-function boundedOverride(value: number | undefined, fallback: number, minimum: number, maximum: number): number {
+function boundedOverride(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
   if (value === undefined || !Number.isFinite(value)) return fallback;
   return Math.max(minimum, Math.min(maximum, Math.round(value)));
 }
 
 function boundedText(value: unknown, maximum: number): string | null {
   if (typeof value !== "string") return null;
-  const trimmed = value.trim().replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ");
+  const trimmed = value
+    .trim()
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ");
   return trimmed ? trimmed.slice(0, maximum) : null;
 }
 
@@ -87,7 +103,9 @@ function boundedPayload(value: unknown): string | null {
   return trimmed ? trimmed.slice(0, 13_000) : null;
 }
 
-function safeClient(client: TrafficClient | McpActivityClient): McpActivityClient {
+function safeClient(
+  client: TrafficClient | McpActivityClient,
+): McpActivityClient {
   return {
     id: (boundedText(client.id, 128) ?? "unknown-mcp-client").toLowerCase(),
     label: boundedText(client.label, 80) ?? "Unknown MCP Client",
@@ -126,7 +144,10 @@ export class McpActivityEmitter {
   private readonly batchSize: number;
   private readonly flushMs: number;
   private readonly maxQueue: number;
-  private readonly onDeliveryFailure?: (error: unknown, events: readonly McpActivityEvent[]) => void;
+  private readonly onDeliveryFailure?: (
+    error: unknown,
+    events: readonly McpActivityEvent[],
+  ) => void;
   private queue: McpActivityEvent[] = [];
   private dropped = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -135,9 +156,24 @@ export class McpActivityEmitter {
 
   constructor(options: McpActivityEmitterOptions) {
     const env = options.env ?? process.env;
-    const envBatchSize = boundedInt(env.CPTR_MCP_ACTIVITY_PLUGIN_BATCH_SIZE, 20, 1, 100);
-    const envFlushMs = boundedInt(env.CPTR_MCP_ACTIVITY_PLUGIN_FLUSH_MS, 1000, 25, 10_000);
-    const envMaxQueue = boundedInt(env.CPTR_MCP_ACTIVITY_PLUGIN_MAX_QUEUE, 500, 10, 5_000);
+    const envBatchSize = boundedInt(
+      env.CPTR_MCP_ACTIVITY_PLUGIN_BATCH_SIZE,
+      20,
+      1,
+      100,
+    );
+    const envFlushMs = boundedInt(
+      env.CPTR_MCP_ACTIVITY_PLUGIN_FLUSH_MS,
+      1000,
+      25,
+      10_000,
+    );
+    const envMaxQueue = boundedInt(
+      env.CPTR_MCP_ACTIVITY_PLUGIN_MAX_QUEUE,
+      500,
+      10,
+      5_000,
+    );
     this.deliver = options.deliver;
     this.batchSize = boundedOverride(options.batchSize, envBatchSize, 1, 100);
     this.flushMs = boundedOverride(options.flushMs, envFlushMs, 1, 10_000);
@@ -146,7 +182,11 @@ export class McpActivityEmitter {
   }
 
   stats(): { queued: number; dropped: number; delivering: boolean } {
-    return { queued: this.queue.length, dropped: this.dropped, delivering: this.deliveryPromise !== null };
+    return {
+      queued: this.queue.length,
+      dropped: this.dropped,
+      delivering: this.deliveryPromise !== null,
+    };
   }
 
   started(input: McpActivityStartedInput): void {
@@ -209,7 +249,12 @@ export class McpActivityEmitter {
     }
   }
 
-  private baseEvent(input: McpActivityBaseInput): Omit<McpActivityEvent, "phase" | "arguments_json" | "result_json" | "error_json" | "duration_ms"> {
+  private baseEvent(
+    input: McpActivityBaseInput,
+  ): Omit<
+    McpActivityEvent,
+    "phase" | "arguments_json" | "result_json" | "error_json" | "duration_ms"
+  > {
     return {
       version: 1,
       event_id: randomUUID(),
@@ -226,7 +271,7 @@ export class McpActivityEmitter {
   }
 
   private emit(event: McpActivityEvent): void {
-    if (this.closed) return;
+    if (this.closed || !isActiveMcpClientId(event.client.id)) return;
     if (this.queue.length >= this.maxQueue) {
       this.queue.shift();
       this.dropped += 1;
