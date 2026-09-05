@@ -28,6 +28,20 @@ export type McpToolActivity = {
   };
 };
 
+const PROMPT_TOOL_TERMINAL_STATUSES = new Set(["COMPLETE", "FAILED", "ERROR", "CANCELLED", "BLOCKED"]);
+
+export function nextPromptActiveToolCount(current: number, status: unknown): number {
+  const count = Number.isFinite(current) ? Math.max(0, Math.floor(current)) : 0;
+  const normalized = typeof status === "string" ? status.toUpperCase() : "";
+  if (normalized === "STARTED") return Math.min(1_000, count + 1);
+  if (PROMPT_TOOL_TERMINAL_STATUSES.has(normalized)) return Math.max(0, count - 1);
+  return count;
+}
+
+export function promptLifecycleStatus(activeToolCount: number): "WORKING" | "DISCONNECTED" {
+  return activeToolCount > 0 ? "WORKING" : "DISCONNECTED";
+}
+
 export type DirectWorkerActivity = {
   event_id: string;
   timestamp: string;

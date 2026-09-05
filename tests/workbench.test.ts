@@ -5,6 +5,8 @@ import {
   eventTerminatesWorkbench,
   initialWorkbenchState,
   isTerminalWorkbenchStatus,
+  nextPromptActiveToolCount,
+  promptLifecycleStatus,
   LiveTargetSession,
   reduceWorkbenchEvent,
   reduceWorkbenchEvents,
@@ -18,6 +20,28 @@ const initial: WorkbenchState = {
   workers: {},
   workerOrder: [],
 };
+
+test("overlapping prompt tools remain WORKING until the final terminal event", () => {
+  let active = 0;
+  active = nextPromptActiveToolCount(active, "STARTED");
+  assert.equal(active, 1);
+  assert.equal(promptLifecycleStatus(active), "WORKING");
+
+  active = nextPromptActiveToolCount(active, "STARTED");
+  assert.equal(active, 2);
+  assert.equal(promptLifecycleStatus(active), "WORKING");
+
+  active = nextPromptActiveToolCount(active, "COMPLETE");
+  assert.equal(active, 1);
+  assert.equal(promptLifecycleStatus(active), "WORKING");
+
+  active = nextPromptActiveToolCount(active, "FAILED");
+  assert.equal(active, 0);
+  assert.equal(promptLifecycleStatus(active), "DISCONNECTED");
+
+  active = nextPromptActiveToolCount(active, "CANCELLED");
+  assert.equal(active, 0, "terminal replay must never drive the counter below zero");
+});
 
 test("appends MCP tool usage without disturbing the authoritative live-event cursor", () => {
   const withLiveOutput = reduceWorkbenchEvent(initialWorkbenchState(), {
