@@ -13,6 +13,23 @@ test("forwards the scoped token and returns JSON", async () => {
   assert.equal((seenRequest?.headers as Record<string, string>).Authorization, "Bearer secret");
 });
 
+test("fetches bounded runtime lifecycle metrics through the scoped Control API", async () => {
+  let seenUrl = "";
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input) => {
+      seenUrl = String(input);
+      return new Response(JSON.stringify({ version: 1, commands: { active: 0 } }), { status: 200 });
+    },
+  });
+
+  const result = await client.getRuntimeMetrics();
+
+  assert.equal(seenUrl, "http://cptr.test/api/control/v1/runtime/metrics");
+  assert.equal(result.version, 1);
+});
+
 test("caches workspace discovery for 10 seconds and model discovery for 60 seconds", async () => {
   const calls: string[] = [];
   const client = new ComputerClient({
