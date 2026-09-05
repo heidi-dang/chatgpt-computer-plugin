@@ -264,7 +264,7 @@ export class NativeOAuthServer {
         res.writeHead(200, {
           "content-type": "text/html; charset=utf-8",
           "cache-control": "no-store",
-          "content-security-policy": `default-src 'none'; script-src 'unsafe-inline' https://static.cloudflareinsights.com; connect-src https://cloudflareinsights.com; style-src 'unsafe-inline'; form-action 'self' ${new URL(details.redirectUri).origin}; base-uri 'none'; frame-ancestors 'none'`,
+          "content-security-policy": `default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com; connect-src https://cloudflareinsights.com; style-src 'unsafe-inline'; form-action 'self' ${new URL(details.redirectUri).origin}; base-uri 'none'; frame-ancestors 'none'`,
           "x-content-type-options": "nosniff",
           "x-frame-options": "DENY",
         }).end(body);
