@@ -13,7 +13,7 @@ A change is not release-ready merely because one repository is green or because 
 The gate is specifically designed to stop these regressions before they become an incident:
 
 1. **Protocol-era regression** — a verifier accidentally exercises legacy `initialize` while production is intended to support MCP `2026-07-28`.
-2. **OAuth edge regression** — Cloudflare Access/WAF intercepts `/mcp`, metadata, registration, or token traffic, or returns an HTML/interstitial response instead of the origin OAuth JSON contract.
+2. **OAuth edge regression** — the public `401`/RFC 9728 challenge no longer matches the declared edge-auth mode, advertised OAuth metadata is invalid, required DCR/PKCE callbacks fail, or Cloudflare/WAF returns an unexpected interstitial instead of the selected mode's OAuth contract.
 3. **Credential logging regression** — authorization codes, PKCE verifiers, bearer credentials, refresh tokens, cookies, or device credentials appear in production logs.
 4. **Cross-repo browser drift** — plugin, backend, and extension disagree on protocol version, action names, or which actions require a lease epoch.
 5. **Deployment drift** — the service is healthy but runs a release SHA different from the intended Git revision.
@@ -91,7 +91,7 @@ The backend's existing CI automatically includes `tests/test_browser_protocol_co
 
 If the related repositories are private, configure a repository secret named `CPTR_CROSS_REPO_TOKEN` with read-only contents access to the backend and extension repositories. The workflow falls back to the normal GitHub token where that token already has sufficient access.
 
-Production qualification uses repository variables `CPTR_DEPLOYED_MCP_URL` and `CPTR_DEPLOYED_PUBLIC_ORIGIN`, plus the repository secret `CPTR_DEPLOYED_MCP_TOKEN`. The endpoint/origin are non-secret configuration; the bearer must remain a GitHub Actions secret and must never be committed or printed.
+Production qualification uses repository variables `CPTR_DEPLOYED_MCP_URL`, `CPTR_DEPLOYED_PUBLIC_ORIGIN`, `CPTR_EDGE_AUTH_MODE`, and `CPTR_EDGE_DCR_REDIRECT_URIS`, plus the repository secret `CPTR_DEPLOYED_MCP_TOKEN`. The endpoint/origin, auth-mode selector, and comma/newline-separated redirect URI qualification list are non-secret configuration; the bearer must remain a GitHub Actions secret and must never be committed or printed. For the current production edge, set `CPTR_EDGE_AUTH_MODE=cloudflare-managed` and include only callback URIs that are actual supported-client requirements; do not invent or wildcard undocumented provider callbacks.
 
 Branch protection should require the repository-local CI check. For the plugin repository, also require the cross-repo browser-contract check before merging protocol-affecting changes.
 
@@ -114,15 +114,19 @@ For a breaking browser protocol change, do not use this sequence without a dual-
 
 ## Production OAuth / Cloudflare boundary
 
-Cloudflare remains the TLS/WAF/reverse-proxy boundary. The origin is responsible for MCP resource-server authorization and the native OAuth server contract.
+Cloudflare remains the TLS/WAF/reverse-proxy boundary. Production must declare exactly one OAuth edge mode and the runbook must preserve that mode during incident response; changing modes is a migration, not a troubleshooting toggle.
 
-Cloudflare Access must be scoped to the interactive identity step only:
+### Cloudflare Managed OAuth mode
 
-```text
-/oauth/login
-```
+This is the current `mcp.tnaprovider.com.au` topology. The Access application protects `/mcp` and Managed OAuth stays enabled. An unauthenticated MCP request receives Cloudflare's `401` challenge with an RFC 9728 `resource_metadata` URL under `/.well-known/cloudflare-access-protected-resource/mcp`. Clients follow that document to the Cloudflare Access authorization server, while the plugin origin validates the signed `Cf-Access-Jwt-Assertion` that Cloudflare forwards after successful authorization.
 
-The following paths must reach the origin without an Access login interstitial:
+Managed OAuth dynamic-client registration policy is part of the production contract, not optional dashboard decoration. Enable localhost and loopback clients when supported CLI clients use those callback forms, and explicitly allowlist every hosted provider callback required by production. Registration and authorization must both accept each required redirect URI; a DCR `201` alone is insufficient because the authorization endpoint may apply a stricter application-level redirect policy. Avoid broad wildcard callback rules unless a reviewed provider requirement leaves no narrower option.
+
+Do not disable Managed OAuth, remove the `/mcp` Access destination, or repoint the Access application to `/oauth/login` while repairing a Managed-OAuth deployment. Those changes alter the authorization architecture and can strand the currently connected ChatGPT app.
+
+### Native OAuth mode
+
+Native OAuth is a separately qualified deployment mode. Cloudflare still terminates TLS and applies WAF, but Managed OAuth does not own `/mcp`; Access is scoped to the interactive identity step at `/oauth/login`. The following routes then reach the origin without an Access login interstitial:
 
 ```text
 /mcp
@@ -136,9 +140,13 @@ The following paths must reach the origin without an Access login interstitial:
 /health
 ```
 
-WAF policy must allow standards-valid JSON registration requests and `application/x-www-form-urlencoded` token requests to reach the origin. Do not permanently disable broad managed protection to solve a single false positive; use the narrowest route/rule exception necessary and keep the public-edge canary as the regression detector.
+In native mode the origin is the OAuth authorization server and owns DCR, authorization-code + PKCE, RFC 8707 resource validation, token issuance/refresh/revocation, and the RFC 9728 challenge. Native OAuth must be qualified independently before any production cutover from Managed OAuth.
 
-The OAuth token endpoint must never log raw request headers or form bodies. In particular, never log:
+### Common security requirements
+
+WAF policy must allow standards-valid OAuth/MCP traffic for the selected edge mode. Do not permanently disable broad managed protection to solve a single false positive; use the narrowest route/rule exception necessary and keep the public-edge canary as the regression detector.
+
+OAuth endpoints must never log raw request headers or form bodies. In particular, never log:
 
 - `Authorization`
 - authorization `code`
@@ -151,22 +159,26 @@ Operational diagnostics should log bounded request IDs, status classes, route na
 
 ## Public-edge qualification
 
-Run this without an MCP bearer token:
+Run this without an MCP bearer token and declare the intended production auth mode:
 
 ```bash
-CPTR_DEPLOYED_MCP_URL="$CPTR_DEPLOYED_MCP_URL" npm run check:public-edge
+CPTR_DEPLOYED_MCP_URL="$CPTR_DEPLOYED_MCP_URL" \
+CPTR_EDGE_AUTH_MODE="$CPTR_EDGE_AUTH_MODE" \
+CPTR_EDGE_DCR_REDIRECT_URIS="$CPTR_EDGE_DCR_REDIRECT_URIS" \
+npm run check:public-edge
 ```
 
-The check verifies through the actual public proxy/WAF path:
+`CPTR_EDGE_AUTH_MODE` accepts `cloudflare-managed`, `native`, or `auto`; production should use an explicit mode. `CPTR_EDGE_DCR_REDIRECT_URIS` is the set of real client callbacks that must work in production. The check verifies through the actual public proxy/WAF path:
 
 1. `/health` is production-ready.
-2. RFC 9728 path-specific protected-resource metadata is reachable and advertises `/mcp`.
-3. OAuth authorization-server metadata is same-origin and advertises CIMD, PKCE S256, and refresh-token support.
-4. A native loopback dynamic-client registration reaches the origin and succeeds.
-5. An intentionally invalid token exchange reaches the origin and returns the expected JSON OAuth error rather than a WAF/Access response.
-6. An unauthenticated MCP `2026-07-28` `server/discover` request receives the origin's `401` challenge containing canonical `resource_metadata`.
+2. An unauthenticated MCP `2026-07-28` request receives `401` with an HTTPS RFC 9728 `resource_metadata` URL.
+3. The live challenge mode matches `CPTR_EDGE_AUTH_MODE`: the canonical origin metadata path for native mode or Cloudflare's Access protected-resource path for Managed OAuth.
+4. The advertised protected-resource metadata names the exact deployed `/mcp` resource and at least one authorization server.
+5. The authorization server discovered from that document publishes HTTPS authorization, token, and registration endpoints with authorization-code, refresh-token, and PKCE S256 support; native mode additionally requires CIMD advertisement.
+6. Dynamic client registration succeeds for **every** URI in `CPTR_EDGE_DCR_REDIRECT_URIS` and preserves the registered callback.
+7. A PKCE authorization request using each newly registered client reaches the authorization stage without returning an OAuth redirect error. This catches configurations where DCR returns `201` but the application-level redirect policy later rejects the same URI.
 
-A connector being able to open is not a substitute for this gate.
+A connector being able to open is not a substitute for this gate, and a successful DCR response alone is not proof that the complete authorization path accepts the client.
 
 ## Deployed MCP contract qualification
 
@@ -247,7 +259,7 @@ The production service should:
 - execute the compiled production server from an immutable release directory
 - set `NODE_ENV=production`
 - use bounded restart behavior
-- preserve the durable native-OAuth state database outside the immutable release directory
+- when native OAuth is enabled, preserve its durable state database outside the immutable release directory
 - never use the development `tsx server/index.ts` entry point
 - never enable Workbench hot reload in production
 
@@ -303,7 +315,7 @@ For an OAuth/Cloudflare incident, distinguish these layers before changing polic
 client -> Cloudflare Access -> Cloudflare WAF -> public plugin origin -> OAuth/MCP handler -> CPTR backend
 ```
 
-Record the first layer that changes the expected status/content type. A `403`/HTML response at the edge is a different failure from a structured origin `400` OAuth error.
+Record the first layer that changes the expected status/content type and compare it with the declared edge-auth mode. In Managed OAuth mode, a structured Cloudflare `401` challenge is expected; an HTML/interstitial where OAuth JSON is expected is not. In native mode, distinguish an edge/WAF failure from a structured origin OAuth error.
 
 ## Incident evidence checklist
 
