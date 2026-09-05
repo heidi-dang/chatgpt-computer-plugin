@@ -6,6 +6,8 @@ import {
   eventTerminatesWorkbench,
   initialWorkbenchState,
   isTerminalWorkbenchStatus,
+  nextPromptActiveToolCount,
+  promptLifecycleStatus,
   LiveTargetSession,
   reduceWorkbenchEvent,
   reduceWorkbenchEvents,
@@ -160,20 +162,20 @@ function usePromptActivity(
   streamingEnabled: boolean,
 ) {
   const cursor = useRef(0);
-  const promptWorkActive = useRef(false);
+  const activePromptTools = useRef(0);
   const [connection, setConnection] = useState("connecting prompt activity");
   const [status, setStatus] = useState("CONNECTING");
 
   useEffect(() => {
     if (!streamingEnabled) {
-      promptWorkActive.current = false;
+      activePromptTools.current = 0;
       setStatus("DISCONNECTED");
       setConnection("live streaming disabled");
       return;
     }
     const meta = promptMetadata;
     if (!meta?.ticket || !meta.streamUrl || !meta.snapshotUrl) {
-      promptWorkActive.current = false;
+      activePromptTools.current = 0;
       setStatus("DISCONNECTED");
       setConnection("prompt activity unavailable");
       return;
@@ -189,13 +191,8 @@ function usePromptActivity(
       if (event.type === "mcp.tool") {
         const toolName = typeof event.payload?.tool_name === "string" ? event.payload.tool_name : "";
         const toolStatus = typeof event.payload?.status === "string" ? event.payload.status.toUpperCase() : "";
-        if (toolStatus === "STARTED") {
-          promptWorkActive.current = true;
-          setStatus("WORKING");
-        } else if (["COMPLETE", "FAILED", "ERROR", "CANCELLED", "BLOCKED"].includes(toolStatus)) {
-          promptWorkActive.current = false;
-          setStatus("DISCONNECTED");
-        }
+        activePromptTools.current = nextPromptActiveToolCount(activePromptTools.current, toolStatus);
+        setStatus(promptLifecycleStatus(activePromptTools.current));
         if (toolName === "cptr_open_live_workbench" || toolName === "cptr_render_live_terminal") return;
         setState((current) => appendMcpToolActivity(current, {
           event_id: event.event_id,
@@ -329,7 +326,7 @@ function usePromptActivity(
         }
         retryAttempts = 0;
         setConnection("prompt live");
-        if (!promptWorkActive.current) setStatus("DISCONNECTED");
+        setStatus(promptLifecycleStatus(activePromptTools.current));
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
