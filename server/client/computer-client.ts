@@ -359,6 +359,10 @@ export class ComputerClient {
     }
   }
 
+  async getRuntimeMetrics(): Promise<Record<string, unknown>> {
+    return this.request("/runtime/metrics");
+  }
+
   async listWorkspaces(includeUnavailable = false): Promise<{ workspaces: Workspace[] }> {
     const now = Date.now();
     const cached = this.workspaceCache.get(includeUnavailable);
@@ -1009,6 +1013,7 @@ export class ComputerClient {
     cwd?: string;
     wait_seconds?: number;
     allow_network?: boolean;
+    measure_lifecycle?: boolean;
     pty?: boolean;
     rows?: number;
     cols?: number;
@@ -1023,6 +1028,7 @@ export class ComputerClient {
         cwd: input.cwd ?? ".",
         wait_seconds: input.wait_seconds ?? 0,
         allow_network: input.allow_network ?? false,
+        ...(input.measure_lifecycle ? { measure_lifecycle: true } : {}),
         pty: input.pty ?? false,
         rows: input.rows ?? 24,
         cols: input.cols ?? 80,

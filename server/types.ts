@@ -144,6 +144,7 @@ export type DirectCommand = {
   rows?: number;
   cols?: number;
   recovered?: boolean;
+  lifecycle_timing_ms?: Record<string, number>;
 };
 
 export type DirectSshCommand = DirectCommand & {
