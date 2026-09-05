@@ -66,6 +66,7 @@ function normalizedClientMetadata(input: {
   grantTypes?: unknown;
   responseTypes?: unknown;
   tokenEndpointAuthMethod?: unknown;
+  tokenEndpointAuthMethodsSupported?: unknown;
   applicationType?: unknown;
 }): OAuthClientMetadata {
   const clientName = typeof input.clientName === "string" ? input.clientName.trim() : "";
@@ -79,8 +80,13 @@ function normalizedClientMetadata(input: {
   if (Array.isArray(input.responseTypes) && !input.responseTypes.includes("code")) {
     throw new Error("code response type is required");
   }
-  const authMethod = input.tokenEndpointAuthMethod ?? "none";
-  if (authMethod !== "none") throw new Error("only public clients using token_endpoint_auth_method=none are supported");
+  let authMethod = input.tokenEndpointAuthMethod ?? "none";
+  const supportedMethods = Array.isArray(input.tokenEndpointAuthMethodsSupported) ? input.tokenEndpointAuthMethodsSupported : [authMethod];
+  
+  if (authMethod !== "none" && !supportedMethods.includes("none")) {
+    throw new Error("only public clients using token_endpoint_auth_method=none are supported");
+  }
+  
   const applicationType = input.applicationType ?? "web";
   if (applicationType !== "native" && applicationType !== "web") {
     throw new Error("application_type must be native or web");
@@ -168,15 +174,22 @@ async function fetchMetadataDocument(clientId: string): Promise<{ body: unknown;
   }
   const addresses = await lookup(url.hostname, { all: true, verbatim: true });
   if (!addresses.length) throw new Error("CIMD client metadata host did not resolve");
-  for (const address of addresses) assertPublicAddress(address.address, address.family === 6 ? 6 : 4);
-  const selected = addresses[0];
+  for (const address of addresses) {
+    const ip = typeof address === "string" ? address : address.address;
+    const family = typeof address === "string" ? (ip.includes(":") ? 6 : 4) : address.family;
+    assertPublicAddress(ip, family as 4 | 6);
+  }
+  const selectedRaw = addresses[0] as any;
+  const selected = typeof selectedRaw === "string"
+    ? { address: selectedRaw, family: selectedRaw.includes(":") ? 6 : 4 }
+    : selectedRaw;
 
   return await new Promise((resolve, reject) => {
     const request = https.request(url, {
       method: "GET",
       headers: { accept: "application/json" },
       servername: url.hostname,
-      lookup: (_hostname, _options, callback) => callback(null, selected.address, selected.family),
+      lookup: (_hostname, _options, callback) => callback(null, [{ address: selected.address, family: selected.family as 4 | 6 }]),
       timeout: 3_000,
     }, (response) => {
       if (response.statusCode !== 200) {
@@ -242,6 +255,7 @@ async function resolveCimdClientId(clientId: string): Promise<OAuthClientMetadat
     responseTypes: record.response_types,
     tokenEndpointAuthMethod: record.token_endpoint_auth_method,
     applicationType: record.application_type,
+    tokenEndpointAuthMethodsSupported: record.token_endpoint_auth_methods_supported,
   });
   if (metadataCache.size >= MAX_CACHE_ENTRIES) metadataCache.delete(metadataCache.keys().next().value as string);
   metadataCache.set(clientId, { metadata, expiresAt: Date.now() + cacheMs });

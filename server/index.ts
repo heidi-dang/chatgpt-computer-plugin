@@ -822,10 +822,12 @@ const httpServer = createServer(async (req, res) => {
     url.pathname === "/live/prompt/browser-return" ||
     url.pathname === "/live/prompt/browser-stream" ||
     url.pathname.startsWith("/__cptr/dev/");
+  const isOauthConsentPath = url.pathname === "/oauth/login";
   const browserOriginAllowed = workbenchBrowserRequest
     ? isAllowedWorkbenchBrowserOrigin(requestOrigin, allowedBrowserOrigins)
-    : isAllowedBrowserOrigin(requestOrigin, allowedBrowserOrigins);
+    : (isOauthConsentPath && requestOrigin === publicOrigin) || isAllowedBrowserOrigin(requestOrigin, allowedBrowserOrigins);
   if (!browserOriginAllowed) {
+    console.warn(`Access denied for origin ${requestOrigin || "none"} on ${req.method} ${url.pathname}`);
     res.writeHead(403, { "content-type": "application/json", "cache-control": "no-store" })
       .end(JSON.stringify({ error: "browser origin is not allowed" }));
     return;
