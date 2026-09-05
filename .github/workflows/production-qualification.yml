@@ -25,6 +25,8 @@ jobs:
     env:
       CPTR_DEPLOYED_MCP_URL: ${{ vars.CPTR_DEPLOYED_MCP_URL }}
       CPTR_DEPLOYED_PUBLIC_ORIGIN: ${{ vars.CPTR_DEPLOYED_PUBLIC_ORIGIN }}
+      CPTR_EDGE_AUTH_MODE: ${{ vars.CPTR_EDGE_AUTH_MODE }}
+      CPTR_EDGE_DCR_REDIRECT_URIS: ${{ vars.CPTR_EDGE_DCR_REDIRECT_URIS }}
     steps:
       - name: Require production endpoint configuration
         run: |

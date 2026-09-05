@@ -4,6 +4,7 @@ import test from "node:test";
 
 const serverSource = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
 const deployedContractSource = readFileSync(new URL("../scripts/check-deployed-contract.mjs", import.meta.url), "utf8");
+const publicEdgeSource = readFileSync(new URL("../scripts/check-public-edge.mjs", import.meta.url), "utf8");
 
 test("production health response does not expose internal workbench filesystem paths", () => {
   const healthBlock = serverSource.match(/if \(url\.pathname === "\/health"\) \{([\s\S]*?)\n  \}/)?.[1] ?? "";
@@ -32,4 +33,15 @@ test("MCP authentication advertises canonical RFC 9728 metadata and native OAuth
   assert.match(serverSource, /url\.pathname === "\/oauth\/token"/);
   assert.match(serverSource, /url\.pathname === "\/oauth\/register"/);
   assert.match(serverSource, /url\.pathname === "\/oauth\/login"/);
+});
+
+test("public edge verifier supports both native and Cloudflare Managed OAuth RFC 9728 challenges", () => {
+  assert.match(publicEdgeSource, /CPTR_EDGE_AUTH_MODE/);
+  assert.match(publicEdgeSource, /cloudflare-managed/);
+  assert.match(publicEdgeSource, /cloudflare-access-protected-resource/);
+  assert.match(publicEdgeSource, /authorization_servers/);
+  assert.match(publicEdgeSource, /registration_endpoint/);
+  assert.match(publicEdgeSource, /code_challenge_method/);
+  assert.match(publicEdgeSource, /CPTR_EDGE_DCR_REDIRECT_URIS/);
+  assert.doesNotMatch(publicEdgeSource, /must be disabled for that route/);
 });
