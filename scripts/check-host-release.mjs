@@ -6,6 +6,7 @@ const service = process.env.CPTR_SYSTEMD_UNIT?.trim();
 const releaseRoot = process.env.CPTR_RELEASE_ROOT?.trim();
 const expectedSha = process.env.CPTR_EXPECTED_RELEASE_SHA?.trim();
 const releaseDropIn = process.env.CPTR_RELEASE_DROPIN_PATH?.trim();
+const serviceEnvFile = process.env.CPTR_SERVICE_ENV_FILE?.trim();
 const nodeBin = process.env.CPTR_NODE_BIN?.trim();
 
 for (const [name, value] of [
@@ -13,6 +14,7 @@ for (const [name, value] of [
   ["CPTR_RELEASE_ROOT", releaseRoot],
   ["CPTR_EXPECTED_RELEASE_SHA", expectedSha],
   ["CPTR_RELEASE_DROPIN_PATH", releaseDropIn],
+  ["CPTR_SERVICE_ENV_FILE", serviceEnvFile],
   ["CPTR_NODE_BIN", nodeBin],
 ]) {
   if (!value) throw new Error(`${name} is required for the host-release gate`);
@@ -34,6 +36,13 @@ function systemctl(property) {
 
 const expectedReleaseDir = realpathSync(resolve(releaseRoot, expectedSha));
 const expectedDropInPath = realpathSync(releaseDropIn);
+const serviceEnvPath = realpathSync(serviceEnvFile);
+const serviceEnvSource = readFileSync(serviceEnvPath, "utf8");
+const releaseOwnedEnvKeys = ["GIT_COMMIT_SHA", "CPTR_WORKBENCH_BUILD_ID", "NODE_ENV", "CPTR_HOT_RELOAD"];
+const conflictingServiceEnvKeys = releaseOwnedEnvKeys.filter((key) => new RegExp(`^${key}=`, "m").test(serviceEnvSource));
+if (conflictingServiceEnvKeys.length) {
+  throw new Error(`service environment file must not define release-owned keys: ${conflictingServiceEnvKeys.join(", ")}`);
+}
 const workingDirectory = realpathSync(systemctl("WorkingDirectory"));
 if (workingDirectory !== expectedReleaseDir) {
   throw new Error(`systemd WorkingDirectory drift: expected ${expectedReleaseDir}, got ${workingDirectory}`);

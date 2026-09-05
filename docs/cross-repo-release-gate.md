@@ -203,9 +203,10 @@ Run the host gate on AWS with operator-configured values rather than hardcoded p
 CPTR_SYSTEMD_UNIT="$CPTR_SYSTEMD_UNIT" \
 CPTR_RELEASE_ROOT="$CPTR_RELEASE_ROOT" \
 CPTR_RELEASE_DROPIN_PATH="$CPTR_RELEASE_DROPIN_PATH" \
+CPTR_SERVICE_ENV_FILE="$CPTR_SERVICE_ENV_FILE" \
 CPTR_NODE_BIN="$CPTR_NODE_BIN" \
 CPTR_EXPECTED_RELEASE_SHA="$CPTR_EXPECTED_RELEASE_SHA" \
-npm run check:host-release
+sudo -E npm run check:host-release
 ```
 
 The gate requires:
@@ -215,12 +216,13 @@ The gate requires:
 - effective `ExecStart` pointing to that release's compiled server
 - the configured canonical release drop-in to be active
 - no second drop-in with release-selection authority
+- the durable service environment file does not define `GIT_COMMIT_SHA`, `CPTR_WORKBENCH_BUILD_ID`, `NODE_ENV`, or `CPTR_HOT_RELOAD`; those keys belong only to the release drop-in
 - `NODE_ENV=production`
 - `CPTR_HOT_RELOAD=0`
 - build ID and `GIT_COMMIT_SHA` equal to the target SHA
 - systemd `active/running`
 
-This specifically prevents lexical drop-in ordering from silently selecting an old release.
+This prevents both lexical drop-in ordering and `EnvironmentFile` precedence from silently selecting or advertising an old release. The gate needs read access to the protected service environment file, so run it with the host's existing non-interactive privilege boundary rather than weakening that file's permissions.
 
 ## Release-SHA convergence
 
