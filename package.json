@@ -13,8 +13,6 @@
     "check:host-release": "node scripts/check-host-release.mjs",
     "check:deployed-contract": "node scripts/check-deployed-contract.mjs",
     "check:release": "npm run typecheck && npm test && npm run build && npm run check:cross-repo-contract",
-    "check:mcp-traffic-integration": "node scripts/check-mcp-traffic-integration.mjs",
-    "check:mcp-traffic-acceptance": "node scripts/run-mcp-traffic-acceptance.mjs",
     "check:mcp-live-activity": "node scripts/check-mcp-live-activity-integration.mjs",
     "benchmark:mcp-latency": "tsx scripts/benchmark-mcp-latency.ts",
     "build": "npm run build:web && tsc -p tsconfig.json && npm run copy:web",

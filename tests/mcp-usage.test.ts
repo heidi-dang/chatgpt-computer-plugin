@@ -4,6 +4,7 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { ComputerClient } from "../server/client/computer-client.js";
 import { McpActivityEmitter } from "../server/mcp-activity.js";
 import { McpDiagnosticsEmitter } from "../server/mcp-diagnostics.js";
+import { mcpRequestContext, normalizeMcpClient } from "../server/mcp-traffic.js";
 import { createMcpServer } from "../server/mcp.js";
 
 const usageModule = await import("../server/mcp-usage.js").catch(() => ({} as Record<string, unknown>));
@@ -171,10 +172,20 @@ test("one terminal Usage event counts original tool arguments but Activity stays
     path: "README.md",
     client_model: "GPT-5.6 Sol",
   };
-  const callResult = await client.callTool({
+  const callResult = await mcpRequestContext.run({
+    requestId: "request-usage",
+    correlationId: "corr-request-usage",
+    sessionId: "session-usage",
+    client: normalizeMcpClient({ name: "ChatGPT", version: "1.0.0" }),
+    method: "tools/call",
+    startedAt: Date.now(),
+    requestBytes: 64,
+    rawToolArguments: originalArguments,
+    outcome: { failed: false, errorCode: null },
+  }, () => client.callTool({
     name: "cptr_code_read_file",
     arguments: originalArguments,
-  });
+  }));
   await Promise.all([diagnosticEmitter.flush(), activityEmitter.flush()]);
 
   const usage = diagnostics.filter((event) => event.kind === "usage");
@@ -187,10 +198,9 @@ test("one terminal Usage event counts original tool arguments but Activity stays
   ) => { tokens: number; method: string; exact_for_model: boolean };
   const callEnvelope = usageModule.canonicalToolCallEnvelope as (name: string, args: unknown) => string;
   const resultEnvelope = usageModule.canonicalMcpResultEnvelope as (value: unknown) => string;
-  const validatedArguments = { ...originalArguments, start_line: 0, end_line: 0 };
   const expectedOutput = estimate(
     "gpt-5.6-sol",
-    callEnvelope("cptr_code_read_file", validatedArguments),
+    callEnvelope("cptr_code_read_file", originalArguments),
   );
   const expectedInput = estimate("gpt-5.6-sol", resultEnvelope(callResult));
   assert.equal(

@@ -160,15 +160,21 @@ function usePromptActivity(
   streamingEnabled: boolean,
 ) {
   const cursor = useRef(0);
+  const promptWorkActive = useRef(false);
   const [connection, setConnection] = useState("connecting prompt activity");
+  const [status, setStatus] = useState("CONNECTING");
 
   useEffect(() => {
     if (!streamingEnabled) {
+      promptWorkActive.current = false;
+      setStatus("DISCONNECTED");
       setConnection("live streaming disabled");
       return;
     }
     const meta = promptMetadata;
     if (!meta?.ticket || !meta.streamUrl || !meta.snapshotUrl) {
+      promptWorkActive.current = false;
+      setStatus("DISCONNECTED");
       setConnection("prompt activity unavailable");
       return;
     }
@@ -182,6 +188,14 @@ function usePromptActivity(
       cursor.current = event.sequence;
       if (event.type === "mcp.tool") {
         const toolName = typeof event.payload?.tool_name === "string" ? event.payload.tool_name : "";
+        const toolStatus = typeof event.payload?.status === "string" ? event.payload.status.toUpperCase() : "";
+        if (toolStatus === "STARTED") {
+          promptWorkActive.current = true;
+          setStatus("WORKING");
+        } else if (["COMPLETE", "FAILED", "ERROR", "CANCELLED", "BLOCKED"].includes(toolStatus)) {
+          promptWorkActive.current = false;
+          setStatus("DISCONNECTED");
+        }
         if (toolName === "cptr_open_live_workbench" || toolName === "cptr_render_live_terminal") return;
         setState((current) => appendMcpToolActivity(current, {
           event_id: event.event_id,
@@ -315,6 +329,7 @@ function usePromptActivity(
         }
         retryAttempts = 0;
         setConnection("prompt live");
+        if (!promptWorkActive.current) setStatus("DISCONNECTED");
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -377,7 +392,7 @@ function usePromptActivity(
     };
   }, [promptMetadata?.ticket, promptMetadata?.streamUrl, promptMetadata?.snapshotUrl, promptMetadata?.renewUrl, setPromptMetadata, setMeta, setState, streamingEnabled]);
 
-  return connection;
+  return { connection, status };
 }
 
 function useMcpBridge() {
@@ -670,11 +685,11 @@ function OwnedWorkbench() {
   const [surfaceMode, setSurfaceMode] = useState<"terminal" | "browser">("terminal");
   const [browserSurface, setBrowserSurface] = useState<BrowserSurfaceState | null>(null);
   const [terminalViewState, setTerminalViewState] = useState({ follow: true, scrollTop: 0 });
-  const promptConnection = usePromptActivity(promptMetadata, setPromptMetadata, setMeta, setState, setBrowserSurface, setSurfaceMode, liveStreamingEnabled);
+  const promptActivity = usePromptActivity(promptMetadata, setPromptMetadata, setMeta, setState, setBrowserSurface, setSurfaceMode, liveStreamingEnabled);
   const targetConnection = useLiveSession(meta, setMeta, setState, liveStreamingEnabled);
-  const connection = meta?.targetId && !isTerminalWorkbenchStatus(state.status) ? targetConnection : promptConnection;
+  const connection = meta?.targetId && !isTerminalWorkbenchStatus(state.status) ? targetConnection : promptActivity.connection;
   const visibleTarget = useRef<string | null>(null);
-  const displayStatus = meta?.targetType && meta.targetId ? state.status : "CONNECTING";
+  const displayStatus = meta?.targetType && meta.targetId ? state.status : promptActivity.status;
 
   useEffect(() => {
     const identity = workbenchTargetIdentity(meta?.targetType, meta?.targetId, meta?.workspaceId);
@@ -708,7 +723,7 @@ function OwnedWorkbench() {
           rows={state.transcript}
           status={displayStatus}
           connection={connection}
-          machineLabel={meta?.targetId || promptConnection === "prompt live" ? "CPTR Computer" : "Connecting to computer"}
+          machineLabel={meta?.targetId || promptActivity.connection === "prompt live" ? "CPTR Computer" : "Connecting to computer"}
           targetLabel={targetLabel(meta)}
           follow={terminalViewState.follow}
           scrollTop={terminalViewState.scrollTop}
