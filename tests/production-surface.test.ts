@@ -56,6 +56,8 @@ test("production qualification does not use an origin bearer to bypass Cloudflar
   assert.match(productionQualificationSource, /CPTR_EXPECTED_RELEASE_SHA:/);
   assert.match(productionQualificationSource, /vars\.CPTR_EDGE_AUTH_MODE == 'native'/);
   assert.match(productionQualificationSource, /CPTR_DEPLOYED_MCP_TOKEN: \$\{\{ secrets\.CPTR_DEPLOYED_MCP_TOKEN \}\}/);
+  assert.match(productionQualificationSource, /Checkout verifier revision/);
+  assert.doesNotMatch(productionQualificationSource, /ref: \$\{\{ github\.event_name == 'workflow_dispatch' && inputs\.expected_release_sha/);
   assert.doesNotMatch(
     productionQualificationSource,
     /if: \$\{\{ github\.event_name == 'workflow_dispatch' \}\}\s+needs: public-edge[\s\S]*?CPTR_DEPLOYED_MCP_TOKEN/,
