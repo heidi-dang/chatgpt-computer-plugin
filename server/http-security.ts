@@ -73,8 +73,7 @@ export function resolveAllowedOrigins(env: Environment): Set<string> {
 }
 
 export function isAllowedBrowserOrigin(origin: string | undefined, allowedOrigins: Set<string>): boolean {
-  // Requests made by non-browser MCP clients do not set Origin. Browser requests
-  // to the MCP transport itself must match the explicit allowlist.
+  // Generic browser/device traffic requires an exact configured origin.
   return !origin || allowedOrigins.has(origin);
 }
 
@@ -89,6 +88,13 @@ function isOpenAiWidgetOrigin(origin: string): boolean {
   }
 }
 
+export function isAllowedMcpBrowserOrigin(origin: string | undefined, allowedOrigins: Set<string>): boolean {
+  // ChatGPT Apps SDK browser traffic can reach the OAuth-protected MCP transport
+  // from an OpenAI-owned sandbox origin. Keep this exception scoped to /mcp;
+  // generic browser/device traffic still requires an exact configured origin.
+  return !origin || allowedOrigins.has(origin) || isOpenAiWidgetOrigin(origin);
+}
+
 export function isAllowedWorkbenchBrowserOrigin(origin: string | undefined, allowedOrigins: Set<string>): boolean {
   // Apps SDK widgets execute from a ChatGPT-owned sandbox origin rather than
   // PUBLIC_ORIGIN. Live endpoints remain protected by opaque, target-bound
@@ -99,6 +105,11 @@ export function isAllowedWorkbenchBrowserOrigin(origin: string | undefined, allo
 
 export function corsHeaders(origin: string | undefined, allowedOrigins: Set<string>): Record<string, string> {
   if (!origin || !allowedOrigins.has(origin)) return {};
+  return { "Access-Control-Allow-Origin": origin, Vary: "Origin" };
+}
+
+export function mcpCorsHeaders(origin: string | undefined, allowedOrigins: Set<string>): Record<string, string> {
+  if (!origin || !isAllowedMcpBrowserOrigin(origin, allowedOrigins)) return {};
   return { "Access-Control-Allow-Origin": origin, Vary: "Origin" };
 }
 

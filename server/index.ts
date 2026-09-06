@@ -73,7 +73,9 @@ import {
 import {
   corsHeaders,
   isAllowedBrowserOrigin,
+  isAllowedMcpBrowserOrigin,
   isAllowedWorkbenchBrowserOrigin,
+  mcpCorsHeaders,
   resolveAllowedOrigins,
   resolvePublicOrigin,
   workbenchCorsHeaders,
@@ -996,11 +998,14 @@ const httpServer = createServer(async (req, res) => {
     url.pathname === "/live/prompt/browser-return" ||
     url.pathname === "/live/prompt/browser-stream" ||
     url.pathname.startsWith("/__cptr/dev/");
+  const mcpBrowserRequest = url.pathname === mcpPath;
   const isOauthConsentPath = url.pathname === "/oauth/login";
   const browserOriginAllowed = workbenchBrowserRequest
     ? isAllowedWorkbenchBrowserOrigin(requestOrigin, allowedBrowserOrigins)
-    : (isOauthConsentPath && requestOrigin === publicOrigin) ||
-      isAllowedBrowserOrigin(requestOrigin, allowedBrowserOrigins);
+    : mcpBrowserRequest
+      ? isAllowedMcpBrowserOrigin(requestOrigin, allowedBrowserOrigins)
+      : (isOauthConsentPath && requestOrigin === publicOrigin) ||
+        isAllowedBrowserOrigin(requestOrigin, allowedBrowserOrigins);
   if (!browserOriginAllowed) {
     console.warn(
       `Access denied for origin ${requestOrigin || "none"} on ${req.method} ${url.pathname}`,
@@ -1015,7 +1020,9 @@ const httpServer = createServer(async (req, res) => {
   }
   const originHeaders = workbenchBrowserRequest
     ? workbenchCorsHeaders(requestOrigin, allowedBrowserOrigins)
-    : corsHeaders(requestOrigin, allowedBrowserOrigins);
+    : mcpBrowserRequest
+      ? mcpCorsHeaders(requestOrigin, allowedBrowserOrigins)
+      : corsHeaders(requestOrigin, allowedBrowserOrigins);
   for (const [header, value] of Object.entries(originHeaders))
     res.setHeader(header, value);
 
