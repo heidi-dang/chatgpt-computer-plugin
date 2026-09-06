@@ -164,7 +164,9 @@ function usePromptActivity(
   const cursor = useRef(0);
   const activePromptTools = useRef(0);
   const [connection, setConnection] = useState("connecting prompt activity");
-  const [status, setStatus] = useState("CONNECTING");
+  // Prompt SSE health is transport state only. An unbound Workbench has no
+  // active CPTR lifecycle, including after an iOS remount while SSE recovers.
+  const [status, setStatus] = useState("DISCONNECTED");
 
   useEffect(() => {
     if (!streamingEnabled) {
@@ -736,7 +738,7 @@ function OwnedWorkbench() {
           rows={state.transcript}
           status={displayStatus}
           connection={connection}
-          machineLabel={meta?.targetId || promptActivity.connection === "prompt live" ? "CPTR Computer" : "Connecting to computer"}
+          machineLabel="CPTR Computer"
           targetLabel={targetLabel(meta)}
           follow={terminalViewState.follow}
           scrollTop={terminalViewState.scrollTop}
