@@ -81,7 +81,10 @@ test("DCR accepts Claude, Gemini, and Grok-compatible redirect shapes", async ()
     },
     {
       client_name: "Grok hosted MCP connector",
-      redirect_uris: ["https://grok.com/connectors/oauth/callback"],
+      redirect_uris: [
+        "https://grok.com/connectors-oauth-exchange-code/",
+        "https://grok.com/connectors-oauth-exchange-code",
+      ],
       application_type: "web",
     },
   ] as const;

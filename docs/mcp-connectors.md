@@ -55,7 +55,7 @@ Claude custom connectors can use a remote MCP URL and perform OAuth; deployments
 
 Gemini CLI supports remote MCP OAuth discovery and token management. Because client-version behavior can differ, `connector:register` provides a deterministic fallback when an explicit client ID is required.
 
-Grok custom MCP connectors accept a public remote MCP URL and complete required authentication through the connector flow. The public-edge gate should include the exact callback metadata observed from the deployed Grok connector before release approval.
+Grok custom MCP connectors accept a public remote MCP URL and complete required authentication through the connector flow. As observed in the current Grok Web connector flow, the hosted callback is `https://grok.com/connectors-oauth-exchange-code/` (with some clients normalizing the trailing slash away). Production must allow and qualify the exact observed callback value rather than a guessed `/connectors/oauth/callback` path. The public-edge gate should include the exact callback metadata observed from the deployed Grok connector before release approval.
 
 ## Security boundary
 
