@@ -1572,11 +1572,14 @@ export class ComputerClient {
     targetId: string,
     afterSequence = 0,
     workspaceId?: string,
+    workerId?: string,
   ): Promise<Record<string, unknown>> {
     if (targetType === "command") {
       if (!workspaceId) throw new ComputerApiError(400, "workspace identity is required for command live stream");
+      const query = new URLSearchParams({ after: String(Math.max(0, afterSequence)) });
+      if (workerId) query.set("worker_id", workerId);
       return this.request(
-        `/workspaces/${encodeURIComponent(workspaceId)}/coding/commands/${encodeURIComponent(targetId)}/stream/snapshot?after=${Math.max(0, afterSequence)}`,
+        `/workspaces/${encodeURIComponent(workspaceId)}/coding/commands/${encodeURIComponent(targetId)}/stream/snapshot?${query}`,
       );
     }
     const path = targetType === "task" ? "tasks" : "autonomous";
@@ -1590,6 +1593,7 @@ export class ComputerClient {
     targetId: string,
     afterSequence = 0,
     workspaceId?: string,
+    workerId?: string,
   ): Promise<Response> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Math.max(this.timeoutMs, 60_000));
@@ -1601,8 +1605,10 @@ export class ComputerClient {
       } else {
         path = `${targetType === "task" ? "tasks" : "autonomous"}/${encodeURIComponent(targetId)}`;
       }
+      const query = new URLSearchParams({ after: String(afterSequence) });
+      if (targetType === "command" && workerId) query.set("worker_id", workerId);
       return await this.fetchImpl(
-        `${this.baseUrl}/api/control/v1/${path}/stream?after=${afterSequence}`,
+        `${this.baseUrl}/api/control/v1/${path}/stream?${query}`,
         {
           headers: {
             Authorization: `Bearer ${this.token}`,

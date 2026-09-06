@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 
 export type LiveTarget =
   | { targetType: "task" | "monitor"; targetId: string }
-  | { targetType: "command"; targetId: string; workspaceId: string };
+  | { targetType: "command"; targetId: string; workspaceId: string; workerId?: string };
 
 export type WidgetStreamMetadata<T extends LiveTarget = LiveTarget> = T & {
   ticket: string;
@@ -97,7 +97,11 @@ export class LiveTicketStore {
     }
     if (
       target?.targetType === "command" &&
-      (claims.targetType !== "command" || claims.workspaceId !== target.workspaceId)
+      (
+        claims.targetType !== "command" ||
+        claims.workspaceId !== target.workspaceId ||
+        claims.workerId !== target.workerId
+      )
     ) {
       return null;
     }
@@ -112,7 +116,12 @@ export class LiveTicketStore {
       return null;
     }
     const target: LiveTarget = claims.targetType === "command"
-      ? { targetType: "command", targetId: claims.targetId, workspaceId: claims.workspaceId }
+      ? {
+          targetType: "command",
+          targetId: claims.targetId,
+          workspaceId: claims.workspaceId,
+          ...(claims.workerId ? { workerId: claims.workerId } : {}),
+        }
       : { targetType: claims.targetType, targetId: claims.targetId };
     this.tickets.delete(ticket);
     return this.issue(target);

@@ -36,14 +36,16 @@ test("issues a short-lived ticket bound to one target", () => {
   assert.equal(issued.streamUrl.includes(issued.ticket), false);
 });
 
-test("command tickets are bound to both command and workspace identity", () => {
+test("command tickets bind command, workspace, and optional Direct Coding Worker identity", () => {
   const store = new LiveTicketStore({ now: () => 1_000, ttlMs: 5_000 });
-  const issued = store.issue({ targetType: "command", targetId: "cmd-1", workspaceId: "ws-1" });
+  const issued = store.issue({ targetType: "command", targetId: "cmd-1", workspaceId: "ws-1", workerId: "dcw-1" });
 
   assert.equal(issued.workspaceId, "ws-1");
-  assert.ok(store.validate(issued.ticket, { targetType: "command", targetId: "cmd-1", workspaceId: "ws-1" }));
-  assert.equal(store.validate(issued.ticket, { targetType: "command", targetId: "cmd-1", workspaceId: "ws-2" }), null);
-  assert.equal(store.validate(issued.ticket, { targetType: "command", targetId: "cmd-2", workspaceId: "ws-1" }), null);
+  assert.equal(issued.workerId, "dcw-1");
+  assert.ok(store.validate(issued.ticket, { targetType: "command", targetId: "cmd-1", workspaceId: "ws-1", workerId: "dcw-1" }));
+  assert.equal(store.validate(issued.ticket, { targetType: "command", targetId: "cmd-1", workspaceId: "ws-1", workerId: "dcw-2" }), null);
+  assert.equal(store.validate(issued.ticket, { targetType: "command", targetId: "cmd-1", workspaceId: "ws-2", workerId: "dcw-1" }), null);
+  assert.equal(store.validate(issued.ticket, { targetType: "command", targetId: "cmd-2", workspaceId: "ws-1", workerId: "dcw-1" }), null);
 });
 
 test("expired tickets are rejected", () => {
@@ -295,9 +297,9 @@ test("returns a target-bound live snapshot without exposing the ticket", async (
   assert.equal(response.body.includes(issued.ticket), false);
 });
 
-test("routes command live snapshots with the ticket-bound workspace identity", async () => {
+test("routes command live snapshots with ticket-bound workspace and worker identity", async () => {
   const store = new LiveTicketStore({ ttlMs: 5_000, snapshotUrl: "https://plugin.test/live/snapshot" });
-  const issued = store.issue({ targetType: "command", targetId: "cmd-1", workspaceId: "ws-1" });
+  const issued = store.issue({ targetType: "command", targetId: "cmd-1", workspaceId: "ws-1", workerId: "dcw-1" });
   let requestArgs: unknown[] = [];
   const gateway = new LiveGateway({
     getLiveSnapshot: async (...args: unknown[]) => {
@@ -319,6 +321,6 @@ test("routes command live snapshots with the ticket-bound workspace identity", a
   await gateway.handleSnapshot(request as never, response as never);
 
   assert.equal(response.status, 200);
-  assert.deepEqual(requestArgs, ["command", "cmd-1", 1, "ws-1"]);
+  assert.deepEqual(requestArgs, ["command", "cmd-1", 1, "ws-1", "dcw-1"]);
   assert.equal(response.body.includes(issued.ticket), false);
 });

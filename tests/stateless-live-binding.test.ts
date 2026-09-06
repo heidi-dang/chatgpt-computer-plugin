@@ -189,6 +189,7 @@ test("routes Direct Coding Worker commands into the existing prompt live termina
     assert.equal(liveBind.payload.live.targetType, "command");
     assert.equal(liveBind.payload.live.targetId, "command-stateless-1");
     assert.equal(liveBind.payload.live.workspaceId, "ws-1");
+    assert.equal(liveBind.payload.live.workerId, "dcw-live-terminal");
   }
   assert.equal(workerActivity.length, 2, "compact worker metadata remains available around the live command binding");
   assert.ok(workerActivity[0]!.sequence < liveBind!.sequence, "worker start metadata must precede the command binding");

@@ -746,7 +746,7 @@ test("streams CPTR activity with server-side auth and a replay cursor", async ()
   assert.equal(seenUrl.includes("secret-token"), false);
 });
 
-test("routes command live snapshot and stream through the workspace-owned control endpoints", async () => {
+test("routes command live snapshot and stream through the workspace/worker-owned control endpoints", async () => {
   const seen: string[] = [];
   const client = new ComputerClient({
     baseUrl: "http://cptr.test",
@@ -757,11 +757,11 @@ test("routes command live snapshot and stream through the workspace-owned contro
     },
   });
 
-  await client.getLiveSnapshot("command", "cmd-1", 7, "ws-1");
-  await client.streamLive("command", "cmd-1", 8, "ws-1");
+  await client.getLiveSnapshot("command", "cmd-1", 7, "ws-1", "dcw-1");
+  await client.streamLive("command", "cmd-1", 8, "ws-1", "dcw-1");
 
   assert.deepEqual(seen, [
-    "http://cptr.test/api/control/v1/workspaces/ws-1/coding/commands/cmd-1/stream/snapshot?after=7",
-    "http://cptr.test/api/control/v1/workspaces/ws-1/coding/commands/cmd-1/stream?after=8",
+    "http://cptr.test/api/control/v1/workspaces/ws-1/coding/commands/cmd-1/stream/snapshot?after=7&worker_id=dcw-1",
+    "http://cptr.test/api/control/v1/workspaces/ws-1/coding/commands/cmd-1/stream?after=8&worker_id=dcw-1",
   ]);
 });

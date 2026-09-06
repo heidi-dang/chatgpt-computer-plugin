@@ -2082,7 +2082,12 @@ export function createMcpServer(
         }
         return workbenchResult(
           { ...command, workspace_id: input.workspace_id },
-          { targetType: "command", targetId: command.command_id, workspaceId: input.workspace_id },
+          {
+            targetType: "command",
+            targetId: command.command_id,
+            workspaceId: input.workspace_id,
+            workerId: input.worker_id,
+          },
           "cptr_workspace_run_test_target",
         );
       }
@@ -2384,7 +2389,12 @@ export function createMcpServer(
         }
         return workbenchResult(
           { ...command, workspace_id: input.workspace_id },
-          { targetType: "command", targetId: command.command_id, workspaceId: input.workspace_id },
+          {
+            targetType: "command",
+            targetId: command.command_id,
+            workspaceId: input.workspace_id,
+            workerId: input.worker_id,
+          },
           "cptr_code_run_command",
         );
       }
@@ -3504,7 +3514,12 @@ export function createMcpServer(
               }
               return workbenchResult(
                 wrapped,
-                { targetType: "command", targetId: value.command_id, workspaceId: payload.workspace_id },
+                {
+                  targetType: "command",
+                  targetId: value.command_id,
+                  workspaceId: payload.workspace_id,
+                  workerId: String(payload.worker_id),
+                },
                 "cptr_command",
               );
             }
@@ -3553,7 +3568,12 @@ export function createMcpServer(
               }
               return workbenchResult(
                 wrapped,
-                { targetType: "command", targetId: value.command_id, workspaceId: payload.workspace_id },
+                {
+                  targetType: "command",
+                  targetId: value.command_id,
+                  workspaceId: payload.workspace_id,
+                  workerId: String(payload.worker_id),
+                },
                 "cptr_command",
               );
             }
