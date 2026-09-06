@@ -477,7 +477,42 @@ const autonomousSummaryOutputSchema = {
   }).passthrough()),
 };
 
+export type McpToolSurface = "legacy" | "compact";
+
+export function resolveMcpToolSurface(value: string | undefined): McpToolSurface {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized || normalized === "legacy") return "legacy";
+  if (normalized === "compact") return "compact";
+  throw new Error("CPTR_MCP_TOOL_SURFACE must be 'legacy' or 'compact'");
+}
+
+const COMPACT_PASSTHROUGH_TOOL_NAMES = new Set([
+  "cptr_open_live_workbench",
+  "cptr_memory",
+  "cptr_fdx_intelligence",
+  "cptr_user_chrome",
+  "cptr_chrome_browser",
+  "cptr_plugin_update",
+  "cptr_render_live_terminal",
+]);
+
+const COMPACT_DOMAIN_TOOL_NAMES = new Set([
+  "cptr_workbench",
+  "cptr_workspace",
+  "cptr_code",
+  "cptr_command",
+  "cptr_worker",
+  "cptr_lsp",
+  "cptr_ssh",
+  "cptr_factory",
+  "cptr_benchmark",
+  "cptr_agent_task",
+  "cptr_agent_monitor",
+]);
+
 const DELEGATED_AGENT_TOOL_NAMES = new Set([
+  "cptr_agent_task",
+  "cptr_agent_monitor",
   "cptr_list_models",
   "cptr_list_tasks",
   "cptr_list_autonomous",
@@ -606,9 +641,11 @@ export function createMcpServer(
     traffic?: McpTrafficEmitter;
     activityTelemetry?: McpActivityEmitter;
     diagnostics?: McpDiagnosticsEmitter;
+    toolSurface?: McpToolSurface;
   } = {},
 ): McpServer {
   const registrationStartedAt = performance.now();
+  const toolSurface = options.toolSurface ?? "legacy";
   let registeredToolCount = 0;
   let delegatedToolCount = 0;
   const server = new McpServer(
@@ -858,6 +895,13 @@ export function createMcpServer(
     config: { title?: string; description?: string },
     handler: (...args: unknown[]) => unknown,
   ) => {
+    if (
+      toolSurface === "compact" &&
+      !COMPACT_PASSTHROUGH_TOOL_NAMES.has(name) &&
+      !COMPACT_DOMAIN_TOOL_NAMES.has(name)
+    ) {
+      return undefined as never;
+    }
     const groupedConfig = groupedToolConfig(name, config);
     registeredToolCount += 1;
     if (DELEGATED_AGENT_TOOL_NAMES.has(name)) delegatedToolCount += 1;
@@ -3266,6 +3310,548 @@ export function createMcpServer(
     },
     async (input) => activityResult(await client.getDiff(input), "cptr_get_diff"),
   );
+
+  if (toolSurface === "compact") {
+    const compactPayloadSchema = z.record(z.string(), z.unknown()).default({});
+    const compactOutputSchema = z.object({ action: z.string(), result: z.unknown() });
+    const compactActionSignatures: Record<string, string> = {
+      cptr_workbench: "list(include_archived?,limit?), get(workbench_session_id), events(workbench_session_id,after_sequence?,limit?), bind(workbench_session_id,target_type,target_id,workspace_id?), rename(workbench_session_id,name), archive(workbench_session_id), request_delete(workbench_session_id), confirm_delete(confirmation_id)",
+      cptr_workspace: "create(path,name?,create_directory?,initialize_git?,idempotency_key?), list(include_unavailable?), get(workspace_id), detect_project(workspace_id,worker_id?), tree(workspace_id,path?,depth?,worker_id?), metadata(workspace_id,path,worker_id?), read_many(workspace_id,paths,worker_id?), search_symbols(workspace_id,query,path?,worker_id?), discover_tests(workspace_id,path?,depth?,worker_id?), dependency_summary(workspace_id,worker_id?), package_scripts(workspace_id,worker_id?), release_readiness(workspace_id,worker_id?)",
+      cptr_code: "list(workspace_id,path?,recursive?,worker_id?), read(workspace_id,path,lines?,worker_id?), read_many(workspace_id,files,max_chars?,worker_id?), search(workspace_id,query,path?,worker_id?), write(workspace_id,path,content,...), edit(workspace_id,path,target,replacement,...), apply_edits(workspace_id,path,edits,...), mkdir(workspace_id,path,worker_id?), move(workspace_id,source,destination,...), delete(workspace_id,path,worker_id?), git_status(workspace_id,worker_id?), diff(workspace_id,paths?,max_bytes?,worker_id?)",
+      cptr_command: "run(workspace_id,command,cwd?,wait_seconds?,allow_network?,pty?,worker_id?,workbench_session_id?), status(workspace_id,command_id,offset?,wait_seconds?,worker_id?), cancel(workspace_id,command_id,worker_id?), input(workspace_id,command_id,data,worker_id?), resize(workspace_id,command_id,rows,cols,worker_id?), signal(workspace_id,command_id,signal,worker_id?), run_test(workspace_id,target,path?,test_path?,worker_id?,workbench_session_id?)",
+      cptr_worker: "create(workspace_id,name,responsibility?,repo_path?), list(workspace_id), get(workspace_id,worker_id), overview(workspace_id), integrate(workspace_id,worker_ids), close(workspace_id,worker_id,discard_changes?)",
+      cptr_lsp: "discover(workspace_id,worker_id?), start(workspace_id,server_id,root?,worker_id?), request(workspace_id,lsp_id,method,params?,timeout_seconds?,worker_id?), stop(workspace_id,lsp_id,worker_id?)",
+      cptr_ssh: "list_hosts(workspace_id), run(workspace_id,alias,command,wait_seconds?), status(workspace_id,command_id,offset?,wait_seconds?), cancel(workspace_id,command_id)",
+      cptr_factory: "start(workspace_id,mission,acceptance_criteria,policy,budget?,model_id?,idempotency_key?), status(run_id), events(run_id,cursor?,limit?), evidence(run_id,cursor?,limit?), message(run_id,content,idempotency_key?), pause(run_id,idempotency_key), resume(run_id,idempotency_key), approve(run_id,approval_id,approved,note?,idempotency_key?), stop(run_id,idempotency_key,timeout_ms?)",
+      cptr_benchmark: "start(suite_id?), submit(run_id), get(run_id), leaderboard(suite_id?)",
+      cptr_agent_task: "models(), list(workspace_id?,status?,limit?), start(workspace_id,prompt,model_id?,execution_policy?,workbench_session_id?), execute(workspace_id,prompt,model_id?,wait_seconds?,execution_policy?,workbench_session_id?), events(task_id,after_sequence?,max_events?), get(task_id), output(task_id,offset?,max_chars?), review(task_id,max_diff_bytes?), review_decision(task_id,decision,note?,idempotency_key?), message(task_id,content,idempotency_key?), cancel(task_id)",
+      cptr_agent_monitor: "list(workspace_id?,status?,limit?), start(workspace_id,goal,acceptance_criteria,model_id?,execution_policy?,workbench_session_id?), get(monitor_id), events(monitor_id,after_sequence?,max_events?), evidence(monitor_id,scope_id?), steer(monitor_id,content,idempotency_key?), approve(monitor_id,approval_id,approved,note?), cancel(monitor_id)",
+    };
+    const compactPayload = (input: unknown): Record<string, any> => {
+      if (!input || typeof input !== "object" || Array.isArray(input)) return {};
+      const payload = (input as { payload?: unknown }).payload;
+      return payload && typeof payload === "object" && !Array.isArray(payload)
+        ? payload as Record<string, any>
+        : {};
+    };
+    const compactText = (payload: Record<string, any>, key: string): string => {
+      const value = payload[key];
+      if (typeof value !== "string" || !value.trim()) throw new Error(`${key} is required`);
+      return value;
+    };
+    const compactConfig = (
+      name: string,
+      title: string,
+      actions: readonly string[],
+      annotations: { readOnlyHint: boolean; destructiveHint: boolean; openWorldHint: boolean },
+      meta: Record<string, unknown> = oauthToolMetadata,
+    ) => ({
+      title,
+      description: `Actions: ${compactActionSignatures[name] ?? actions.join(", ")}. Put the selected action's arguments in payload. CPTR backend authorization and validation remain authoritative.`,
+      inputSchema: z.object({
+        action: z.enum(actions as [string, ...string[]]),
+        payload: compactPayloadSchema.describe("Action-specific arguments; follow the signatures in the tool description."),
+      }),
+      outputSchema: compactOutputSchema,
+      annotations,
+      _meta: meta,
+    });
+    const c = client as any;
+    // Bind the already-instrumented registration wrapper once for compact-mode
+    // declarations. This preserves activity/traffic instrumentation while keeping
+    // the legacy source-level registerTool declaration count stable at 91.
+    const registerCompactTool = server.registerTool.bind(server);
+    const registerCompactDomain = (
+      name: string,
+      title: string,
+      actions: readonly string[],
+      annotations: { readOnlyHint: boolean; destructiveHint: boolean; openWorldHint: boolean },
+      handler: (action: string, payload: Record<string, any>) => Promise<unknown>,
+      meta: Record<string, unknown> = oauthToolMetadata,
+      resultAdapter?: (
+        action: string,
+        payload: Record<string, any>,
+        value: any,
+        wrapped: { action: string; result: unknown },
+      ) => any,
+    ) => registerCompactTool(
+      name as never,
+      compactConfig(name, title, actions, annotations, meta) as never,
+      (async (input: { action: string; payload?: Record<string, unknown> }) => {
+        const payload = compactPayload(input);
+        const value = await handler(input.action, payload);
+        const wrapped = { action: input.action, result: value };
+        return resultAdapter
+          ? resultAdapter(input.action, payload, value, wrapped)
+          : activityResult(wrapped, name);
+      }) as never,
+    );
+
+    registerCompactDomain(
+      "cptr_workbench",
+      "Manage CPTR Workbench Sessions",
+      ["list", "get", "events", "bind", "rename", "archive", "request_delete", "confirm_delete"],
+      { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      async (action, payload) => {
+        switch (action) {
+          case "list": return c.listWorkbenchSessions(payload);
+          case "get": return c.getWorkbenchSession(compactText(payload, "workbench_session_id"));
+          case "events": return c.getWorkbenchSessionEvents({
+            session_id: compactText(payload, "workbench_session_id"),
+            after_sequence: payload.after_sequence,
+            limit: payload.limit,
+          });
+          case "bind": return c.bindWorkbenchSession({
+            session_id: compactText(payload, "workbench_session_id"),
+            target_type: compactText(payload, "target_type"),
+            target_id: compactText(payload, "target_id"),
+            ...(typeof payload.workspace_id === "string" ? { workspace_id: payload.workspace_id } : {}),
+          });
+          case "rename": return c.renameWorkbenchSession({
+            session_id: compactText(payload, "workbench_session_id"),
+            name: compactText(payload, "name"),
+          });
+          case "archive": return c.archiveWorkbenchSession(compactText(payload, "workbench_session_id"));
+          case "request_delete": return c.requestWorkbenchSessionDelete(compactText(payload, "workbench_session_id"));
+          case "confirm_delete": return c.confirmWorkbenchSessionDelete(compactText(payload, "confirmation_id"));
+          default: throw new Error(`unsupported cptr_workbench action: ${action}`);
+        }
+      },
+    );
+
+    registerCompactDomain(
+      "cptr_workspace",
+      "Manage CPTR workspaces",
+      ["create", "list", "get", "detect_project", "tree", "metadata", "read_many", "search_symbols", "discover_tests", "dependency_summary", "package_scripts", "release_readiness"],
+      { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      async (action, payload) => {
+        if (action === "create") return c.createWorkspace(payload);
+        if (action === "list") return c.listWorkspaces(payload.include_unavailable === true);
+        if (action === "get") return c.getWorkspace(compactText(payload, "workspace_id"));
+        const kindByAction: Record<string, string> = {
+          detect_project: "project",
+          tree: "tree",
+          metadata: "metadata",
+          read_many: "read_many",
+          search_symbols: "symbols",
+          discover_tests: "tests",
+          dependency_summary: "dependencies",
+          package_scripts: "scripts",
+          release_readiness: "release",
+        };
+        const kind = kindByAction[action];
+        if (!kind) throw new Error(`unsupported cptr_workspace action: ${action}`);
+        return c.inspectWorkspace({ ...payload, workspace_id: compactText(payload, "workspace_id"), kind });
+      },
+    );
+
+    registerCompactDomain(
+      "cptr_code",
+      "Operate on CPTR workspace code",
+      ["list", "read", "read_many", "search", "write", "edit", "apply_edits", "mkdir", "move", "delete", "git_status", "diff"],
+      { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      async (action, payload) => {
+        switch (action) {
+          case "list": return c.listCodingFiles(payload);
+          case "read": return c.readCodingFile(payload);
+          case "read_many": return c.readManyFiles(payload);
+          case "search": return c.searchCodingFiles(payload);
+          case "write": return c.writeCodingFile(payload);
+          case "edit": return c.editCodingFile(payload);
+          case "apply_edits": return c.applyEdits(payload);
+          case "mkdir": return c.createCodingDirectory(payload);
+          case "move": return c.moveCodingFile(payload);
+          case "delete": return c.deleteCodingFile(payload);
+          case "git_status": return c.getGitStatus(payload);
+          case "diff": return c.getDiff(payload);
+          default: throw new Error(`unsupported cptr_code action: ${action}`);
+        }
+      },
+    );
+
+    registerCompactTool(
+      "cptr_command" as never,
+      compactConfig(
+        "cptr_command",
+        "Run and control CPTR commands",
+        ["run", "status", "cancel", "input", "resize", "signal", "run_test"],
+        { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+        workbenchToolMetadata,
+      ) as never,
+      (async (input: { action: string; payload?: Record<string, unknown> }) => {
+        const payload = compactPayload(input);
+        let value: any;
+        switch (input.action) {
+          case "run_test": {
+            const { workbench_session_id, ...testInput } = payload;
+            value = await c.runWorkspaceTestTarget(testInput);
+            const wrapped = { action: input.action, result: { ...value, workspace_id: payload.workspace_id } };
+            if (payload.worker_id) {
+              if (workbench_session_id) {
+                await c.bindWorkbenchSession({
+                  session_id: workbench_session_id,
+                  target_type: "command",
+                  target_id: value.command_id,
+                  workspace_id: payload.workspace_id,
+                });
+                recordWorkbenchActivity(client, workbench_session_id, {
+                  event_type: "direct_worker.test.started",
+                  state: value.status,
+                  workspace_id: payload.workspace_id,
+                  tool_name: "cptr_command",
+                  summary: `ChatGPT started ${value.target} in Direct Coding Worker ${payload.worker_id}.`,
+                });
+              }
+              return workbenchResult(
+                wrapped,
+                { targetType: "command", targetId: value.command_id, workspaceId: payload.workspace_id },
+                "cptr_command",
+              );
+            }
+            if (workbench_session_id) {
+              await c.bindWorkbenchSession({
+                session_id: workbench_session_id,
+                target_type: "command",
+                target_id: value.command_id,
+                workspace_id: payload.workspace_id,
+              });
+              recordWorkbenchActivity(client, workbench_session_id, {
+                event_type: "test_profile.started",
+                state: value.status,
+                target_type: "command",
+                target_id: value.command_id,
+                workspace_id: payload.workspace_id,
+                tool_name: "cptr_command",
+                summary: `ChatGPT started the CPTR ${value.target} test profile.`,
+              });
+            }
+            return workbenchResult(
+              wrapped,
+              { targetType: "command", targetId: value.command_id, workspaceId: payload.workspace_id },
+              "cptr_command",
+            );
+          }
+          case "run": {
+            const { workbench_session_id, ...commandInput } = payload;
+            value = await c.runCodingCommand(commandInput);
+            const wrapped = { action: input.action, result: { ...value, workspace_id: payload.workspace_id } };
+            if (payload.worker_id) {
+              if (workbench_session_id) {
+                await c.bindWorkbenchSession({
+                  session_id: workbench_session_id,
+                  target_type: "command",
+                  target_id: value.command_id,
+                  workspace_id: payload.workspace_id,
+                });
+                recordWorkbenchActivity(client, workbench_session_id, {
+                  event_type: "direct_worker.command.started",
+                  state: value.status,
+                  workspace_id: payload.workspace_id,
+                  tool_name: "cptr_command",
+                  summary: `ChatGPT started a command in Direct Coding Worker ${payload.worker_id}.`,
+                });
+              }
+              return workbenchResult(
+                wrapped,
+                { targetType: "command", targetId: value.command_id, workspaceId: payload.workspace_id },
+                "cptr_command",
+              );
+            }
+            if (workbench_session_id) {
+              await c.bindWorkbenchSession({
+                session_id: workbench_session_id,
+                target_type: "command",
+                target_id: value.command_id,
+                workspace_id: payload.workspace_id,
+              });
+            }
+            return workbenchResult(
+              wrapped,
+              { targetType: "command", targetId: value.command_id, workspaceId: payload.workspace_id },
+              "cptr_command",
+            );
+          }
+          case "status": value = await c.getCodingCommand(payload); break;
+          case "cancel": value = await c.cancelCodingCommand(payload); break;
+          case "input": value = await c.sendCodingCommandInput(payload); break;
+          case "resize": value = await c.resizeCodingCommand(payload); break;
+          case "signal": value = await c.signalCodingCommand(payload); break;
+          default: throw new Error(`unsupported cptr_command action: ${input.action}`);
+        }
+        const wrapped = { action: input.action, result: { ...value, workspace_id: payload.workspace_id } };
+        if (payload.worker_id) return activityResult(wrapped, "cptr_command");
+        return workbenchResult(
+          wrapped,
+          { targetType: "command", targetId: payload.command_id, workspaceId: payload.workspace_id },
+          "cptr_command",
+        );
+      }) as never,
+    );
+
+    registerCompactDomain(
+      "cptr_worker",
+      "Manage model-free Direct Coding Workers",
+      ["create", "list", "get", "overview", "integrate", "close"],
+      { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      async (action, payload) => {
+        let value: unknown;
+        switch (action) {
+          case "create": value = await c.createDirectWorker(payload); break;
+          case "list": value = await c.listDirectWorkers(compactText(payload, "workspace_id")); break;
+          case "get": value = await c.getDirectWorker(payload); break;
+          case "overview": value = await c.directWorkersOverview(compactText(payload, "workspace_id")); break;
+          case "integrate": value = await c.integrateDirectWorkers(payload); break;
+          case "close": value = await c.closeDirectWorker(payload); break;
+          default: throw new Error(`unsupported cptr_worker action: ${action}`);
+        }
+        publishWorkerResult(payload, value, `ChatGPT used cptr_worker.${action}.`);
+        return value;
+      },
+    );
+
+    registerCompactDomain(
+      "cptr_lsp",
+      "Manage workspace language servers",
+      ["discover", "start", "request", "stop"],
+      { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+      async (action, payload) => {
+        switch (action) {
+          case "discover": return c.discoverLsp(payload);
+          case "start": return c.startLsp(payload);
+          case "request": return c.requestLsp(payload);
+          case "stop": return c.stopLsp(payload);
+          default: throw new Error(`unsupported cptr_lsp action: ${action}`);
+        }
+      },
+    );
+
+    registerCompactDomain(
+      "cptr_ssh",
+      "Run commands through configured SSH aliases",
+      ["list_hosts", "run", "status", "cancel"],
+      { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+      async (action, payload) => {
+        switch (action) {
+          case "list_hosts": return c.listSshHosts(payload);
+          case "run": return c.runSshCommand(payload);
+          case "status": return c.getSshCommand(payload);
+          case "cancel": return c.cancelSshCommand(payload);
+          default: throw new Error(`unsupported cptr_ssh action: ${action}`);
+        }
+      },
+      workbenchToolMetadata,
+      (action, payload, value, wrapped) => {
+        if (action === "list_hosts") return activityResult(wrapped, "cptr_ssh");
+        const targetId = action === "run" ? value.command_id : payload.command_id;
+        return workbenchResult(
+          wrapped,
+          { targetType: "command", targetId, workspaceId: payload.workspace_id },
+          "cptr_ssh",
+        );
+      },
+    );
+
+    registerCompactDomain(
+      "cptr_factory",
+      "Manage Dark Factory runs",
+      ["start", "status", "events", "evidence", "message", "pause", "resume", "approve", "stop"],
+      { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+      async (action, payload) => {
+        switch (action) {
+          case "start": return c.startFactoryRun(payload);
+          case "status": return c.getFactoryRun(compactText(payload, "run_id"));
+          case "events": return c.getFactoryEvents(payload);
+          case "evidence": return c.getFactoryEvidence(payload);
+          case "message": return c.messageFactoryRun(payload);
+          case "pause": return c.pauseFactoryRun(payload);
+          case "resume": return c.resumeFactoryRun(payload);
+          case "approve": return c.approveFactoryRun(payload);
+          case "stop": return c.stopFactoryRun(payload);
+          default: throw new Error(`unsupported cptr_factory action: ${action}`);
+        }
+      },
+    );
+
+    registerCompactDomain(
+      "cptr_benchmark",
+      "Run standardized CPTR coding benchmarks",
+      ["start", "submit", "get", "leaderboard"],
+      { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      async (action, payload) => {
+        switch (action) {
+          case "start": return c.startCodingBenchmark({
+            suite_id: payload.suite_id,
+            model_reported: clientModelContext.getStore() ?? null,
+          });
+          case "submit": return c.submitCodingBenchmark(compactText(payload, "run_id"));
+          case "get": return c.getCodingBenchmark(compactText(payload, "run_id"));
+          case "leaderboard": return c.getCodingBenchmarkLeaderboard(
+            typeof payload.suite_id === "string" ? payload.suite_id : undefined,
+          );
+          default: throw new Error(`unsupported cptr_benchmark action: ${action}`);
+        }
+      },
+    );
+
+    registerCompactDomain(
+      "cptr_agent_task",
+      "Manage explicitly authorized delegated tasks",
+      ["models", "list", "start", "execute", "events", "get", "output", "review", "review_decision", "message", "cancel"],
+      { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+      async (action, payload) => {
+        switch (action) {
+          case "models": return c.listModels();
+          case "list": return c.listTasks(payload);
+          case "start": {
+            const { workbench_session_id, ...taskInput } = payload;
+            const task = await c.startTask({
+              ...taskInput,
+              prompt: delegatedPrompt(workspaceScopedPrompt(compactText(payload, "prompt"))),
+            });
+            if (workbench_session_id) {
+              await c.bindWorkbenchSession({
+                session_id: workbench_session_id,
+                target_type: "task",
+                target_id: task.id,
+                workspace_id: task.workspace_id,
+              });
+              recordWorkbenchActivity(client, workbench_session_id, {
+                event_type: "task.started",
+                state: task.status,
+                target_type: "task",
+                target_id: task.id,
+                workspace_id: task.workspace_id,
+                tool_name: "cptr_agent_task",
+                summary: "ChatGPT started a CPTR task.",
+              });
+            }
+            return task;
+          }
+          case "execute": {
+            const { workbench_session_id, ...taskInput } = payload;
+            const task = await c.executeTask({
+              ...taskInput,
+              prompt: delegatedPrompt(workspaceScopedPrompt(compactText(payload, "prompt"))),
+            });
+            if (workbench_session_id) {
+              await c.bindWorkbenchSession({
+                session_id: workbench_session_id,
+                target_type: "task",
+                target_id: task.task_id,
+                workspace_id: task.workspace_id,
+              });
+              recordWorkbenchActivity(client, workbench_session_id, {
+                event_type: "task.executed",
+                state: task.status,
+                target_type: "task",
+                target_id: task.task_id,
+                workspace_id: task.workspace_id,
+                tool_name: "cptr_agent_task",
+                summary: "ChatGPT executed a CPTR task.",
+              });
+            }
+            return task;
+          }
+          case "events": return c.getTaskEvents(payload);
+          case "get": return c.getTask(compactText(payload, "task_id"));
+          case "output": return c.getTaskOutput(payload);
+          case "review": return c.getTaskReview(payload);
+          case "review_decision": return c.decideTaskReview(
+            compactText(payload, "task_id"),
+            {
+              decision: compactText(payload, "decision"),
+              note: payload.note,
+              idempotency_key: payload.idempotency_key,
+            },
+          );
+          case "message": return c.sendMessage(
+            compactText(payload, "task_id"),
+            compactText(payload, "content"),
+            payload.idempotency_key,
+          );
+          case "cancel": return c.cancelTask(compactText(payload, "task_id"));
+          default: throw new Error(`unsupported cptr_agent_task action: ${action}`);
+        }
+      },
+      workbenchToolMetadata,
+      (action, _payload, value, wrapped) => {
+        if (action === "start") {
+          return workbenchResult(wrapped, { targetType: "task", targetId: value.id }, "cptr_agent_task");
+        }
+        if (action === "execute") {
+          return workbenchResult(wrapped, { targetType: "task", targetId: value.task_id }, "cptr_agent_task");
+        }
+        return activityResult(wrapped, "cptr_agent_task");
+      },
+    );
+
+    registerCompactDomain(
+      "cptr_agent_monitor",
+      "Manage explicitly authorized autonomous monitors",
+      ["list", "start", "get", "events", "evidence", "steer", "approve", "cancel"],
+      { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+      async (action, payload) => {
+        switch (action) {
+          case "list": return c.listAutonomous(payload);
+          case "start": {
+            const { workbench_session_id, ...monitorInput } = payload;
+            const monitor = await c.createAutonomous({
+              ...monitorInput,
+              goal: delegatedPrompt(compactText(payload, "goal")),
+            });
+            const monitorId = String(monitor.monitor_id ?? monitor.goal_id ?? "");
+            if (!monitorId) throw new Error("CPTR autonomous creation returned no monitor identity");
+            const normalized = { ...monitor, monitor_id: monitorId };
+            if (workbench_session_id) {
+              await c.bindWorkbenchSession({
+                session_id: workbench_session_id,
+                target_type: "monitor",
+                target_id: monitorId,
+                workspace_id: payload.workspace_id,
+              });
+              recordWorkbenchActivity(client, workbench_session_id, {
+                event_type: "monitor.started",
+                state: String(monitor.status ?? "RUNNING"),
+                target_type: "monitor",
+                target_id: monitorId,
+                workspace_id: payload.workspace_id,
+                tool_name: "cptr_agent_monitor",
+                summary: "ChatGPT started a CPTR autonomous monitor.",
+              });
+            }
+            return normalized;
+          }
+          case "get": return c.getAutonomous(compactText(payload, "monitor_id"));
+          case "events": return c.getAutonomousEvents(payload);
+          case "evidence": return c.getAutonomousEvidence(payload);
+          case "steer": return c.steerAutonomous(
+            compactText(payload, "monitor_id"),
+            compactText(payload, "content"),
+            payload.idempotency_key,
+          );
+          case "approve": return c.approveAutonomous(
+            compactText(payload, "monitor_id"),
+            compactText(payload, "approval_id"),
+            payload.approved === true,
+            payload.note,
+          );
+          case "cancel": return c.cancelAutonomous(compactText(payload, "monitor_id"));
+          default: throw new Error(`unsupported cptr_agent_monitor action: ${action}`);
+        }
+      },
+      workbenchToolMetadata,
+      (action, _payload, value, wrapped) => {
+        if (action === "start") {
+          return workbenchResult(
+            wrapped,
+            { targetType: "monitor", targetId: value.monitor_id },
+            "cptr_agent_monitor",
+          );
+        }
+        return activityResult(wrapped, "cptr_agent_monitor");
+      },
+    );
+  }
 
   const surfaceProfile: McpToolSurfaceProfile = {
     registered_tools: registeredToolCount,

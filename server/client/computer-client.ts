@@ -413,6 +413,21 @@ export class ComputerClient {
     return value;
   }
 
+  async createWorkspace(input: {
+    path: string;
+    name?: string;
+    create_directory?: boolean;
+    initialize_git?: boolean;
+    idempotency_key?: string;
+  }): Promise<Workspace & Record<string, unknown>> {
+    const value = await this.request<Workspace & Record<string, unknown>>("/workspaces", {
+      method: "POST",
+      body: input,
+    });
+    this.workspaceCache.clear();
+    return value;
+  }
+
   async listModels(): Promise<{ models: Array<{ model_id: string; name: string; default: boolean }> }> {
     const now = Date.now();
     if (this.modelCache && this.modelCache.expiresAt > now) return this.modelCache.value;
