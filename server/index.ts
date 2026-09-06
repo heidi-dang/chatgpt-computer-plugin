@@ -821,7 +821,7 @@ const statelessServerPool = new StatelessServerPool(
 
 // createMcpHandler is the explicit MCP 2026-07-28 serving entry. Legacy 2025
 // sessionful traffic remains on the established transport path below.
-const modernMcpHandler = createMcpHandler(() => createSessionServer(), {
+const modernMcpHandler = createMcpHandler(() => statelessServerPool.take().value, {
   legacy: "reject",
   onerror: (error) => {
     console.error("MCP 2026 handler failed", error.message);
@@ -832,6 +832,21 @@ const modernMcpNodeHandler = toNodeHandler(modernMcpHandler, {
     console.error("MCP 2026 Node adapter failed", error.message);
   },
 });
+
+async function handleModernMcp2026Request(
+  req: IncomingMessage,
+  res: ServerResponse,
+  body: unknown,
+): Promise<void> {
+  try {
+    await modernMcpNodeHandler(req, res, body);
+  } finally {
+    // The modern 2026 handler consumes a fresh unconnected server from the
+    // bounded single-use pool. Replenish only after this request completes so
+    // expensive 91-tool registration work cannot block the same request.
+    statelessServerPool.scheduleReplenish();
+  }
+}
 
 async function handleStatefulInitialize(
   req: IncomingMessage,
@@ -1417,7 +1432,7 @@ const httpServer = createServer(async (req, res) => {
           requestStartedAt,
         },
         async () => {
-          await modernMcpNodeHandler(req, res, parsedPostBody?.value);
+          await handleModernMcp2026Request(req, res, parsedPostBody?.value);
         },
       );
       return;

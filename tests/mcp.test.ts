@@ -6,6 +6,7 @@ import {
   MCP_CONTRACT_TOOL_COUNT,
   MCP_CONTRACT_VERSION,
   MCP_REGISTERED_TOOL_BUDGET,
+  MCP_SERVER_INSTRUCTIONS,
   createMcpServer,
   getMcpToolSurfaceProfile,
 } from "../server/mcp.js";
@@ -167,10 +168,15 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_workspace_run_test_target")?.inputSchema.properties?.command, undefined);
   assert.notEqual(tools.get("cptr_workspace_run_test_target")?.inputSchema.properties?.target, undefined);
   assert.match(tools.get("cptr_code_run_command")?.title ?? "", /^\[ChatGPT Direct Coding\]/);
-  assert.match(tools.get("cptr_code_run_command")?.description ?? "", /ChatGPT itself must inspect, edit, run, verify/);
+  assert.match(tools.get("cptr_code_run_command")?.description ?? "", /^Direct Coding\./);
+  assert.doesNotMatch(tools.get("cptr_code_run_command")?.description ?? "", /ChatGPT itself must inspect, edit, run, verify/);
   assert.match(tools.get("cptr_start_task")?.title ?? "", /^\[Delegated Agent\]/);
-  assert.match(tools.get("cptr_start_task")?.description ?? "", /allow:delegate/);
-  assert.match(tools.get("cptr_start_task")?.description ?? "", /Codex or Hermes/);
+  assert.match(tools.get("cptr_start_task")?.description ?? "", /^Delegated Agent; requires prompt-scoped `allow:delegate`\./);
+  assert.doesNotMatch(tools.get("cptr_start_task")?.description ?? "", /Codex or Hermes/);
+  assert.match(MCP_SERVER_INSTRUCTIONS, /ChatGPT itself must inspect, edit, run, verify/);
+  assert.match(MCP_SERVER_INSTRUCTIONS, /cptr_fdx_intelligence/);
+  assert.match(MCP_SERVER_INSTRUCTIONS, /allow:delegate/);
+  assert.match(MCP_SERVER_INSTRUCTIONS, /Codex or Hermes/);
   assert.notEqual(tools.get("cptr_open_live_workbench")?.inputSchema.properties?.delegation_authorization, undefined);
   assert.equal(tools.get("cptr_ssh_list_hosts")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_ssh_run_command")?.annotations?.openWorldHint, true);
