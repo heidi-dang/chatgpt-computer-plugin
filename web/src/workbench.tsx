@@ -212,9 +212,9 @@ function usePromptActivity(
       } else if (event.type === "direct.worker") {
         const payload = event.payload;
         if (typeof payload?.worker_id !== "string") return;
-        // Direct workers use compact prompt activity. Do not bind the widget to
-        // a raw command stream; terminal output is fetched on demand per lane.
-        setMeta(null);
+        // Direct worker lifecycle events update compact metadata only. Preserve
+        // any command live.bind target so later WORKING/COMPLETE metadata cannot
+        // detach the unified terminal from the worker's real stdout/stderr SSE.
         setState((current) => appendDirectWorkerActivity(current, {
           event_id: event.event_id,
           timestamp: event.timestamp,

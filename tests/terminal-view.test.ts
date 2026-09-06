@@ -139,6 +139,19 @@ test("iOS remount with no target stays DISCONNECTED while prompt SSE reconnects"
   assert.doesNotMatch(html, /<span>RECONNECTING<\/span>/);
 });
 
+test("Direct Coding Worker metadata never clears an already-bound live command target", () => {
+  const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+  const promptHook = source.slice(source.indexOf("function usePromptActivity("), source.indexOf("function useMcpBridge()"));
+  const workerBranch = promptHook.slice(promptHook.indexOf("event.type === \"direct.worker\""), promptHook.indexOf("event.type === \"live.bind\""));
+
+  assert.match(workerBranch, /appendDirectWorkerActivity/);
+  assert.doesNotMatch(
+    workerBranch,
+    /setMeta\(null\)/,
+    "worker lifecycle metadata must not detach the Workbench from the command SSE target that live.bind just selected",
+  );
+});
+
 test("terminal final command state exposes the real exit code in the compact footer", () => {
   const html = renderToStaticMarkup(React.createElement(TerminalView, {
     rows: [{

@@ -93,6 +93,50 @@ test("prompt SSE establishes the stream immediately before the first tool event"
   await running;
 });
 
+test("prompt SSE reconnect resumes strictly after Last-Event-ID without duplicating terminal activity", async () => {
+  const store = new PromptTerminalStore({ streamingEnabled: true });
+  const metadata = store.open();
+  const first = store.append(metadata.ticket, {
+    type: "mcp.tool",
+    payload: { tool_name: "cptr_code_run_command", summary: "Working: worker command.", status: "STARTED" },
+  });
+  const second = store.append(metadata.ticket, {
+    type: "mcp.tool",
+    payload: { tool_name: "cptr_code_run_command", summary: "Completed: worker command.", status: "COMPLETE" },
+  });
+  assert.equal(first?.sequence, 1);
+  assert.equal(second?.sequence, 2);
+
+  const gateway = new PromptTerminalGateway(store, { heartbeatMs: 60_000 });
+  const request = Object.assign(new EventEmitter(), {
+    url: "/live/prompt/stream",
+    headers: {
+      authorization: `Bearer ${metadata.ticket}`,
+      "last-event-id": "1",
+    },
+    destroyed: false,
+  });
+  const chunks: string[] = [];
+  const response = Object.assign(new EventEmitter(), {
+    destroyed: false,
+    writableEnded: false,
+    writeHead() {},
+    flushHeaders() {},
+    write(chunk: string) { chunks.push(String(chunk)); return true; },
+    end() { this.writableEnded = true; },
+  });
+
+  const running = gateway.handleStream(request as never, response as never);
+  await new Promise((resolve) => setImmediate(resolve));
+  request.emit("close");
+  await running;
+
+  const body = chunks.join("");
+  assert.doesNotMatch(body, /id: 1\n/, "the reconnect cursor must not replay the event already rendered before suspension");
+  assert.match(body, /id: 2\n/);
+  assert.equal((body.match(/id: 2\n/g) ?? []).length, 1, "the first unseen event must be delivered exactly once");
+});
+
 test("browser surface activity reuses the prompt stream without credential fields", () => {
   const store = new PromptTerminalStore({ streamingEnabled: true });
   const metadata = store.open();
