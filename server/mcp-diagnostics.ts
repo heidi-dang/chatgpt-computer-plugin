@@ -19,6 +19,14 @@ export type McpFailureStage =
   | "activity_delivery"
   | "traffic_delivery";
 
+export type McpFailureClass =
+  | "request_rejected"
+  | "backend_failure"
+  | "transport_failure"
+  | "tool_failure"
+  | "internal_failure"
+  | "telemetry_failure";
+
 export type McpLatencyDiagnostic = {
   kind: "latency";
   version: 1;
@@ -70,6 +78,7 @@ export type McpFailureDiagnostic = {
   method: string | null;
   tool_name: string | null;
   stage: McpFailureStage;
+  failure_class?: McpFailureClass;
   error_code: string;
   http_status: number | null;
   retryable: boolean | null;
@@ -211,6 +220,29 @@ function copyUsage(event: McpUsageDiagnostic): McpUsageDiagnostic {
   };
 }
 
+export function isInfrastructureHealthFailure(status: number | null | undefined): boolean {
+  return status == null || status >= 500;
+}
+
+export function classifyFailure(event: Pick<
+  McpFailureDiagnostic,
+  "stage" | "http_status" | "retryable" | "error_code"
+>): McpFailureClass {
+  const status = boundedHttpStatus(event.http_status);
+  if (status !== null && status >= 400 && status < 500) return "request_rejected";
+  if (event.stage === "activity_delivery" || event.stage === "traffic_delivery") {
+    return "telemetry_failure";
+  }
+  if (event.stage === "cptr_backend") {
+    return status === null ? "transport_failure" : "backend_failure";
+  }
+  if (event.stage === "client_transport" || event.stage === "mcp_connector") {
+    if (status === null || status >= 500 || event.retryable === true) return "transport_failure";
+  }
+  if (event.stage === "cptr_mcp" && event.error_code === "tool_error") return "tool_failure";
+  return "internal_failure";
+}
+
 function copyFailure(event: McpFailureDiagnostic): McpFailureDiagnostic {
   return {
     kind: "failure",
@@ -223,6 +255,7 @@ function copyFailure(event: McpFailureDiagnostic): McpFailureDiagnostic {
     method: boundedText(event.method, 128),
     tool_name: boundedText(event.tool_name, 256),
     stage: event.stage,
+    failure_class: event.failure_class ?? classifyFailure(event),
     error_code: boundedText(event.error_code, 64) ?? "unknown_error",
     http_status: boundedHttpStatus(event.http_status),
     retryable: typeof event.retryable === "boolean" ? event.retryable : null,

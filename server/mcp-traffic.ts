@@ -54,6 +54,8 @@ export type McpRequestContextValue = {
   sessionId: string | null;
   client: TrafficClient;
   method: string | null;
+  toolName?: string | null;
+  healthFailed?: boolean;
   startedAt: number;
   requestBytes: number | null;
   // Transient request-local copy used only for token estimation. Traffic/Activity

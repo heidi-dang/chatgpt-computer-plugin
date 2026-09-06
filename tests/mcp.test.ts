@@ -232,10 +232,14 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.get("cptr_factory_stop")?.annotations?.destructiveHint, true);
   assert.equal(tools.get("cptr_factory_stop")?.annotations?.openWorldHint, false);
   const factoryInput = (name: string) => tools.get(name)?.inputSchema as
-    | { properties?: Record<string, { maxLength?: number; maxItems?: number; maximum?: number }> }
+    | { required?: string[]; properties?: Record<string, { maxLength?: number; maxItems?: number; maximum?: number; description?: string; properties?: Record<string, { minItems?: number; maximum?: number }> }> }
     | undefined;
-  assert.equal(factoryInput("cptr_factory_start")?.properties?.mission?.maxLength, 100_000);
-  assert.equal(factoryInput("cptr_factory_start")?.properties?.acceptance_criteria?.maxItems, 100);
+  const factoryStartInput = factoryInput("cptr_factory_start");
+  assert.equal(factoryStartInput?.properties?.mission?.maxLength, 100_000);
+  assert.equal(factoryStartInput?.properties?.acceptance_criteria?.maxItems, 100);
+  assert.equal(factoryStartInput?.required?.includes("policy"), true);
+  assert.equal(factoryStartInput?.properties?.policy?.properties?.verification_targets?.minItems, 1);
+  assert.match(factoryStartInput?.properties?.model_id?.description ?? "", /Required by the backend/);
   assert.equal(factoryInput("cptr_factory_events")?.properties?.limit?.maximum, 100);
   assert.equal(factoryInput("cptr_factory_evidence")?.properties?.limit?.maximum, 100);
   assert.equal(factoryInput("cptr_factory_message")?.properties?.content?.maxLength, 50_000);
@@ -324,7 +328,26 @@ test("forwards the compact Dark Factory tool surface without client-side state m
         workspace_id: "ws-1",
         mission: "Repair the factory target",
         acceptance_criteria: ["All machine gates pass"],
-        policy: { max_cycles: 1 },
+        policy: {
+          implementation_required: true,
+          verification_targets: [{
+            gate_id: "acceptance",
+            phase: "full",
+            target: "python_pytest",
+            category: "broader_tests",
+            acceptance_ids: [1],
+            required: true,
+            path: ".",
+            test_path: "tests/test_factory_api.py",
+            timeout_seconds: 180,
+          }],
+          push_required: false,
+          ci_required: false,
+          allow_network_research: false,
+          allow_network_implementation: false,
+          allow_package_install: false,
+          max_cycles: 1,
+        },
         budget: { max_repair_attempts_per_signature: 3 },
         model_id: "configured-model",
         idempotency_key: "start-1",
@@ -355,7 +378,26 @@ test("forwards the compact Dark Factory tool surface without client-side state m
         workspace_id: "ws-1",
         mission: "Repair the factory target",
         acceptance_criteria: ["All machine gates pass"],
-        policy: { max_cycles: 1 },
+        policy: {
+          implementation_required: true,
+          verification_targets: [{
+            gate_id: "acceptance",
+            phase: "full",
+            target: "python_pytest",
+            category: "broader_tests",
+            acceptance_ids: [1],
+            required: true,
+            path: ".",
+            test_path: "tests/test_factory_api.py",
+            timeout_seconds: 180,
+          }],
+          push_required: false,
+          ci_required: false,
+          allow_network_research: false,
+          allow_network_implementation: false,
+          allow_package_install: false,
+          max_cycles: 1,
+        },
         budget: { max_repair_attempts_per_signature: 3 },
         model_id: "configured-model",
         idempotency_key: "start-1",

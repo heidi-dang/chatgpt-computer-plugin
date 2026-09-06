@@ -51,6 +51,46 @@ test("MCP diagnostics emitter ignores client-scoped events for non-active client
   assert.deepEqual(delivered, []);
 });
 
+test("diagnostics distinguish expected request rejections from infrastructure failures", () => {
+  const classifyFailure = diagnosticsModule.classifyFailure as (input: Record<string, unknown>) => string;
+  const isInfrastructureHealthFailure = diagnosticsModule.isInfrastructureHealthFailure as (
+    status: number | null,
+  ) => boolean;
+
+  assert.equal(
+    classifyFailure({
+      stage: "cptr_backend",
+      error_code: "AMBIGUOUS_EDIT",
+      http_status: 409,
+      retryable: true,
+    }),
+    "request_rejected",
+  );
+  assert.equal(
+    classifyFailure({
+      stage: "cptr_backend",
+      error_code: "computer_api_error",
+      http_status: 503,
+      retryable: true,
+    }),
+    "backend_failure",
+  );
+  assert.equal(
+    classifyFailure({
+      stage: "cptr_backend",
+      error_code: "computer_api_unavailable",
+      http_status: null,
+      retryable: true,
+    }),
+    "transport_failure",
+  );
+  assert.equal(isInfrastructureHealthFailure(403), false);
+  assert.equal(isInfrastructureHealthFailure(409), false);
+  assert.equal(isInfrastructureHealthFailure(422), false);
+  assert.equal(isInfrastructureHealthFailure(503), true);
+  assert.equal(isInfrastructureHealthFailure(null), true);
+});
+
 test("MCP diagnostics emitter is bounded, allowlist-only, and sanitizes summaries", async () => {
   assert.equal(typeof diagnosticsModule.McpDiagnosticsEmitter, "function");
   const delivered: Array<Array<Record<string, unknown>>> = [];
@@ -358,5 +398,9 @@ test("ChatGPT HTTP adapter fallback identity and diagnostics wiring are explicit
   assert.match(source, /new McpDiagnosticsEmitter/);
   assert.match(source, /client\.ingestMcpDiagnostics/);
   assert.match(source, /client\.setRequestObserver/);
+  assert.match(source, /failure_class: requestRejected/);
+  assert.match(source, /status: context\.healthFailed \|\| healthFailed \? "error" : "ok"/);
+  assert.doesNotMatch(source, /status: failed \? "error" : "ok"/);
+  assert.match(source, /tool_name: context\.toolName \?\? null/);
   assert.match(source, /mcpDiagnostics\.close\(\)/);
 });
