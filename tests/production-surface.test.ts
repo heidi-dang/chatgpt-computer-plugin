@@ -5,6 +5,7 @@ import test from "node:test";
 const serverSource = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
 const deployedContractSource = readFileSync(new URL("../scripts/check-deployed-contract.mjs", import.meta.url), "utf8");
 const publicEdgeSource = readFileSync(new URL("../scripts/check-public-edge.mjs", import.meta.url), "utf8");
+const productionQualificationSource = readFileSync(new URL("../.github/workflows/production-qualification.yml", import.meta.url), "utf8");
 
 test("production health response does not expose internal workbench filesystem paths", () => {
   const healthBlock = serverSource.match(/if \(url\.pathname === "\/health"\) \{([\s\S]*?)\n  \}/)?.[1] ?? "";
@@ -37,6 +38,8 @@ test("MCP authentication advertises canonical RFC 9728 metadata and native OAuth
 
 test("public edge verifier supports both native and Cloudflare Managed OAuth RFC 9728 challenges", () => {
   assert.match(publicEdgeSource, /CPTR_EDGE_AUTH_MODE/);
+  assert.match(publicEdgeSource, /CPTR_EXPECTED_RELEASE_SHA/);
+  assert.match(publicEdgeSource, /release SHA drift/);
   assert.match(publicEdgeSource, /cloudflare-managed/);
   assert.match(publicEdgeSource, /cloudflare-access-protected-resource/);
   assert.match(publicEdgeSource, /authorization_servers/);
@@ -47,4 +50,14 @@ test("public edge verifier supports both native and Cloudflare Managed OAuth RFC
   assert.match(publicEdgeSource, /application_type: profile\.application_type/);
   assert.doesNotMatch(publicEdgeSource, /application_type: "native"/);
   assert.doesNotMatch(publicEdgeSource, /must be disabled for that route/);
+});
+
+test("production qualification does not use an origin bearer to bypass Cloudflare Managed OAuth", () => {
+  assert.match(productionQualificationSource, /CPTR_EXPECTED_RELEASE_SHA:/);
+  assert.match(productionQualificationSource, /vars\.CPTR_EDGE_AUTH_MODE == 'native'/);
+  assert.match(productionQualificationSource, /CPTR_DEPLOYED_MCP_TOKEN: \$\{\{ secrets\.CPTR_DEPLOYED_MCP_TOKEN \}\}/);
+  assert.doesNotMatch(
+    productionQualificationSource,
+    /if: \$\{\{ github\.event_name == 'workflow_dispatch' \}\}\s+needs: public-edge[\s\S]*?CPTR_DEPLOYED_MCP_TOKEN/,
+  );
 });

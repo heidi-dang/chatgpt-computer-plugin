@@ -165,12 +165,13 @@ Run this without an MCP bearer token and declare the intended production auth mo
 CPTR_DEPLOYED_MCP_URL="$CPTR_DEPLOYED_MCP_URL" \
 CPTR_EDGE_AUTH_MODE="$CPTR_EDGE_AUTH_MODE" \
 CPTR_EDGE_DCR_CLIENTS_JSON="$CPTR_EDGE_DCR_CLIENTS_JSON" \
+CPTR_EXPECTED_RELEASE_SHA="$CPTR_EXPECTED_RELEASE_SHA" \
 npm run check:public-edge
 ```
 
 `CPTR_EDGE_AUTH_MODE` accepts `cloudflare-managed`, `native`, or `auto`; production should use an explicit mode. `CPTR_EDGE_DCR_CLIENTS_JSON` is the preferred qualification input: a JSON array of real client registrations containing `client_name`, `redirect_uris`, and optionally `application_type`. When `application_type` is omitted, HTTP loopback-only callbacks are inferred as `native`; other valid callbacks are `web`. The legacy `CPTR_EDGE_DCR_REDIRECT_URIS` input remains supported and is converted into independently inferred client profiles. The check verifies through the actual public proxy/WAF path:
 
-1. `/health` is production-ready.
+1. `/health` is production-ready and, when `CPTR_EXPECTED_RELEASE_SHA` is supplied, reports that exact immutable release SHA.
 2. An unauthenticated MCP `2026-07-28` request receives `401` with an HTTPS RFC 9728 `resource_metadata` URL.
 3. The live challenge mode matches `CPTR_EDGE_AUTH_MODE`: the canonical origin metadata path for native mode or Cloudflare's Access protected-resource path for Managed OAuth.
 4. The advertised protected-resource metadata names the exact deployed `/mcp` resource and at least one authorization server.
@@ -182,7 +183,9 @@ A connector being able to open is not a substitute for this gate, and a successf
 
 ## Deployed MCP contract qualification
 
-After deployment, run:
+The bearer-authenticated contract verifier is an **origin/direct-MCP verifier**, not a Cloudflare Managed OAuth bypass. Run it only where the configured bearer can legitimately reach `/mcp` (for example native OAuth mode or a trusted origin-local smoke path). In `cloudflare-managed` mode, GitHub Actions must not require `CPTR_DEPLOYED_MCP_TOKEN` at the public edge: Cloudflare owns `/mcp` authentication and correctly rejects an origin bearer before it reaches the plugin. Managed-OAuth production qualification instead requires the exact-SHA public-edge gate plus host release convergence; an already-authorized real MCP client can be used as the authenticated end-to-end check.
+
+For a deployment where direct bearer authentication is valid, run:
 
 ```bash
 CPTR_DEPLOYED_MCP_URL="$CPTR_DEPLOYED_MCP_URL" \
@@ -290,9 +293,9 @@ The production plugin deployment is accepted only in this order:
 6. Switch `cptr-mcp.service` to that immutable release and restart the service.
 7. Run `npm run check:host-release` and require exactly one release-authority systemd drop-in.
 8. Verify systemd reports active/running and the expected release directory.
-9. Run `npm run check:public-edge` through Cloudflare.
-10. Run `npm run check:deployed-contract` with `CPTR_EXPECTED_RELEASE_SHA`.
-11. Verify `cptr_plugin_update` reports the expected contract/release.
+9. Run `npm run check:public-edge` through Cloudflare with `CPTR_EXPECTED_RELEASE_SHA` and require exact release convergence.
+10. If the selected edge mode permits direct bearer authentication, run `npm run check:deployed-contract` with `CPTR_EXPECTED_RELEASE_SHA`; in Cloudflare Managed OAuth mode, do not attempt to bypass Access with the origin bearer.
+11. Verify an already-authorized MCP client reports the expected contract/release (for ChatGPT, `cptr_plugin_update verify_server`).
 12. If MCP action schemas changed, perform ChatGPT's native app Refresh/review and verify again.
 
 Do not skip gates 7–11 because the health endpoint is green.

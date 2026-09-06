@@ -13,6 +13,10 @@ if (endpoint.pathname !== "/mcp") throw new Error(`expected MCP endpoint path /m
 if (endpoint.protocol !== "https:") throw new Error(`public MCP endpoint must use HTTPS, got ${endpoint.protocol}`);
 
 const configuredAuthMode = process.env.CPTR_EDGE_AUTH_MODE?.trim().toLowerCase() || "auto";
+const expectedReleaseSha = process.env.CPTR_EXPECTED_RELEASE_SHA?.trim() || "";
+if (expectedReleaseSha && !/^[0-9a-f]{40}$/.test(expectedReleaseSha)) {
+  throw new Error("CPTR_EXPECTED_RELEASE_SHA must be a full 40-character Git SHA when provided");
+}
 const supportedAuthModes = new Set(["auto", "native", "cloudflare-managed"]);
 if (!supportedAuthModes.has(configuredAuthMode)) {
   throw new Error(`CPTR_EDGE_AUTH_MODE must be one of ${[...supportedAuthModes].join(", ")}; got ${configuredAuthMode}`);
@@ -70,6 +74,9 @@ function normalizeIssuer(value) {
 const health = await jsonResponse(await request("/health"), "health", 200);
 if (health?.status !== "ok" || health?.workbench?.ready !== true) {
   throw new Error("health reports a degraded production Workbench");
+}
+if (expectedReleaseSha && health?.release !== expectedReleaseSha) {
+  throw new Error(`release SHA drift: expected ${expectedReleaseSha}, got ${health?.release ?? "missing"}`);
 }
 
 const discoverChallenge = await request(endpoint.pathname, {
@@ -244,5 +251,5 @@ for (const profile of connectorProfiles) {
 }
 
 console.log(
-  `CPTR public edge verified at ${origin}: health, MCP 2026 401 challenge, RFC 9728 ${authMode} metadata, OAuth discovery, PKCE S256, refresh-token capability, DCR, and authorization-stage redirect policy.`,
+  `CPTR public edge verified at ${origin}: health${expectedReleaseSha ? ` at release ${expectedReleaseSha}` : ""}, MCP 2026 401 challenge, RFC 9728 ${authMode} metadata, OAuth discovery, PKCE S256, refresh-token capability, DCR, and authorization-stage redirect policy.`,
 );
