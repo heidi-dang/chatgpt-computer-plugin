@@ -417,6 +417,15 @@ test("compact worker run and run_test preserve real Workbench command live.bind"
     ["cmd-worker-run", "cmd-worker-test"],
     "compact worker commands must select the real command SSE targets exactly like the legacy worker tools",
   );
+  assert.deepEqual(
+    binds.map((event) =>
+      event.type === "live.bind" && event.payload.live.targetType === "command"
+        ? event.payload.live.workerId
+        : null
+    ),
+    ["dcw-live", "dcw-live"],
+    "compact worker live tickets must preserve the isolated Direct Coding Worker identity",
+  );
 
   await client.close();
   await server.close();

@@ -87,7 +87,13 @@ export class LiveGateway {
     }
     try {
       const snapshot = claims.targetType === "command"
-        ? await this.client.getLiveSnapshot("command", claims.targetId, Number(rawAfter), claims.workspaceId)
+        ? await this.client.getLiveSnapshot(
+            "command",
+            claims.targetId,
+            Number(rawAfter),
+            claims.workspaceId,
+            claims.workerId,
+          )
         : await this.client.getLiveSnapshot(claims.targetType, claims.targetId, Number(rawAfter));
       response.writeHead(200, {
         "content-type": "application/json",
@@ -148,7 +154,13 @@ export class LiveGateway {
     let upstream: Response;
     try {
       upstream = claims.targetType === "command"
-        ? await this.client.streamLive("command", claims.targetId, afterSequence, claims.workspaceId)
+        ? await this.client.streamLive(
+            "command",
+            claims.targetId,
+            afterSequence,
+            claims.workspaceId,
+            claims.workerId,
+          )
         : await this.client.streamLive(claims.targetType, claims.targetId, afterSequence);
     } catch {
       this.activeStreams -= 1;
