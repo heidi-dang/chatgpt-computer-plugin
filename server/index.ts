@@ -74,6 +74,7 @@ import {
   corsHeaders,
   isAllowedBrowserOrigin,
   isAllowedMcpBrowserOrigin,
+  isAllowedOAuthConsentOrigin,
   isAllowedWorkbenchBrowserOrigin,
   mcpCorsHeaders,
   resolveAllowedOrigins,
@@ -1004,8 +1005,15 @@ const httpServer = createServer(async (req, res) => {
     ? isAllowedWorkbenchBrowserOrigin(requestOrigin, allowedBrowserOrigins)
     : mcpBrowserRequest
       ? isAllowedMcpBrowserOrigin(requestOrigin, allowedBrowserOrigins)
-      : (isOauthConsentPath && requestOrigin === publicOrigin) ||
-        isAllowedBrowserOrigin(requestOrigin, allowedBrowserOrigins);
+      : isOauthConsentPath
+        ? isAllowedOAuthConsentOrigin(
+            requestOrigin,
+            req.method,
+            typeof req.headers["content-type"] === "string" ? req.headers["content-type"] : undefined,
+            publicOrigin,
+            allowedBrowserOrigins,
+          )
+        : isAllowedBrowserOrigin(requestOrigin, allowedBrowserOrigins);
   if (!browserOriginAllowed) {
     console.warn(
       `Access denied for origin ${requestOrigin || "none"} on ${req.method} ${url.pathname}`,

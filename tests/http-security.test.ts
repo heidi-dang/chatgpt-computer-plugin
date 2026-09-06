@@ -5,6 +5,7 @@ import {
   corsHeaders,
   isAllowedBrowserOrigin,
   isAllowedMcpBrowserOrigin,
+  isAllowedOAuthConsentOrigin,
   isAllowedWorkbenchBrowserOrigin,
   mcpCorsHeaders,
   resolveAllowedOrigins,
@@ -79,6 +80,20 @@ test("allows the ChatGPT Apps SDK sandbox only for MCP and Workbench browser tra
   });
 });
 
+test("allows opaque-origin OAuth consent only for the expected form POST", () => {
+  const allowed = resolveAllowedOrigins({ MCP_ALLOWED_ORIGINS: "https://chatgpt.com" });
+  const publicOrigin = "https://gcloud-cptr.tnaprovider.com.au";
+
+  assert.equal(isAllowedOAuthConsentOrigin(undefined, "POST", "application/x-www-form-urlencoded", publicOrigin, allowed), true);
+  assert.equal(isAllowedOAuthConsentOrigin(publicOrigin, "GET", undefined, publicOrigin, allowed), true);
+  assert.equal(isAllowedOAuthConsentOrigin("https://chatgpt.com", "POST", "application/x-www-form-urlencoded", publicOrigin, allowed), true);
+  assert.equal(isAllowedOAuthConsentOrigin("null", "POST", "application/x-www-form-urlencoded", publicOrigin, allowed), true);
+  assert.equal(isAllowedOAuthConsentOrigin("null", "POST", "application/x-www-form-urlencoded; charset=UTF-8", publicOrigin, allowed), true);
+  assert.equal(isAllowedOAuthConsentOrigin("null", "GET", undefined, publicOrigin, allowed), false);
+  assert.equal(isAllowedOAuthConsentOrigin("null", "POST", "application/json", publicOrigin, allowed), false);
+  assert.equal(isAllowedOAuthConsentOrigin("https://evil.example", "POST", "application/x-www-form-urlencoded", publicOrigin, allowed), false);
+});
+
 test("routes live browser frame and input traffic through Workbench sandbox origin policy", () => {
   const indexSource = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
   const classification = indexSource.match(/const workbenchBrowserRequest =([\s\S]*?);\n  const browserOriginAllowed/);
@@ -99,6 +114,12 @@ test("routes only the MCP transport through the MCP sandbox origin policy", () =
   assert.match(indexSource, /mcpBrowserRequest[\s\S]*?isAllowedMcpBrowserOrigin\(requestOrigin, allowedBrowserOrigins\)/);
   assert.match(indexSource, /mcpBrowserRequest[\s\S]*?mcpCorsHeaders\(requestOrigin, allowedBrowserOrigins\)/);
   assert.match(indexSource, /httpServer\.on\("upgrade"[\s\S]*?isAllowedBrowserOrigin\(requestOrigin, allowedBrowserOrigins\)/);
+});
+
+test("routes OAuth consent through the dedicated opaque-origin policy", () => {
+  const indexSource = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
+  assert.match(indexSource, /const isOauthConsentPath = url\.pathname === "\/oauth\/login";/);
+  assert.match(indexSource, /isOauthConsentPath[\s\S]*?isAllowedOAuthConsentOrigin\(/);
 });
 
 test("permits a localhost public origin only outside production", () => {
