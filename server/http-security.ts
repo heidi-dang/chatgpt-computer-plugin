@@ -95,6 +95,23 @@ export function isAllowedMcpBrowserOrigin(origin: string | undefined, allowedOri
   return !origin || allowedOrigins.has(origin) || isOpenAiWidgetOrigin(origin);
 }
 
+export function isAllowedOAuthConsentOrigin(
+  origin: string | undefined,
+  method: string | undefined,
+  contentType: string | undefined,
+  publicOrigin: string,
+  allowedOrigins: Set<string>,
+): boolean {
+  if (!origin || origin === publicOrigin || allowedOrigins.has(origin)) return true;
+  // Cloudflare Access can return the consent document in a sandboxed browsing
+  // context, causing a same-flow form navigation to serialize Origin as "null".
+  // Admit only the POST shape emitted by our consent form. The route still
+  // requires a valid Access assertion and a short-lived signed OAuth ticket.
+  return origin === "null" &&
+    method === "POST" &&
+    (contentType ?? "").toLowerCase().startsWith("application/x-www-form-urlencoded");
+}
+
 export function isAllowedWorkbenchBrowserOrigin(origin: string | undefined, allowedOrigins: Set<string>): boolean {
   // Apps SDK widgets execute from a ChatGPT-owned sandbox origin rather than
   // PUBLIC_ORIGIN. Live endpoints remain protected by opaque, target-bound
