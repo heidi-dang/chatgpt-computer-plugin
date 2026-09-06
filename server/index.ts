@@ -31,6 +31,7 @@ import {
 import { McpActivityEmitter } from "./mcp-activity.js";
 import {
   McpDiagnosticsEmitter,
+  isInfrastructureHealthFailure,
   sanitizeDiagnosticSummary,
 } from "./mcp-diagnostics.js";
 import {
@@ -215,37 +216,47 @@ const mcpActivity = new McpActivityEmitter({
 client.setRequestObserver((observation: BackendRequestObservation) => {
   const context = mcpRequestContext.getStore();
   if (!context) return;
-  const failed =
-    observation.error !== null ||
-    (observation.status !== null && observation.status >= 400);
+  const error = observation.error;
+  const effectiveStatus = observation.status ?? error?.status ?? null;
+  const failed = error !== null || (effectiveStatus !== null && effectiveStatus >= 400);
+  const healthFailed = failed && isInfrastructureHealthFailure(effectiveStatus);
+  if (healthFailed) context.healthFailed = true;
   mcpDiagnostics.latency({
     request_id: context.requestId,
     correlation_id: context.correlationId,
     edge_id: "cptr-mcp-cptr-backend",
     metric_type: "backend_api_rtt",
     duration_ms: observation.durationMs,
-    status: failed ? "error" : "ok",
+    status: healthFailed ? "error" : "ok",
+    tool_name: context.toolName ?? null,
   });
   if (!failed) return;
-  const error = observation.error;
+  const requestRejected = effectiveStatus !== null && effectiveStatus >= 400 && effectiveStatus < 500;
   mcpDiagnostics.failure({
     request_id: context.requestId,
     correlation_id: context.correlationId,
     session_id: context.sessionId,
     client_id: context.client.id,
     method: context.method,
-    tool_name: null,
+    tool_name: context.toolName ?? null,
     stage: "cptr_backend",
+    failure_class: requestRejected
+      ? "request_rejected"
+      : observation.status === null
+        ? "transport_failure"
+        : "backend_failure",
     error_code: error?.code ?? "backend_http_error",
-    http_status: observation.status ?? error?.status ?? null,
-    retryable:
-      error?.retriable ??
-      (observation.status === null ? true : observation.status >= 500),
+    http_status: effectiveStatus,
+    retryable: error?.retriable ?? (effectiveStatus === null ? true : effectiveStatus >= 500),
     started_at_ms: Math.max(0, Date.now() - observation.durationMs),
     duration_ms: observation.durationMs,
     request_bytes: null,
     response_bytes: null,
-    summary: "CPTR backend request failed.",
+    summary: requestRejected
+      ? "CPTR request was rejected by control policy, validation, or state preconditions."
+      : observation.status === null
+        ? "CPTR backend transport failed."
+        : "CPTR backend request failed.",
   });
 });
 const liveTerminalStreamingEnabled = resolveLiveTerminalStreaming();
@@ -605,6 +616,8 @@ async function handleWithTraffic(
     sessionId: input.sessionId,
     client: input.client,
     method: trafficMethod(req, input.body),
+    toolName: operation.toolName,
+    healthFailed: false,
     startedAt: input.requestStartedAt,
     requestBytes: input.requestBytes,
     rawToolArguments: rawToolArguments(input.body),
@@ -631,6 +644,7 @@ async function handleWithTraffic(
     setup_cached: null,
   });
   let failed = false;
+  let healthFailed = false;
   try {
     await mcpRequestContext.run(context, () => run(context));
     const statusCode = responseObservation.statusCode();
@@ -643,6 +657,7 @@ async function handleWithTraffic(
       );
     } else if (statusCode >= 400 || jsonRpcError) {
       failed = true;
+      healthFailed = statusCode >= 500;
       const errorCode = jsonRpcError
         ? "tool_error"
         : normalizeTrafficErrorCode({ status: statusCode });
@@ -658,7 +673,7 @@ async function handleWithTraffic(
         session_id: context.sessionId,
         client_id: context.client.id,
         method: context.method,
-        tool_name: null,
+        tool_name: operation.toolName,
         stage: "mcp_connector",
         error_code: jsonRpcError?.code ?? errorCode,
         http_status: statusCode >= 400 ? statusCode : null,
@@ -679,6 +694,9 @@ async function handleWithTraffic(
     }
   } catch (error) {
     failed = true;
+    healthFailed = error instanceof ComputerApiError
+      ? isInfrastructureHealthFailure(error.status)
+      : true;
     if (!context.outcome.failed) {
       context.outcome.failed = true;
       context.outcome.errorCode = normalizeTrafficErrorCode(error);
@@ -693,7 +711,7 @@ async function handleWithTraffic(
       session_id: context.sessionId,
       client_id: context.client.id,
       method: context.method,
-      tool_name: null,
+      tool_name: operation.toolName,
       stage: "mcp_connector",
       error_code: context.outcome.errorCode ?? "internal_error",
       http_status: error instanceof ComputerApiError ? error.status : null,
@@ -712,7 +730,7 @@ async function handleWithTraffic(
       edge_id: "client-mcp-connector",
       metric_type: "observed_request_time",
       duration_ms: Math.max(0, Date.now() - context.startedAt),
-      status: failed ? "error" : "ok",
+      status: context.healthFailed || healthFailed ? "error" : "ok",
       tool_name: operation.toolName,
       operation_class: operation.operationClass,
       requested_wait_ms: operation.requestedWaitMs,

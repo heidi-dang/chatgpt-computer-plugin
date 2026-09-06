@@ -16,14 +16,79 @@ export const workspaceIdSchema = { workspace_id: z.string().min(1).max(200) };
 
 const factoryRunId = z.string().min(1).max(200);
 const factoryIdempotencyKey = z.string().min(1).max(200);
+const factoryVerificationCategory = z.enum([
+  "acceptance",
+  "reproduction",
+  "regression",
+  "focused_tests",
+  "broader_tests",
+  "unit",
+  "integration",
+  "e2e",
+  "typecheck",
+  "lint",
+  "build",
+  "security",
+  "isolation",
+  "resource",
+  "performance",
+  "cleanup_lifecycle",
+  "adversarial",
+  "git_diff_review",
+  "git_diff_check",
+  "ci",
+  "runtime_smoke",
+  "live_verify",
+]);
+const factoryVerificationTarget = z.object({
+  gate_id: z.string().min(1).max(160).describe("Stable machine-verification gate ID; IDs must be unique within the run."),
+  phase: z.enum(["targeted", "full", "adversarial", "security", "live"]).default("full"),
+  target: z.enum(["python_pytest", "node_test", "node_vitest", "node_build"]),
+  category: factoryVerificationCategory.default("broader_tests"),
+  acceptance_ids: z.array(z.union([
+    z.number().int().min(1).max(100),
+    z.string().min(1).max(200),
+  ])).min(1).max(100).describe(
+    "Acceptance criteria covered by this required machine gate. Use 1-based criterion numbers or criterion-N IDs; every immutable acceptance criterion must be covered by at least one required target.",
+  ),
+  required: z.boolean().default(true),
+  path: z.string().min(1).max(1_000).default(".").describe("Workspace-relative verification working directory."),
+  test_path: z.string().min(1).max(1_000).optional().describe("Optional workspace-relative focused test path."),
+  timeout_seconds: z.number().positive().max(600).default(180),
+});
+const factoryPolicySchema = z.object({
+  implementation_required: z.boolean().default(true).describe(
+    "When true, model_id is required and Factory prepares an isolated mutation lane. Set false for machine-verification-only missions.",
+  ),
+  verification_targets: z.array(factoryVerificationTarget).min(1).max(100).describe(
+    "Required server-owned verification plan. Before a run is created, the backend rejects plans that do not cover every acceptance criterion.",
+  ),
+  push_required: z.boolean().default(false),
+  ci_required: z.boolean().default(false).describe("Requires push_required=true plus ci_repository and ci_workflows."),
+  ci_repository: z.string().min(1).max(500).optional().describe("CI repository identity, for example owner/name, when ci_required is true."),
+  ci_workflows: z.array(z.string().min(1).max(300)).min(1).max(50).optional(),
+  allow_network_research: z.boolean().default(false),
+  allow_network_implementation: z.boolean().default(false),
+  allow_package_install: z.boolean().default(false),
+  max_cycles: z.number().int().positive().optional().describe("Legacy cycle bound; prefer budget.max_cycles."),
+}).catchall(z.unknown());
+const factoryBudgetSchema = z.object({
+  max_cycles: z.number().int().positive().optional().describe("Maximum Factory audit/repair cycles."),
+  max_wall_time_ms: z.number().int().positive().optional().describe("Maximum elapsed wall time for the durable run."),
+  max_repair_attempts_per_signature: z.number().int().positive().optional().describe("Maximum repeated repairs for one normalized failure signature."),
+}).catchall(z.unknown()).default({});
 export const factoryRunIdSchema = { run_id: factoryRunId };
 export const factoryStartSchema = {
   workspace_id: z.string().min(1).max(200),
   mission: z.string().min(1).max(100_000),
   acceptance_criteria: z.array(z.string().min(1).max(10_000)).min(1).max(100),
-  policy: z.record(z.string(), z.unknown()).default({}),
-  budget: z.record(z.string(), z.unknown()).default({}),
-  model_id: z.string().min(1).max(500).optional(),
+  policy: factoryPolicySchema.describe(
+    "Execution and verification policy. verification_targets is mandatory because Victory requires machine evidence covering every acceptance criterion.",
+  ),
+  budget: factoryBudgetSchema,
+  model_id: z.string().min(1).max(500).optional().describe(
+    "Explicit configured CPTR model ID. Required by the backend when policy.implementation_required is true; omit only for verification-only runs.",
+  ),
   idempotency_key: factoryIdempotencyKey.optional(),
 };
 export const factoryPageSchema = {

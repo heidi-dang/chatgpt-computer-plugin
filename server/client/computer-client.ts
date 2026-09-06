@@ -405,7 +405,7 @@ export class ComputerClient {
     workspace_id: string;
     mission: string;
     acceptance_criteria: string[];
-    policy?: Record<string, unknown>;
+    policy: Record<string, unknown>;
     budget?: Record<string, unknown>;
     model_id?: string;
     idempotency_key?: string;

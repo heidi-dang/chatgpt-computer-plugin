@@ -1039,6 +1039,9 @@ export function createMcpServer(
           if (trafficContext) {
             trafficContext.outcome.failed = true;
             trafficContext.outcome.errorCode = normalizedErrorCode;
+            if (!(error instanceof ComputerApiError) || error.status >= 500) {
+              trafficContext.healthFailed = true;
+            }
           }
           options.traffic?.toolFailed(name, error, trafficContext, activityDurationMs);
           if (!(error instanceof ComputerApiError)) {
@@ -1602,7 +1605,7 @@ export function createMcpServer(
     "cptr_factory_start",
     {
       title: "Start a durable Dark Factory run",
-      description: "Start one owner-scoped Dark Factory mission through CPTR's server-authoritative factory runtime. This adapter forwards the bounded mission, acceptance criteria, policy, and budget; it does not implement the factory state machine, trust policy, or Victory logic.",
+      description: "Start one owner-scoped Dark Factory mission through CPTR's server-authoritative runtime. Supply machine verification_targets that collectively cover every acceptance criterion; implementation runs also require an explicit model_id. The backend preflights verification, CI, and enforced run budgets before creating durable state. This adapter remains thin and cannot set state, trust, gates, or Victory.",
       inputSchema: factoryStartSchema,
       outputSchema: factoryRunControlOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
