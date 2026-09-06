@@ -46,6 +46,7 @@ import {
   MCP_CONTRACT_TOOL_COUNT,
   MCP_CONTRACT_VERSION,
   createMcpServer,
+  resolveMcpToolSurface,
 } from "./mcp.js";
 import { currentPluginUpdateManifest } from "./release.js";
 import { StatelessServerPool } from "./stateless-server-pool.js";
@@ -792,6 +793,8 @@ async function evictMcpSessionIfFull(): Promise<void> {
   if (oldest) await closeMcpSession(oldest);
 }
 
+const mcpToolSurface = resolveMcpToolSurface(process.env.CPTR_MCP_TOOL_SURFACE);
+
 function createSessionServer() {
   return createMcpServer(client, {
     tickets: liveTickets,
@@ -805,6 +808,7 @@ function createSessionServer() {
     traffic: mcpTraffic,
     activityTelemetry: mcpActivity,
     diagnostics: mcpDiagnostics,
+    toolSurface: mcpToolSurface,
   });
 }
 
