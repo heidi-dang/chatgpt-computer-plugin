@@ -26,7 +26,9 @@ jobs:
       CPTR_DEPLOYED_MCP_URL: ${{ vars.CPTR_DEPLOYED_MCP_URL }}
       CPTR_DEPLOYED_PUBLIC_ORIGIN: ${{ vars.CPTR_DEPLOYED_PUBLIC_ORIGIN }}
       CPTR_EDGE_AUTH_MODE: ${{ vars.CPTR_EDGE_AUTH_MODE }}
+      CPTR_EDGE_DCR_CLIENTS_JSON: ${{ vars.CPTR_EDGE_DCR_CLIENTS_JSON }}
       CPTR_EDGE_DCR_REDIRECT_URIS: ${{ vars.CPTR_EDGE_DCR_REDIRECT_URIS }}
+      CPTR_EXPECTED_RELEASE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_release_sha || '' }}
     steps:
       - name: Require production endpoint configuration
         run: |
@@ -50,8 +52,11 @@ jobs:
         run: npm run check:public-edge
 
   authenticated-contract:
-    name: Authenticated MCP 2026 contract
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    name: Bearer-authenticated MCP 2026 contract
+    # Cloudflare Managed OAuth owns the public /mcp authentication boundary. A raw
+    # origin bearer cannot and must not bypass Access, so this verifier is valid
+    # only for native OAuth deployments where /mcp reaches the origin directly.
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.CPTR_EDGE_AUTH_MODE == 'native' }}
     needs: public-edge
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -61,7 +66,7 @@ jobs:
       CPTR_DEPLOYED_MCP_TOKEN: ${{ secrets.CPTR_DEPLOYED_MCP_TOKEN }}
       CPTR_EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
     steps:
-      - name: Require immutable release and bearer configuration
+      - name: Require native-mode immutable release and bearer configuration
         run: |
           test -n "$CPTR_DEPLOYED_MCP_URL"
           test -n "$CPTR_DEPLOYED_MCP_TOKEN"
