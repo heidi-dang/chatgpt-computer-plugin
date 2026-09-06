@@ -346,6 +346,7 @@ test("MCP traffic request contexts remain isolated across concurrent work", asyn
 
 test("MCP traffic instruments the existing registerTool boundary without changing tool behavior", async () => {
   const delivered: McpTrafficEvent[][] = [];
+  const backendRequests: Headers[] = [];
   const emitter = new McpTrafficEmitter({
     env: {
       CPTR_MCP_TRAFFIC_PLUGIN_BATCH_SIZE: "10",
@@ -358,8 +359,9 @@ test("MCP traffic instruments the existing registerTool boundary without changin
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "test-token",
-    fetchImpl: async (input) => {
+    fetchImpl: async (input, init) => {
       if (String(input).includes("/workspaces?")) {
+        backendRequests.push(new Headers(init?.headers));
         return new Response(JSON.stringify({ workspaces: [] }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -414,6 +416,12 @@ test("MCP traffic instruments the existing registerTool boundary without changin
     new Set(toolEvents.map((event) => event.correlation_id)),
     new Set(["corr-real-tool"]),
   );
+  const backendHeaders = backendRequests[0];
+  assert.ok(backendHeaders);
+  assert.equal(backendHeaders.get("X-CPTR-Trace-Id"), "corr-real-tool");
+  assert.equal(backendHeaders.get("X-CPTR-Request-Id"), "request-real-tool");
+  assert.equal(backendHeaders.get("X-CPTR-MCP-Session-Id"), "session-real");
+  assert.equal(backendHeaders.get("X-CPTR-Tool-Name"), "cptr_list_workspaces");
 });
 
 test("MCP traffic delivery failure cannot fail a real MCP tool call", async () => {

@@ -13,6 +13,48 @@ test("forwards the scoped token and returns JSON", async () => {
   assert.equal((seenRequest?.headers as Record<string, string>).Authorization, "Bearer secret");
 });
 
+test("propagates bounded MCP trace metadata to control and browser-device requests", async () => {
+  const seen: Array<{ url: string; headers: Headers }> = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      const url = String(input);
+      seen.push({ url, headers: new Headers(init?.headers) });
+      if (url.includes("/workspaces?")) {
+        return new Response(JSON.stringify({ workspaces: [] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ accepted: true, command_id: "browser-command" }), {
+        status: 200,
+      });
+    },
+  });
+  client.setRequestTraceMetadataProvider(() => ({
+    traceId: "corr-action-123",
+    requestId: "request-action-123",
+    sessionId: "session-action-123",
+    toolName: "cptr_user_chrome",
+  }));
+
+  await client.listWorkspaces(false);
+  await client.controlUserChrome({
+    action: "command",
+    session_id: "brs-1",
+    command_id: "browser-command",
+    browser_action: "click",
+    expected_epoch: 4,
+    payload: { ref: "ref_1" },
+  });
+
+  assert.equal(seen.length, 2);
+  for (const request of seen) {
+    assert.equal(request.headers.get("X-CPTR-Trace-Id"), "corr-action-123");
+    assert.equal(request.headers.get("X-CPTR-Request-Id"), "request-action-123");
+    assert.equal(request.headers.get("X-CPTR-MCP-Session-Id"), "session-action-123");
+    assert.equal(request.headers.get("X-CPTR-Tool-Name"), "cptr_user_chrome");
+  }
+});
+
 test("fetches bounded runtime lifecycle metrics through the scoped Control API", async () => {
   let seenUrl = "";
   const client = new ComputerClient({

@@ -222,12 +222,27 @@ export type WorkbenchSessionEvent = {
   created_at: number;
 };
 
+export type RequestTraceMetadata = {
+  traceId: string;
+  requestId?: string | null;
+  sessionId?: string | null;
+  toolName?: string | null;
+};
+
+function safeTraceHeader(value: unknown, maxLength: number): string | null {
+  if (typeof value !== "string") return null;
+  const candidate = value.trim();
+  if (!candidate || candidate.length > maxLength) return null;
+  return /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(candidate) ? candidate : null;
+}
+
 export class ComputerClient {
   private readonly baseUrl: string;
   private readonly token: string;
   private readonly fetchImpl: FetchLike;
   private readonly timeoutMs: number;
   private requestObserver: ((observation: BackendRequestObservation) => void) | null = null;
+  private requestTraceMetadataProvider: (() => RequestTraceMetadata | null) | null = null;
   private readonly workspaceCache = new Map<boolean, { expiresAt: number; value: { workspaces: Workspace[] } }>();
   private modelCache: {
     expiresAt: number;
@@ -250,6 +265,30 @@ export class ComputerClient {
 
   setRequestObserver(observer: ((observation: BackendRequestObservation) => void) | null): void {
     this.requestObserver = observer;
+  }
+
+  setRequestTraceMetadataProvider(provider: (() => RequestTraceMetadata | null) | null): void {
+    this.requestTraceMetadataProvider = provider;
+  }
+
+  private requestTraceHeaders(): Record<string, string> {
+    try {
+      const metadata = this.requestTraceMetadataProvider?.();
+      if (!metadata) return {};
+      const traceId = safeTraceHeader(metadata.traceId, 128);
+      if (!traceId) return {};
+      const requestId = safeTraceHeader(metadata.requestId, 128);
+      const sessionId = safeTraceHeader(metadata.sessionId, 128);
+      const toolName = safeTraceHeader(metadata.toolName, 256);
+      return {
+        "X-CPTR-Trace-Id": traceId,
+        ...(requestId ? { "X-CPTR-Request-Id": requestId } : {}),
+        ...(sessionId ? { "X-CPTR-MCP-Session-Id": sessionId } : {}),
+        ...(toolName ? { "X-CPTR-Tool-Name": toolName } : {}),
+      };
+    } catch {
+      return {};
+    }
   }
 
   private notifyRequestObserver(observation: BackendRequestObservation): void {
@@ -1539,6 +1578,7 @@ export class ComputerClient {
           headers: {
             Authorization: `Bearer ${this.token}`,
             Accept: "text/event-stream",
+            ...this.requestTraceHeaders(),
           },
           signal: controller.signal,
         },
@@ -1564,6 +1604,7 @@ export class ComputerClient {
         headers: {
           Authorization: `Bearer ${this.token}`,
           Accept: "application/json",
+          ...this.requestTraceHeaders(),
           ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
         },
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
@@ -1623,6 +1664,7 @@ export class ComputerClient {
         headers: {
           Authorization: `Bearer ${this.token}`,
           Accept: "application/json",
+          ...this.requestTraceHeaders(),
           ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
         },
         body: options.body === undefined ? undefined : JSON.stringify(options.body),

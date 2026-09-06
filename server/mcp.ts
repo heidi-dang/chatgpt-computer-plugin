@@ -615,6 +615,17 @@ export function createMcpServer(
   const promptTicketContext = new AsyncLocalStorage<string | null>();
   const clientModelContext = new AsyncLocalStorage<string | null>();
 
+  client.setRequestTraceMetadataProvider(() => {
+    const context = mcpRequestContext.getStore();
+    if (!context?.correlationId) return null;
+    return {
+      traceId: context.correlationId,
+      requestId: context.requestId,
+      sessionId: context.sessionId,
+      toolName: context.toolName ?? null,
+    };
+  });
+
   const currentPromptTicket = (): string | null => {
     const contextual = promptTicketContext.getStore();
     return contextual === undefined ? activePromptTicket : contextual;
@@ -857,6 +868,7 @@ export function createMcpServer(
         const normalizedModel = normalizeReportedModel(reportedClientModel);
         const inputWorkerId = workerIdFrom(input);
         const trafficContext = mcpRequestContext.getStore();
+        if (trafficContext) trafficContext.toolName = name;
         const trafficStartedAt = Date.now();
         await applyTrafficIdentity(trafficContext, name, input, normalizedModel.reported);
         let activityClient = trafficContext?.client ?? normalizeMcpClient(undefined);
