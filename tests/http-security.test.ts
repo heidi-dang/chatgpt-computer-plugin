@@ -4,7 +4,9 @@ import test from "node:test";
 import {
   corsHeaders,
   isAllowedBrowserOrigin,
+  isAllowedMcpBrowserOrigin,
   isAllowedWorkbenchBrowserOrigin,
+  mcpCorsHeaders,
   resolveAllowedOrigins,
   resolvePublicOrigin,
   workbenchCorsHeaders,
@@ -57,15 +59,20 @@ test("allows only explicitly configured Chrome extension origins", () => {
   );
 });
 
-test("allows the ChatGPT Apps SDK sandbox only for Workbench browser traffic", () => {
+test("allows the ChatGPT Apps SDK sandbox only for MCP and Workbench browser traffic", () => {
   const allowed = resolveAllowedOrigins({ MCP_ALLOWED_ORIGINS: "https://chatgpt.com" });
   const widgetOrigin = "https://mcp-example-com.web-sandbox.oaiusercontent.com";
 
   assert.equal(isAllowedBrowserOrigin(widgetOrigin, allowed), false);
+  assert.equal(isAllowedMcpBrowserOrigin(widgetOrigin, allowed), true);
+  assert.equal(isAllowedMcpBrowserOrigin("https://web-sandbox.oaiusercontent.com", allowed), true);
+  assert.equal(isAllowedMcpBrowserOrigin("https://evil-web-sandbox.oaiusercontent.com.example", allowed), false);
+  assert.equal(isAllowedMcpBrowserOrigin("http://mcp-example-com.web-sandbox.oaiusercontent.com", allowed), false);
+  assert.deepEqual(mcpCorsHeaders(widgetOrigin, allowed), {
+    "Access-Control-Allow-Origin": widgetOrigin,
+    Vary: "Origin",
+  });
   assert.equal(isAllowedWorkbenchBrowserOrigin(widgetOrigin, allowed), true);
-  assert.equal(isAllowedWorkbenchBrowserOrigin("https://web-sandbox.oaiusercontent.com", allowed), true);
-  assert.equal(isAllowedWorkbenchBrowserOrigin("https://evil-web-sandbox.oaiusercontent.com.example", allowed), false);
-  assert.equal(isAllowedWorkbenchBrowserOrigin("http://mcp-example-com.web-sandbox.oaiusercontent.com", allowed), false);
   assert.deepEqual(workbenchCorsHeaders(widgetOrigin, allowed), {
     "Access-Control-Allow-Origin": widgetOrigin,
     Vary: "Origin",
@@ -84,6 +91,14 @@ test("routes live browser frame and input traffic through Workbench sandbox orig
   ]) {
     assert.match(classification[1], new RegExp(path.replaceAll("/", "\\/")), `${path} must use Workbench sandbox origin policy`);
   }
+});
+
+test("routes only the MCP transport through the MCP sandbox origin policy", () => {
+  const indexSource = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
+  assert.match(indexSource, /const mcpBrowserRequest = url\.pathname === mcpPath;/);
+  assert.match(indexSource, /mcpBrowserRequest[\s\S]*?isAllowedMcpBrowserOrigin\(requestOrigin, allowedBrowserOrigins\)/);
+  assert.match(indexSource, /mcpBrowserRequest[\s\S]*?mcpCorsHeaders\(requestOrigin, allowedBrowserOrigins\)/);
+  assert.match(indexSource, /httpServer\.on\("upgrade"[\s\S]*?isAllowedBrowserOrigin\(requestOrigin, allowedBrowserOrigins\)/);
 });
 
 test("permits a localhost public origin only outside production", () => {
