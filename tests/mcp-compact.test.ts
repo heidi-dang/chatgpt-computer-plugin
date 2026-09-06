@@ -476,7 +476,8 @@ test("compact command follow-ups preserve non-worker prompt live.bind", async ()
     ["signal", { signal: "interrupt" }],
   ];
   for (const [action, extra] of actions) {
-    const before = promptSessions.replay(promptTicket!, 0)?.events.filter((event) => event.type === "live.bind").length ?? 0;
+    const beforeReplay = promptSessions.replay(promptTicket!, 0);
+    const before: number = beforeReplay?.events.filter((event) => event.type === "live.bind").length ?? 0;
     const response = await client.callTool({
       name: "cptr_command",
       arguments: {
@@ -485,7 +486,9 @@ test("compact command follow-ups preserve non-worker prompt live.bind", async ()
       },
     });
     assert.equal(response.isError, undefined, `${action} should complete`);
-    const binds = promptSessions.replay(promptTicket!, 0)?.events.filter((event) => event.type === "live.bind") ?? [];
+    const afterReplay = promptSessions.replay(promptTicket!, 0);
+    assert.ok(afterReplay);
+    const binds = afterReplay.events.filter((event) => event.type === "live.bind");
     assert.equal(binds.length, before + 1, `${action} should append one live.bind`);
     const bind = binds.at(-1);
     if (bind?.type === "live.bind") {
@@ -549,13 +552,16 @@ test("compact SSH actions preserve legacy prompt command binding", async () => {
     ["cancel", { command_id: "ssh-cmd-1" }],
   ];
   for (const [action, extra] of calls) {
-    const before = promptSessions.replay(promptTicket!, 0)?.events.filter((event) => event.type === "live.bind").length ?? 0;
+    const beforeReplay = promptSessions.replay(promptTicket!, 0);
+    const before: number = beforeReplay?.events.filter((event) => event.type === "live.bind").length ?? 0;
     const response = await client.callTool({
       name: "cptr_ssh",
       arguments: { action, payload: { workspace_id: "workspace-1", ...extra } },
     });
     assert.equal(response.isError, undefined, `${action} should complete`);
-    const binds = promptSessions.replay(promptTicket!, 0)?.events.filter((event) => event.type === "live.bind") ?? [];
+    const afterReplay = promptSessions.replay(promptTicket!, 0);
+    assert.ok(afterReplay);
+    const binds = afterReplay.events.filter((event) => event.type === "live.bind");
     assert.equal(binds.length, before + 1, `${action} should append one live.bind`);
     const bind = binds.at(-1);
     if (bind?.type === "live.bind") {
