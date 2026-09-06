@@ -2295,15 +2295,11 @@ export function createMcpServer(
           target_id: command.command_id,
           workspace_id: input.workspace_id,
         });
-        recordWorkbenchActivity(client, workbench_session_id, {
-          event_type: "command.started",
-          state: command.status,
-          target_type: "command",
-          target_id: command.command_id,
-          workspace_id: input.workspace_id,
-          tool_name: "cptr_code_run_command",
-          summary: "ChatGPT started a CPTR workspace command.",
-        });
+        // The backend bind is the authoritative durable RUNNING transition and
+        // the command live-event stream already emits command.started. Appending
+        // another plugin-originated started event here can race a very fast
+        // command's terminal reconciliation and produce COMPLETE -> STARTED ->
+        // COMPLETE in Workbench history, making the UI appear to lag backwards.
       }
       return workbenchResult(
         { ...command, workspace_id: input.workspace_id },

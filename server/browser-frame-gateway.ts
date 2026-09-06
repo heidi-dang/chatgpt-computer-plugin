@@ -58,6 +58,12 @@ export class PromptBrowserFrameGateway {
         "content-length": String(bytes.byteLength),
         "cache-control": "no-store",
         "referrer-policy": "no-referrer",
+        // The Workbench runs on ChatGPT's sandbox origin. Without explicitly
+        // exposing these metadata headers, browser CORS hides the frame ID and
+        // dimensions from JavaScript; BrowserSurface then treats every 200
+        // response as unusable and never draws the live Chrome frame.
+        "access-control-expose-headers":
+          "X-CPTR-Frame-Id, X-CPTR-Frame-Width, X-CPTR-Frame-Height, X-CPTR-Frame-Time",
       };
       for (const name of ["x-cptr-frame-id", "x-cptr-frame-width", "x-cptr-frame-height", "x-cptr-frame-time"]) {
         const value = upstream.headers.get(name);

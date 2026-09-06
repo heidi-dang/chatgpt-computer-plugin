@@ -462,9 +462,9 @@ button.danger { border-color: #65404a; color: #efc2c2; background: #28181e; }
   .browser-footer { gap: 7px; padding-inline: 9px; font-size: 8px; }
   .terminal-shell {
     grid-template-rows: auto minmax(0, 1fr) auto;
-    height: clamp(220px, 62vw, 280px);
-    min-height: 220px;
-    max-height: 280px;
+    height: clamp(300px, 76vw, 340px);
+    min-height: 300px;
+    max-height: 340px;
     border-radius: 16px;
   }
   .terminal-header {
@@ -520,9 +520,9 @@ button.danger { border-color: #65404a; color: #efc2c2; background: #28181e; }
   .browser-mode { max-width: 118px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .browser-footer span:first-child { max-width: 44vw; }
   .terminal-shell {
-    height: clamp(210px, 62vw, 244px);
-    min-height: 210px;
-    max-height: 244px;
+    height: clamp(280px, 78vw, 320px);
+    min-height: 280px;
+    max-height: 320px;
     border-radius: 14px;
   }
   .terminal-machine-row { gap: 8px; }

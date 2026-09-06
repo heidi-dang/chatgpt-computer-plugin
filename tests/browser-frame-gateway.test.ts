@@ -57,6 +57,11 @@ test("browser frame gateway proxies only prompt-bound browser sessions", async (
   assert.equal(response.statusCode, 200);
   assert.equal(response.headers["content-type"], "image/jpeg");
   assert.equal(response.headers["cache-control"], "no-store");
+  assert.equal(
+    response.headers["access-control-expose-headers"],
+    "X-CPTR-Frame-Id, X-CPTR-Frame-Width, X-CPTR-Frame-Height, X-CPTR-Frame-Time",
+    "ChatGPT's cross-origin Workbench must be able to read the frame cursor and dimensions",
+  );
   assert.equal(response.headers["x-cptr-frame-id"], "frm_2");
   assert.deepEqual([...response.body], [1, 2, 3]);
   assert.deepEqual(seen, [{ sessionId: "brs_1", after: "frm_1" }]);

@@ -194,10 +194,11 @@ test("terminal CSS preserves the reference desktop and mobile geometry", () => {
   assert.match(css, /\.terminal-output\s*\{[\s\S]*overscroll-behavior:\s*contain/);
   assert.match(css, /\.terminal-latest\s*\{/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]*height:\s*clamp\(220px, 62vw, 280px\)/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]*min-height:\s*220px/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]*max-height:\s*280px/);
-  assert.match(css, /@media \(max-width: 390px\)[\s\S]*min-height:\s*210px/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*height:\s*clamp\(300px, 76vw, 340px\)/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*min-height:\s*300px/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*max-height:\s*340px/);
+  assert.match(css, /@media \(max-width: 390px\)[\s\S]*height:\s*clamp\(280px, 78vw, 320px\)/);
+  assert.match(css, /@media \(max-width: 390px\)[\s\S]*min-height:\s*280px/);
   assert.equal(css.includes("82vh"), false);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.terminal-output\s*\{[\s\S]*font-size:\s*11\.5px/);
   assert.match(css, /@media \(max-width: 390px\)[\s\S]*\.terminal-output\s*\{\s*font-size:\s*11px/);
@@ -292,7 +293,12 @@ test("Workbench switches terminal and browser inside one persistent root", () =>
   assert.match(browserSource, /response\.status === 204[\s\S]*setFrameHealth\("waiting"\)/);
   assert.match(browserSource, /frameHealth === "live"[\s\S]*\? "LIVE"/);
   assert.match(browserSource, /\/live\/prompt\/browser-stream/);
-  assert.match(browserSource, /max_fps:\s*visible \? 10 : 0/);
+  assert.match(browserSource, /max_fps:\s*requestedVisible \? 10 : 0/);
+  assert.match(browserSource, /streamConfigQueue\.current = streamConfigQueue\.current\.then/);
+  assert.match(browserSource, /lastStreamConfig\.current = \{ key: requestedKey, visible: requestedVisible \}/);
+  assert.match(browserSource, /streamConfigUncertain\.current = true/);
+  assert.match(browserSource, /Browser preview setup interrupted — retrying/);
+  assert.match(browserSource, /streamConfigRetryAttempts/);
   assert.match(browserSource, /configureSourceVisibility\(false\)/);
   assert.match(browserSource, /mode === "HUMAN_CONTROL"/);
   assert.match(browserSource, /expected_epoch:\s*epoch/);
@@ -312,7 +318,11 @@ test("Workbench switches terminal and browser inside one persistent root", () =>
 test("Workbench recovery contract survives iOS suspension, replay, and browser lease changes", () => {
   const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
   const browserSource = readFileSync(new URL("../web/src/browser-surface.tsx", import.meta.url), "utf8");
+  const promptHook = source.slice(source.indexOf("function usePromptActivity("), source.indexOf("function useMcpBridge()"));
+  const promptConsume = promptHook.slice(promptHook.indexOf("const consume = async () => {"), promptHook.indexOf("const wake = () =>"));
 
+  assert.ok(promptConsume.indexOf("const response = await fetch(url") < promptConsume.indexOf("await applySnapshot()"), "prompt SSE must open before snapshot fallback so startup is not delayed by an extra round trip");
+  assert.match(promptConsume, /setConnection\("connecting prompt activity"\)/);
   assert.doesNotMatch(source, /retryAttempts\s*>=\s*8/);
   assert.match(source, /addEventListener\("pageshow"/);
   assert.match(source, /addEventListener\("online"/);

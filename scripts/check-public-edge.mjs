@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { parseConnectorProfiles } from "./mcp-connector-profiles.mjs";
 
 const endpointValue = process.env.CPTR_DEPLOYED_MCP_URL?.trim();
 const originValue = process.env.CPTR_DEPLOYED_PUBLIC_ORIGIN?.trim();
@@ -17,13 +18,10 @@ if (!supportedAuthModes.has(configuredAuthMode)) {
   throw new Error(`CPTR_EDGE_AUTH_MODE must be one of ${[...supportedAuthModes].join(", ")}; got ${configuredAuthMode}`);
 }
 
-const requiredRedirectUris = (process.env.CPTR_EDGE_DCR_REDIRECT_URIS?.trim() || "http://localhost:7777/oauth/callback")
-  .split(/[\n,]+/)
-  .map((value) => value.trim())
-  .filter(Boolean);
-if (requiredRedirectUris.length === 0) {
-  throw new Error("CPTR_EDGE_DCR_REDIRECT_URIS must contain at least one redirect URI");
-}
+const connectorProfiles = parseConnectorProfiles({
+  profilesJson: process.env.CPTR_EDGE_DCR_CLIENTS_JSON,
+  legacyRedirectUris: process.env.CPTR_EDGE_DCR_REDIRECT_URIS,
+});
 
 const timeoutMs = Number.parseInt(process.env.CPTR_EDGE_TIMEOUT_MS ?? "10000", 10);
 const effectiveTimeoutMs = Number.isFinite(timeoutMs) ? timeoutMs : 10_000;
@@ -182,54 +180,65 @@ if (![400, 401].includes(tokenProbe.status) || typeof tokenProbeBody?.error !== 
   throw new Error(`OAuth token endpoint qualification returned HTTP ${tokenProbe.status} without a structured OAuth error; ${detail}`);
 }
 
-for (const [index, redirectUri] of requiredRedirectUris.entries()) {
+let qualificationIndex = 0;
+for (const profile of connectorProfiles) {
   const registration = await jsonResponse(
     await fetchUrl(registrationEndpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        client_name: `CPTR edge qualification ${index + 1}`,
-        redirect_uris: [redirectUri],
+        client_name: profile.client_name,
+        redirect_uris: profile.redirect_uris,
         grant_types: ["authorization_code", "refresh_token"],
         response_types: ["code"],
         token_endpoint_auth_method: "none",
-        application_type: "native",
+        application_type: profile.application_type,
         resource: endpoint.href,
       }),
     }),
-    `OAuth DCR edge qualification for ${redirectUri}`,
+    `OAuth DCR edge qualification for ${profile.client_name}`,
     201,
   );
   if (typeof registration?.client_id !== "string" || registration.client_id.length === 0) {
-    throw new Error(`OAuth DCR edge qualification for ${redirectUri} returned no client_id`);
+    throw new Error(`OAuth DCR edge qualification for ${profile.client_name} returned no client_id`);
   }
-  if (!registration?.redirect_uris?.includes?.(redirectUri)) {
-    throw new Error(`OAuth DCR edge qualification did not preserve redirect URI ${redirectUri}`);
+  for (const redirectUri of profile.redirect_uris) {
+    if (!registration?.redirect_uris?.includes?.(redirectUri)) {
+      throw new Error(`OAuth DCR edge qualification did not preserve redirect URI ${redirectUri}`);
+    }
+  }
+  if (registration?.application_type && registration.application_type !== profile.application_type) {
+    throw new Error(
+      `OAuth DCR edge qualification changed ${profile.client_name} application_type from ${profile.application_type} to ${registration.application_type}`,
+    );
   }
 
-  const verifier = `cptr-edge-canary-${String(index + 1).padStart(2, "0")}-abcdefghijklmnopqrstuvwxyz0123456789`;
-  const challengeValue = createHash("sha256").update(verifier).digest("base64url");
-  const authorizationUrl = new URL(authorizationEndpoint);
-  authorizationUrl.searchParams.set("response_type", "code");
-  authorizationUrl.searchParams.set("client_id", registration.client_id);
-  authorizationUrl.searchParams.set("redirect_uri", redirectUri);
-  authorizationUrl.searchParams.set("code_challenge", challengeValue);
-  authorizationUrl.searchParams.set("code_challenge_method", "S256");
-  authorizationUrl.searchParams.set("resource", endpoint.href);
-  authorizationUrl.searchParams.set("state", `edge-canary-${index + 1}`);
+  for (const redirectUri of profile.redirect_uris) {
+    qualificationIndex += 1;
+    const verifier = `cptr-edge-canary-${String(qualificationIndex).padStart(2, "0")}-abcdefghijklmnopqrstuvwxyz0123456789`;
+    const challengeValue = createHash("sha256").update(verifier).digest("base64url");
+    const authorizationUrl = new URL(authorizationEndpoint);
+    authorizationUrl.searchParams.set("response_type", "code");
+    authorizationUrl.searchParams.set("client_id", registration.client_id);
+    authorizationUrl.searchParams.set("redirect_uri", redirectUri);
+    authorizationUrl.searchParams.set("code_challenge", challengeValue);
+    authorizationUrl.searchParams.set("code_challenge_method", "S256");
+    authorizationUrl.searchParams.set("resource", endpoint.href);
+    authorizationUrl.searchParams.set("state", `edge-canary-${qualificationIndex}`);
 
-  const authorizationResponse = await fetchUrl(authorizationUrl);
-  if (authorizationResponse.status >= 400) {
-    const sample = (await authorizationResponse.text()).slice(0, 240).replace(/\s+/g, " ");
-    throw new Error(`OAuth authorization probe for ${redirectUri} returned HTTP ${authorizationResponse.status}; body=${sample || "<empty>"}`);
-  }
-  const location = authorizationResponse.headers.get("location");
-  if (location) {
-    const redirect = new URL(location, authorizationUrl);
-    const error = redirect.searchParams.get("error");
-    if (error) {
-      const description = redirect.searchParams.get("error_description") ?? "<missing>";
-      throw new Error(`OAuth authorization probe rejected ${redirectUri}: ${error}: ${description}`);
+    const authorizationResponse = await fetchUrl(authorizationUrl);
+    if (authorizationResponse.status >= 400) {
+      const sample = (await authorizationResponse.text()).slice(0, 240).replace(/\s+/g, " ");
+      throw new Error(`OAuth authorization probe for ${redirectUri} returned HTTP ${authorizationResponse.status}; body=${sample || "<empty>"}`);
+    }
+    const location = authorizationResponse.headers.get("location");
+    if (location) {
+      const redirect = new URL(location, authorizationUrl);
+      const error = redirect.searchParams.get("error");
+      if (error) {
+        const description = redirect.searchParams.get("error_description") ?? "<missing>";
+        throw new Error(`OAuth authorization probe rejected ${redirectUri}: ${error}: ${description}`);
+      }
     }
   }
 }

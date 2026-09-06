@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import test from "node:test";
-import { PromptTerminalStore, resolveLiveTerminalStreaming } from "../server/prompt-terminal.js";
+import { PromptTerminalGateway, PromptTerminalStore, resolveLiveTerminalStreaming } from "../server/prompt-terminal.js";
 
 test("live terminal streaming is enabled by default with an explicit emergency kill switch", () => {
   assert.equal(resolveLiveTerminalStreaming({}), true);
@@ -47,6 +48,49 @@ test("live terminal streaming implementation remains available when enabled", ()
   });
   assert.equal(appended?.type, "mcp.tool");
   assert.equal(store.replay(metadata.ticket, 0)?.events.length, 1);
+});
+
+test("prompt SSE establishes the stream immediately before the first tool event", async () => {
+  const store = new PromptTerminalStore({ streamingEnabled: true });
+  const metadata = store.open();
+  const gateway = new PromptTerminalGateway(store, { heartbeatMs: 60_000 });
+  const request = Object.assign(new EventEmitter(), {
+    url: "/live/prompt/stream",
+    headers: { authorization: `Bearer ${metadata.ticket}` },
+    destroyed: false,
+  });
+  const chunks: string[] = [];
+  const response = Object.assign(new EventEmitter(), {
+    destroyed: false,
+    writableEnded: false,
+    statusCode: 0,
+    flushCount: 0,
+    writeHead(status: number) { this.statusCode = status; },
+    flushHeaders() { this.flushCount += 1; },
+    write(chunk: string) { chunks.push(String(chunk)); return true; },
+    end() { this.writableEnded = true; },
+  });
+
+  const running = gateway.handleStream(request as never, response as never);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.flushCount, 1);
+  assert.equal(chunks[0], ": connected\n\n");
+
+  store.append(metadata.ticket, {
+    type: "mcp.tool",
+    payload: {
+      tool_name: "cptr_code_read_file",
+      summary: "Working: read source file.",
+      status: "STARTED",
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(chunks.join(""), /event: mcp\.tool/);
+
+  request.emit("close");
+  await running;
 });
 
 test("browser surface activity reuses the prompt stream without credential fields", () => {
