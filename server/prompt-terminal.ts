@@ -521,6 +521,7 @@ export class PromptTerminalGateway {
       connection: "keep-alive",
       "x-accel-buffering": "no",
     });
+    response.flushHeaders();
 
     const queue = [...initial.events];
     let wake: (() => void) | null = null;
@@ -555,6 +556,12 @@ export class PromptTerminalGateway {
     };
 
     try {
+      // Establish the HTTP/SSE path immediately instead of waiting for the
+      // first tool event or the 15s heartbeat. This is especially important in
+      // the ChatGPT iOS webview and through edge proxies, where a header-only
+      // streaming response can remain visually stuck in CONNECTING.
+      if (!(await write(": connected\n\n"))) return;
+
       let cursor = after;
       while (!closed && Date.now() < deadline) {
         while (queue.length && !closed) {

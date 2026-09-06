@@ -69,7 +69,9 @@ export function BrowserSurface({
   const commandSequence = useRef(0);
   const moveInFlight = useRef(false);
   const pendingMove = useRef<HumanInputPayload | null>(null);
-  const lastStreamVisible = useRef<boolean | null>(null);
+  const streamConfigQueue = useRef<Promise<void>>(Promise.resolve());
+  const lastStreamConfig = useRef<{ key: string; visible: boolean } | null>(null);
+  const streamConfigUncertain = useRef(false);
   const [hasFrame, setHasFrame] = useState(false);
   const [frameStatus, setFrameStatus] = useState("Waiting for browser frame…");
   const [frameHealth, setFrameHealth] = useState<"waiting" | "live" | "reconnecting" | "released">("waiting");
@@ -187,6 +189,9 @@ export function BrowserSurface({
     let stopped = false;
     let controller: AbortController | null = null;
     let running = false;
+    let streamConfigRetryTimer: number | undefined;
+    let streamConfigRetryAttempts = 0;
+    const streamConfigKey = `${sessionId}:${epoch ?? "pending"}`;
 
     const drawFrame = async (response: Response) => {
       const frameId = response.headers.get("x-cptr-frame-id");
@@ -217,28 +222,61 @@ export function BrowserSurface({
     const pageHidden = () => document.visibilityState === "hidden";
 
     const configureSourceVisibility = (visible: boolean) => {
-      if (lastStreamVisible.current === visible || !inputUrl || !ticket || !sessionId || epoch === undefined) return;
-      lastStreamVisible.current = visible;
-      const url = new URL("/live/prompt/browser-stream", inputUrl);
-      void fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${ticket}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        cache: "no-store",
-        keepalive: true,
-        body: JSON.stringify({
-          session_id: sessionId,
-          viewer_id: viewerId.current,
-          expected_epoch: epoch,
-          visible,
-          max_fps: visible ? 10 : 0,
-          max_width: visible ? 1280 : 960,
-          quality: visible ? 68 : 55,
-        }),
-      }).catch(() => undefined);
+      if (!inputUrl || !ticket || !sessionId || epoch === undefined) return;
+      const requestedVisible = visible;
+      const requestedKey = streamConfigKey;
+      // Serialize visibility writes across React effect lifetimes. Without one
+      // shared queue, a late cleanup `visible:false` from the previous Browser
+      // effect can arrive after the new `visible:true` request and shut down a
+      // freshly resumed iOS preview. The key prevents state for one lease from
+      // suppressing configuration for a newer browser session/epoch.
+      streamConfigQueue.current = streamConfigQueue.current.then(async () => {
+        const previous = lastStreamConfig.current;
+        if (
+          !streamConfigUncertain.current &&
+          previous?.key === requestedKey &&
+          previous.visible === requestedVisible
+        ) return;
+        const url = new URL("/live/prompt/browser-stream", inputUrl);
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${ticket}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          cache: "no-store",
+          keepalive: true,
+          body: JSON.stringify({
+            session_id: sessionId,
+            viewer_id: viewerId.current,
+            expected_epoch: epoch,
+            visible: requestedVisible,
+            max_fps: requestedVisible ? 10 : 0,
+            max_width: requestedVisible ? 1280 : 960,
+            quality: requestedVisible ? 68 : 55,
+          }),
+        });
+        if (!response.ok) throw new Error(`browser stream configuration unavailable (${response.status})`);
+        lastStreamConfig.current = { key: requestedKey, visible: requestedVisible };
+        streamConfigUncertain.current = false;
+        streamConfigRetryAttempts = 0;
+      }).catch(() => {
+        // A lost response makes the server's final visibility state ambiguous.
+        // Force the next queued request to hit the backend instead of trusting
+        // the last acknowledged client state.
+        streamConfigUncertain.current = true;
+        if (stopped || !requestedVisible || !intersecting || pageHidden()) return;
+        setFrameHealth("reconnecting");
+        setFrameStatus("Browser preview setup interrupted — retrying…");
+        if (streamConfigRetryTimer !== undefined) window.clearTimeout(streamConfigRetryTimer);
+        const delay = Math.min(4_000, 500 * 2 ** Math.min(streamConfigRetryAttempts, 3));
+        streamConfigRetryAttempts += 1;
+        streamConfigRetryTimer = window.setTimeout(() => {
+          streamConfigRetryTimer = undefined;
+          if (!stopped && intersecting && !pageHidden()) configureSourceVisibility(true);
+        }, delay);
+      });
     };
 
     const poll = async () => {
@@ -306,6 +344,7 @@ export function BrowserSurface({
     return () => {
       configureSourceVisibility(false);
       stopped = true;
+      if (streamConfigRetryTimer !== undefined) window.clearTimeout(streamConfigRetryTimer);
       controller?.abort();
       observer?.disconnect();
       document.removeEventListener("visibilitychange", updateVisibility);

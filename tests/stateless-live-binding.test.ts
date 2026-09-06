@@ -21,7 +21,7 @@ const workbenchSession = {
   archived_at: null,
 };
 
-function computerFixture(): ComputerClient {
+function computerFixture(onAppendWorkbenchEvent?: () => void): ComputerClient {
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "test-token",
@@ -65,23 +65,26 @@ function computerFixture(): ComputerClient {
     active_target_id: "command-stateless-1",
     active_workspace_id: "ws-1",
   });
-  mutable.appendWorkbenchSessionEvent = async () => ({
-    session_id: workbenchSession.session_id,
-    sequence: 1,
-    source: "plugin",
-    actor: "chatgpt_plugin",
-    event_type: "command.started",
-    state: "RUNNING",
-    target_type: "command",
-    target_id: "command-stateless-1",
-    workspace_id: "ws-1",
-    tool_name: "cptr_code_run_command",
-    summary: "ChatGPT started a CPTR workspace command.",
-    details: {},
-    metrics: {},
-    policy: {},
-    created_at: 1,
-  });
+  mutable.appendWorkbenchSessionEvent = async () => {
+    onAppendWorkbenchEvent?.();
+    return {
+      session_id: workbenchSession.session_id,
+      sequence: 1,
+      source: "plugin",
+      actor: "chatgpt_plugin",
+      event_type: "command.started",
+      state: "RUNNING",
+      target_type: "command",
+      target_id: "command-stateless-1",
+      workspace_id: "ws-1",
+      tool_name: "cptr_code_run_command",
+      summary: "ChatGPT started a CPTR workspace command.",
+      details: {},
+      metrics: {},
+      policy: {},
+      created_at: 1,
+    };
+  };
   return computer;
 }
 
@@ -100,7 +103,8 @@ async function connectedServer(
 test("routes live command binding through the durable workbench session across MCP server recreation", async () => {
   const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
   const tickets = new LiveTicketStore();
-  const computer = computerFixture();
+  let durableAppendCount = 0;
+  const computer = computerFixture(() => { durableAppendCount += 1; });
 
   const first = await connectedServer(computer, promptSessions, tickets);
   const opened = await first.client.callTool({ name: "cptr_open_live_workbench", arguments: {} });
@@ -121,6 +125,11 @@ test("routes live command binding through the durable workbench session across M
     },
   });
   assert.equal(command.isError, undefined);
+  assert.equal(
+    durableAppendCount,
+    0,
+    "command binding is already the durable RUNNING transition; a redundant plugin command.started append can arrive after fast completion",
+  );
 
   const replay = promptSessions.replay(promptTicket, 0);
   assert.ok(replay);

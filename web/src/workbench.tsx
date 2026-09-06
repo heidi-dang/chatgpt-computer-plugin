@@ -307,8 +307,12 @@ function usePromptActivity(
 
     const consume = async () => {
       try {
-        await applySnapshot();
         if (stopped) return;
+        // The prompt SSE endpoint already replays all events after the cursor.
+        // Open it first so the terminal becomes live in one round trip; keep
+        // the snapshot endpoint only as a recovery fallback for transport
+        // failures instead of putting it on the startup critical path.
+        setConnection("connecting prompt activity");
         const url = new URL(meta.streamUrl!, window.location.href);
         url.searchParams.set("after", String(cursor.current));
         const response = await fetch(url, {
@@ -359,7 +363,19 @@ function usePromptActivity(
           if (!(await renewPromptTicket())) scheduleRetry(consume);
           return;
         }
-        setConnection(error instanceof Error ? error.message : "prompt stream error");
+        const transportMessage = error instanceof Error ? error.message : "prompt stream error";
+        try {
+          await applySnapshot();
+        } catch (snapshotError) {
+          const snapshotStatus = snapshotError && typeof snapshotError === "object" && "status" in snapshotError
+            ? (snapshotError as { status?: unknown }).status
+            : undefined;
+          if (snapshotStatus === 401) {
+            if (!(await renewPromptTicket())) scheduleRetry(consume);
+            return;
+          }
+        }
+        setConnection(transportMessage);
         scheduleRetry(consume);
       }
     };
