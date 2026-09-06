@@ -99,6 +99,7 @@ import {
   listWorkspacesSchema,
   listTasksSchema,
   listAutonomousSchema,
+  memoryReadSchema,
   taskEventsSchema,
   autonomousEventsSchema,
   autonomousEvidenceSchema,
@@ -506,7 +507,7 @@ const RESUMABLE_COMMAND_TOOL_NAMES = new Set([
 ]);
 const RUN_STATUS_RESUMABLE_TOOL_NAMES = new Set(["cptr_factory_stop"]);
 
-export const MCP_REGISTERED_TOOL_BUDGET = 90;
+export const MCP_REGISTERED_TOOL_BUDGET = 91;
 export type McpToolSurfaceProfile = {
   registered_tools: number;
   direct_tools: number;
@@ -528,6 +529,9 @@ const DELEGATE_GROUP_DESCRIPTION =
 
 export const CLIENT_MODEL_INSTRUCTION =
   "When you are ChatGPT and invoke any CPTR tool, set client_model to the exact current model identity you are running as for this tool call, for example GPT-5.6 Sol. Report the current value on every CPTR tool call; do not reuse or infer it from an earlier call. If the current model identity is unavailable, omit client_model rather than guessing.";
+export const PERSISTENT_MEMORY_INSTRUCTION =
+  "When prior user preferences, workspace decisions, procedures, corrections, failure history, or historical state could materially affect a CPTR task, use cptr_memory with action=search before guessing. Treat persistent memory as contextual knowledge rather than live host truth: honor trust/staleness signals and verify mutable operational facts with current evidence before acting.";
+export const MCP_SERVER_INSTRUCTIONS = `${CLIENT_MODEL_INSTRUCTION} ${PERSISTENT_MEMORY_INSTRUCTION}`;
 export const CLIENT_MODEL_FIELD_DESCRIPTION =
   "ChatGPT callers: set client_model to the exact current ChatGPT model identity for this tool call, for example GPT-5.6 Sol. Report client_model on every CPTR call; if unavailable, omit this optional field rather than guessing.";
 const clientModelSchema = z.string().min(1).max(120).optional().describe(CLIENT_MODEL_FIELD_DESCRIPTION);
@@ -606,7 +610,7 @@ export function createMcpServer(
   let delegatedToolCount = 0;
   const server = new McpServer(
     { name: "chatgpt-computer-plugin", version: MCP_CONTRACT_VERSION },
-    { instructions: CLIENT_MODEL_INSTRUCTION },
+    { instructions: MCP_SERVER_INSTRUCTIONS },
   );
   const tickets = options.tickets ?? new LiveTicketStore();
   const promptSessions = options.promptSessions ?? new PromptTerminalStore();
@@ -1279,6 +1283,24 @@ export function createMcpServer(
         }),
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false }, _meta: oauthToolMetadata,
   }, async (input) => activityResult(await client.getTaskEvents(input), "cptr_get_task_events"));
+
+  server.registerTool("cptr_memory", {
+    title: "Read CPTR persistent memory",
+    description:
+      "Read owner-scoped persistent backend knowledge used by CPTR. Use this when prior user preferences, workspace decisions, procedures, corrections, failure history, or historical state could materially affect the current task. Search first, inspect a returned memory_id for detail, use timeline for historical-state questions, and health for diagnostics. This action is read-only; memory mutation remains unavailable to ChatGPT Official. Treat stale or low-trust memory as context and verify mutable operational facts against current host evidence. CPTR's existing fail-closed memory execution gate remains authoritative.",
+    inputSchema: memoryReadSchema,
+    outputSchema: z.object({
+      action: z.enum(["search", "inspect", "timeline", "health"]),
+      workspace_id: z.string().nullable(),
+      result: z.record(z.string(), z.unknown()),
+    }),
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    _meta: oauthToolMetadata,
+  }, async (input) => activityResult(
+    await client.readMemory(input),
+    "cptr_memory",
+    `ChatGPT read CPTR persistent memory (${input.action}).`,
+  ));
   /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool("cptr_code_read_many_files", {
     title: "Read multiple CPTR files", description: "Read up to ten workspace files in one direct ChatGPT request with a shared character budget; each file includes its full-content SHA-256 for safe follow-up writes.",
