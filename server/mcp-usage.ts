@@ -11,9 +11,11 @@ export type TokenEstimate = {
   exact_for_model: boolean;
 };
 
-const DEFAULT_MAX_EXACT_BYTES = 512_000;
+const DEFAULT_MAX_EXACT_BYTES = 65_536;
 const MIN_MAX_EXACT_BYTES = 1_024;
 const MAX_MAX_EXACT_BYTES = 2_000_000;
+const DEFAULT_USAGE_QUEUE_MAX = 256;
+const MAX_USAGE_QUEUE_MAX = 4_096;
 
 const MODEL_ALIASES = new Map<string, string>([
   ["gpt-5.6-sol", "gpt-5.6-sol"],
@@ -29,11 +31,73 @@ const MODEL_ALIASES = new Map<string, string>([
 ]);
 
 const encodings = new Map<string, ReturnType<typeof getEncoding>>();
+const usageQueue: Array<() => void | Promise<void>> = [];
+const usageFlushWaiters: Array<() => void> = [];
+let usageDrainActive = false;
+let usageDropped = 0;
 
 function boundedEnvInt(name: string, fallback: number, minimum: number, maximum: number): number {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
   if (!Number.isFinite(parsed)) return fallback;
   return Math.max(minimum, Math.min(maximum, parsed));
+}
+
+function resolveUsageFlushWaiters(): void {
+  if (usageDrainActive || usageQueue.length > 0) return;
+  const waiters = usageFlushWaiters.splice(0);
+  for (const resolve of waiters) resolve();
+}
+
+function drainUsageQueue(): void {
+  if (usageDrainActive) return;
+  if (usageQueue.length === 0) {
+    resolveUsageFlushWaiters();
+    return;
+  }
+  usageDrainActive = true;
+  setImmediate(async () => {
+    const job = usageQueue.shift();
+    try {
+      await job?.();
+    } catch {
+      // Usage simulation is best-effort observability and must never affect MCP results.
+    } finally {
+      usageDrainActive = false;
+      if (usageQueue.length > 0) drainUsageQueue();
+      else resolveUsageFlushWaiters();
+    }
+  });
+}
+
+export function scheduleUsageSimulation(job: () => void | Promise<void>): boolean {
+  const maxQueue = boundedEnvInt(
+    "CPTR_MCP_USAGE_QUEUE_MAX",
+    DEFAULT_USAGE_QUEUE_MAX,
+    1,
+    MAX_USAGE_QUEUE_MAX,
+  );
+  if (usageQueue.length >= maxQueue) {
+    usageDropped += 1;
+    return false;
+  }
+  usageQueue.push(job);
+  drainUsageQueue();
+  return true;
+}
+
+export function flushUsageSimulation(): Promise<void> {
+  if (!usageDrainActive && usageQueue.length === 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    usageFlushWaiters.push(resolve);
+  });
+}
+
+export function usageSimulationStats(): { queued: number; active: boolean; dropped: number } {
+  return {
+    queued: usageQueue.length,
+    active: usageDrainActive,
+    dropped: usageDropped,
+  };
 }
 
 function sanitizeReportedModel(value: unknown): string | null {

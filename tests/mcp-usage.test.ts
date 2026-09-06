@@ -5,7 +5,7 @@ import { ComputerClient } from "../server/client/computer-client.js";
 import { McpActivityEmitter } from "../server/mcp-activity.js";
 import { McpDiagnosticsEmitter } from "../server/mcp-diagnostics.js";
 import { mcpRequestContext, normalizeMcpClient } from "../server/mcp-traffic.js";
-import { createMcpServer } from "../server/mcp.js";
+import { CLIENT_MODEL_FIELD_DESCRIPTION, createMcpServer } from "../server/mcp.js";
 
 const usageModule = await import("../server/mcp-usage.js").catch(() => ({} as Record<string, unknown>));
 
@@ -43,13 +43,14 @@ test("MCP server asks ChatGPT to report the current model on every CPTR call", a
   assert.ok(listed.tools.length > 0);
   for (const tool of listed.tools) {
     const schema = tool.inputSchema as {
-      properties?: Record<string, { type?: string; maxLength?: number }>;
+      properties?: Record<string, { type?: string; maxLength?: number; description?: string }>;
       required?: string[];
     };
     assert.equal(schema.properties?.client_model?.type, "string", `${tool.name} must expose client_model`);
     assert.equal(schema.properties?.client_model?.maxLength, 120, `${tool.name} client_model bound`);
     assert.equal(schema.required?.includes("client_model") ?? false, false, `${tool.name} keeps client_model optional`);
-    assert.match(tool.description ?? "", /client_model/);
+    assert.equal(schema.properties?.client_model?.description, CLIENT_MODEL_FIELD_DESCRIPTION);
+    assert.ok(CLIENT_MODEL_FIELD_DESCRIPTION.length < 100, "client_model field description stays compact");
   }
 
   await client.close();
@@ -128,10 +129,47 @@ test("MCP-visible token estimation is deterministic and discloses byte fallback"
   assert.ok(first.tokens > 0);
   assert.equal(first.exact_for_model, false);
 
-  const oversized = estimate("gpt-5.6-sol", "x".repeat(600_000));
-  assert.ok(oversized.tokens > 0);
-  assert.equal(oversized.method, "utf8-byte-fallback");
-  assert.equal(oversized.exact_for_model, false);
+  const previousMaxExactBytes = process.env.CPTR_MCP_USAGE_MAX_EXACT_BYTES;
+  delete process.env.CPTR_MCP_USAGE_MAX_EXACT_BYTES;
+  try {
+    const oversized = estimate("gpt-5.6-sol", "x".repeat(100_000));
+    assert.ok(oversized.tokens > 0);
+    assert.equal(oversized.method, "utf8-byte-fallback");
+    assert.equal(oversized.exact_for_model, false);
+  } finally {
+    if (previousMaxExactBytes === undefined) delete process.env.CPTR_MCP_USAGE_MAX_EXACT_BYTES;
+    else process.env.CPTR_MCP_USAGE_MAX_EXACT_BYTES = previousMaxExactBytes;
+  }
+});
+
+test("usage simulation is bounded and executes outside the tool-call turn", async () => {
+  assert.equal(typeof usageModule.scheduleUsageSimulation, "function");
+  assert.equal(typeof usageModule.flushUsageSimulation, "function");
+  assert.equal(typeof usageModule.usageSimulationStats, "function");
+  const schedule = usageModule.scheduleUsageSimulation as (job: () => void) => boolean;
+  const flush = usageModule.flushUsageSimulation as () => Promise<void>;
+  const stats = usageModule.usageSimulationStats as () => { queued: number; active: boolean; dropped: number };
+  await flush();
+
+  const previousQueueMax = process.env.CPTR_MCP_USAGE_QUEUE_MAX;
+  process.env.CPTR_MCP_USAGE_QUEUE_MAX = "2";
+  let executed = 0;
+  try {
+    assert.equal(schedule(() => { executed += 1; }), true);
+    assert.equal(schedule(() => { executed += 1; }), true);
+    assert.equal(schedule(() => { executed += 1; }), false);
+    assert.equal(executed, 0, "usage work must not execute inline");
+    assert.equal(stats().queued, 2);
+    await flush();
+    assert.equal(executed, 2);
+    assert.equal(stats().queued, 0);
+    assert.equal(stats().active, false);
+    assert.ok(stats().dropped >= 1);
+  } finally {
+    if (previousQueueMax === undefined) delete process.env.CPTR_MCP_USAGE_QUEUE_MAX;
+    else process.env.CPTR_MCP_USAGE_QUEUE_MAX = previousQueueMax;
+    await flush();
+  }
 });
 
 test("one terminal Usage event counts original tool arguments but Activity stays metadata-free", async () => {
@@ -186,6 +224,8 @@ test("one terminal Usage event counts original tool arguments but Activity stays
     name: "cptr_code_read_file",
     arguments: originalArguments,
   }));
+  const flushUsage = usageModule.flushUsageSimulation as () => Promise<void>;
+  await flushUsage();
   await Promise.all([diagnosticEmitter.flush(), activityEmitter.flush()]);
 
   const usage = diagnostics.filter((event) => event.kind === "usage");

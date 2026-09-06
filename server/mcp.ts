@@ -9,6 +9,7 @@ import {
   canonicalToolCallEnvelope,
   estimateModelTokens,
   normalizeReportedModel,
+  scheduleUsageSimulation,
 } from "./mcp-usage.js";
 import {
   McpTrafficEmitter,
@@ -531,9 +532,9 @@ export const CLIENT_MODEL_INSTRUCTION =
   "When you are ChatGPT and invoke any CPTR tool, set client_model to the exact current model identity you are running as for this tool call, for example GPT-5.6 Sol. Report the current value on every CPTR tool call; do not reuse or infer it from an earlier call. If the current model identity is unavailable, omit client_model rather than guessing.";
 export const PERSISTENT_MEMORY_INSTRUCTION =
   "When prior user preferences, workspace decisions, procedures, corrections, failure history, or historical state could materially affect a CPTR task, use cptr_memory with action=search before guessing. Treat persistent memory as contextual knowledge rather than live host truth: honor trust/staleness signals and verify mutable operational facts with current evidence before acting.";
-export const MCP_SERVER_INSTRUCTIONS = `${CLIENT_MODEL_INSTRUCTION} ${PERSISTENT_MEMORY_INSTRUCTION}`;
+export const MCP_SERVER_INSTRUCTIONS = `${DIRECT_GROUP_DESCRIPTION} ${DELEGATE_GROUP_DESCRIPTION} ${CLIENT_MODEL_INSTRUCTION} ${PERSISTENT_MEMORY_INSTRUCTION}`;
 export const CLIENT_MODEL_FIELD_DESCRIPTION =
-  "ChatGPT callers: set client_model to the exact current ChatGPT model identity for this tool call, for example GPT-5.6 Sol. Report client_model on every CPTR call; if unavailable, omit this optional field rather than guessing.";
+  "Current ChatGPT model identity for this call, when available.";
 const clientModelSchema = z.string().min(1).max(120).optional().describe(CLIENT_MODEL_FIELD_DESCRIPTION);
 
 type ModelAwareToolConfig = {
@@ -566,7 +567,9 @@ export function extractClientModel(input: unknown): { reported: string | null; h
 function groupedToolConfig<T extends ModelAwareToolConfig>(name: string, config: T): T {
   const delegated = DELEGATED_AGENT_TOOL_NAMES.has(name);
   const groupName = delegated ? "Delegated Agent" : "ChatGPT Direct Coding";
-  const policy = delegated ? DELEGATE_GROUP_DESCRIPTION : DIRECT_GROUP_DESCRIPTION;
+  const policy = delegated
+    ? "Delegated Agent; requires prompt-scoped `allow:delegate`."
+    : "Direct Coding.";
   const conditional = name === "cptr_render_live_terminal"
     ? " Command-target binding is direct; task/monitor binding is delegated-agent lifecycle access and therefore also requires the prompt-session `allow:delegate` capability."
     : "";
@@ -578,7 +581,7 @@ function groupedToolConfig<T extends ModelAwareToolConfig>(name: string, config:
   return {
     ...config,
     title: `[${groupName}] ${config.title?.trim() || name}`,
-    description: `${policy}${conditional}${resumeFirst}${config.description ? ` ${config.description}` : ""} ${CLIENT_MODEL_FIELD_DESCRIPTION}`,
+    description: `${policy}${conditional}${resumeFirst}${config.description ? ` ${config.description}` : ""}`,
     inputSchema: withClientModelInputSchema(config.inputSchema),
   };
 }
@@ -880,40 +883,42 @@ export function createMcpServer(
         const modelGeneratedArguments = trafficContext?.rawToolArguments ?? originalInput;
         const emitUsage = (status: "complete" | "error", returnedEnvelope: unknown) => {
           if (!options.diagnostics) return;
-          try {
-            // Billing orientation is from the model's perspective: ChatGPT-generated
-            // raw tool-call arguments are model output, while MCP results fed back to
-            // ChatGPT are model input. For HTTP MCP calls, use the transient raw
-            // request arguments so schema defaults injected by the SDK are not billed
-            // as model-generated tokens.
-            const toolCallOutputEstimate = estimateModelTokens(
-              normalizedModel.canonical,
-              canonicalToolCallEnvelope(name, modelGeneratedArguments),
-            );
-            const toolResultInputEstimate = estimateModelTokens(
-              normalizedModel.canonical,
-              canonicalMcpResultEnvelope(returnedEnvelope),
-            );
-            options.diagnostics.usage({
-              request_id: trafficContext?.requestId ?? null,
-              correlation_id: trafficContext?.correlationId ?? null,
-              session_id: trafficContext?.sessionId ?? null,
-              client_id: activityClient.id,
-              model_reported: normalizedModel.reported,
-              model_canonical: normalizedModel.canonical,
-              model_source: normalizedModel.reported ? "self_reported" : "unavailable",
-              tool_name: name,
-              input_tokens_estimated: toolResultInputEstimate.tokens,
-              output_tokens_estimated: toolCallOutputEstimate.tokens,
-              cached_input_tokens_estimated: null,
-              estimator_method: `input=${toolResultInputEstimate.method};output=${toolCallOutputEstimate.method}`,
-              estimator_exact_for_model:
-                toolResultInputEstimate.exact_for_model && toolCallOutputEstimate.exact_for_model,
-              status,
-            });
-          } catch {
-            // Usage simulation is best-effort observability and must never alter a tool result.
-          }
+          scheduleUsageSimulation(() => {
+            try {
+              // Billing orientation is from the model's perspective: ChatGPT-generated
+              // raw tool-call arguments are model output, while MCP results fed back to
+              // ChatGPT are model input. For HTTP MCP calls, use the transient raw
+              // request arguments so schema defaults injected by the SDK are not billed
+              // as model-generated tokens.
+              const toolCallOutputEstimate = estimateModelTokens(
+                normalizedModel.canonical,
+                canonicalToolCallEnvelope(name, modelGeneratedArguments),
+              );
+              const toolResultInputEstimate = estimateModelTokens(
+                normalizedModel.canonical,
+                canonicalMcpResultEnvelope(returnedEnvelope),
+              );
+              options.diagnostics?.usage({
+                request_id: trafficContext?.requestId ?? null,
+                correlation_id: trafficContext?.correlationId ?? null,
+                session_id: trafficContext?.sessionId ?? null,
+                client_id: activityClient.id,
+                model_reported: normalizedModel.reported,
+                model_canonical: normalizedModel.canonical,
+                model_source: normalizedModel.reported ? "self_reported" : "unavailable",
+                tool_name: name,
+                input_tokens_estimated: toolResultInputEstimate.tokens,
+                output_tokens_estimated: toolCallOutputEstimate.tokens,
+                cached_input_tokens_estimated: null,
+                estimator_method: `input=${toolResultInputEstimate.method};output=${toolCallOutputEstimate.method}`,
+                estimator_exact_for_model:
+                  toolResultInputEstimate.exact_for_model && toolCallOutputEstimate.exact_for_model,
+                status,
+              });
+            } catch {
+              // Usage simulation is best-effort observability and must never alter a tool result.
+            }
+          });
         };
         options.traffic?.toolStarted(name, trafficContext);
         /* @mcp-codemod-error This object looks like a v1 handler-context mock (sessionId, requestId). v2 nests the context — reshape it (requestId → mcpReq.id; sessionId stays top-level), e.g. { sendRequest: fn } → { mcpReq: { send: fn } }. Passed as-is to a migrated handler that reads ctx.mcpReq.*, the v1 shape throws "Cannot read properties of undefined". */

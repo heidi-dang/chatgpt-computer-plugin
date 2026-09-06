@@ -439,5 +439,13 @@ test("plugin process wires MCP activity delivery into stateful and stateless ses
     source,
     /handleStatelessCompatibilityRequest[\s\S]*statelessServerPool\.take\(\)/,
   );
+  assert.match(
+    source,
+    /createMcpHandler\(\(\) => statelessServerPool\.take\(\)\.value/,
+  );
+  assert.match(
+    source,
+    /handleModernMcp2026Request[\s\S]*modernMcpNodeHandler[\s\S]*finally[\s\S]*statelessServerPool\.scheduleReplenish\(\)/,
+  );
   assert.match(source, /mcpActivity\.close\(\)/);
 });
