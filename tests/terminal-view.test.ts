@@ -109,6 +109,36 @@ test("idle prompt lifecycle renders DISCONNECTED while keeping the persistent SS
   assert.match(reconnecting, /SSE RECONNECTING/);
 });
 
+test("iOS remount with no target stays DISCONNECTED while prompt SSE reconnects", () => {
+  const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+  const promptHook = source.slice(source.indexOf("function usePromptActivity("), source.indexOf("function useMcpBridge()"));
+
+  assert.match(
+    promptHook,
+    /const \[status, setStatus\] = useState\("DISCONNECTED"\);/,
+    "an unbound Workbench must not advertise CONNECTING before any CPTR tool is active",
+  );
+  assert.doesNotMatch(
+    promptHook,
+    /const \[status, setStatus\] = useState\("CONNECTING"\);/,
+    "transport startup must not become the lifecycle header state",
+  );
+
+  const html = renderToStaticMarkup(React.createElement(TerminalView, {
+    rows: [],
+    status: "DISCONNECTED",
+    connection: "reconnecting prompt activity",
+    machineLabel: "CPTR Computer",
+    targetLabel: "Waiting for terminal session…",
+  }));
+
+  assert.match(html, /CPTR Computer/);
+  assert.match(html, />DISCONNECTED</);
+  assert.match(html, /SSE RECONNECTING/);
+  assert.doesNotMatch(html, /Connecting to computer/);
+  assert.doesNotMatch(html, /<span>RECONNECTING<\/span>/);
+});
+
 test("terminal final command state exposes the real exit code in the compact footer", () => {
   const html = renderToStaticMarkup(React.createElement(TerminalView, {
     rows: [{
@@ -232,7 +262,8 @@ test("Workbench reports intrinsic height through both ChatGPT host sizing paths 
   assert.match(source, /const displayStatus = meta\?\.targetType && meta\.targetId \? state\.status : promptActivity\.status/);
   assert.doesNotMatch(source, /meta\?\.targetId \? targetConnection : "connecting terminal session"/);
   assert.doesNotMatch(source, /displayStatus = meta\?\.targetType && meta\.targetId \? state\.status : "CONNECTING"/);
-  assert.match(source, /promptActivity\.connection === "prompt live" \? "CPTR Computer" : "Connecting to computer"/);
+  assert.match(source, /machineLabel="CPTR Computer"/);
+  assert.doesNotMatch(source, /promptActivity\.connection === "prompt live" \? "CPTR Computer" : "Connecting to computer"/);
   assert.match(source, /"Waiting for terminal session…"/);
 });
 
