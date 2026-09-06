@@ -23,7 +23,10 @@ test("structured connector profiles preserve provider-specific application types
       },
       {
         client_name: "Grok",
-        redirect_uris: ["https://grok.example.test/oauth/callback"],
+        redirect_uris: [
+          "https://grok.com/connectors-oauth-exchange-code/",
+          "https://grok.com/connectors-oauth-exchange-code",
+        ],
         application_type: "web",
       },
     ]),
@@ -33,6 +36,10 @@ test("structured connector profiles preserve provider-specific application types
     { client_name: "Claude", application_type: "web" },
     { client_name: "Gemini CLI", application_type: "native" },
     { client_name: "Grok", application_type: "web" },
+  ]);
+  assert.deepEqual(profiles[2].redirect_uris, [
+    "https://grok.com/connectors-oauth-exchange-code/",
+    "https://grok.com/connectors-oauth-exchange-code",
   ]);
 });
 
