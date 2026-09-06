@@ -216,6 +216,49 @@ test("renders sanitized terminal lifecycle rows and rejects duplicate sequences"
   assert.equal(duplicate, completed);
 });
 
+test("worker command stdout and stderr remain ordered and exactly-once across replay", () => {
+  const events = [
+    {
+      event_id: "worker-command-start",
+      sequence: 1,
+      timestamp: "2026-09-07T00:00:00Z",
+      type: "command.started",
+      payload: { worker_id: "dcw-live", command_id: "cmd-live", summary: "worker validation", status: "RUNNING" },
+    },
+    {
+      event_id: "worker-command-stdout",
+      sequence: 2,
+      timestamp: "2026-09-07T00:00:01Z",
+      type: "terminal.chunk",
+      payload: { worker_id: "dcw-live", command_id: "cmd-live", stream: "stdout", text: "stdout-marker\n" },
+    },
+    {
+      event_id: "worker-command-stderr",
+      sequence: 3,
+      timestamp: "2026-09-07T00:00:02Z",
+      type: "terminal.chunk",
+      payload: { worker_id: "dcw-live", command_id: "cmd-live", stream: "stderr", text: "stderr-marker\n" },
+    },
+    {
+      event_id: "worker-command-complete",
+      sequence: 4,
+      timestamp: "2026-09-07T00:00:03Z",
+      type: "command.completed",
+      payload: { worker_id: "dcw-live", command_id: "cmd-live", status: "COMPLETE", exit_code: 0 },
+    },
+  ] as const;
+
+  const once = reduceWorkbenchEvents(initialWorkbenchState(), events);
+  const replayed = reduceWorkbenchEvents(once, events);
+  const streamRows = once.transcript.filter((row) => row.text === "stdout-marker" || row.text === "stderr-marker");
+
+  assert.deepEqual(streamRows.map((row) => [row.text, row.tone]), [
+    ["stdout-marker", "stdout"],
+    ["stderr-marker", "stderr"],
+  ]);
+  assert.deepEqual(replayed, once, "replayed worker terminal events must not duplicate already-rendered stdout/stderr");
+});
+
 
 test("marks compact multi-line terminal batches for the safe Overflow effect without reordering text", () => {
   const state = reduceWorkbenchEvent(initialWorkbenchState(), {

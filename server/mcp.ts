@@ -2022,6 +2022,12 @@ export function createMcpServer(
       const command = await client.runWorkspaceTestTarget(testInput);
       if (input.worker_id) {
         if (workbench_session_id) {
+          await client.bindWorkbenchSession({
+            session_id: workbench_session_id,
+            target_type: "command",
+            target_id: command.command_id,
+            workspace_id: input.workspace_id,
+          });
           recordWorkbenchActivity(client, workbench_session_id, {
             event_type: "direct_worker.test.started",
             state: command.status,
@@ -2030,8 +2036,9 @@ export function createMcpServer(
             summary: `ChatGPT started ${command.target} in Direct Coding Worker ${input.worker_id}.`,
           });
         }
-        return activityResult(
+        return workbenchResult(
           { ...command, workspace_id: input.workspace_id },
+          { targetType: "command", targetId: command.command_id, workspaceId: input.workspace_id },
           "cptr_workspace_run_test_target",
         );
       }
@@ -2317,6 +2324,12 @@ export function createMcpServer(
       const command = await client.runCodingCommand(commandInput);
       if (input.worker_id) {
         if (workbench_session_id) {
+          await client.bindWorkbenchSession({
+            session_id: workbench_session_id,
+            target_type: "command",
+            target_id: command.command_id,
+            workspace_id: input.workspace_id,
+          });
           recordWorkbenchActivity(client, workbench_session_id, {
             event_type: "direct_worker.command.started",
             state: command.status,
@@ -2325,8 +2338,9 @@ export function createMcpServer(
             summary: `ChatGPT started a command in Direct Coding Worker ${input.worker_id}.`,
           });
         }
-        return activityResult(
+        return workbenchResult(
           { ...command, workspace_id: input.workspace_id },
+          { targetType: "command", targetId: command.command_id, workspaceId: input.workspace_id },
           "cptr_code_run_command",
         );
       }

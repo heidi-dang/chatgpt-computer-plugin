@@ -94,6 +94,20 @@ test("routes the bounded second-layer workspace tools without accepting arbitrar
     assert.equal(commandBind.payload.live.workspaceId, "ws-1");
   }
 
+  const workerRun = await client.callTool({
+    name: "cptr_workspace_run_test_target",
+    arguments: { workspace_id: "ws-1", worker_id: "dcw-tests", target: "python_pytest" },
+  });
+  assert.equal(workerRun.isError, undefined);
+  const workerReplay = promptSessions.replay(promptTicket!, replay?.last_sequence ?? 0);
+  const workerBind = workerReplay?.events.find((event) => event.type === "live.bind");
+  assert.equal(workerBind?.type, "live.bind", "worker test profiles must stream through the same real command terminal path");
+  if (workerBind?.type === "live.bind") {
+    assert.equal(workerBind.payload.live.targetType, "command");
+    assert.equal(workerBind.payload.live.targetId, "command-1");
+    assert.equal(workerBind.payload.live.workspaceId, "ws-1");
+  }
+
   await client.close();
   await server.close();
 });

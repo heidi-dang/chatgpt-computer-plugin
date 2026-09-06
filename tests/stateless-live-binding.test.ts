@@ -154,6 +154,51 @@ test("routes live command binding through the durable workbench session across M
 });
 
 
+test("routes Direct Coding Worker commands into the existing prompt live terminal", async () => {
+  const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
+  const tickets = new LiveTicketStore();
+  const computer = computerFixture();
+
+  const first = await connectedServer(computer, promptSessions, tickets);
+  const opened = await first.client.callTool({ name: "cptr_open_live_workbench", arguments: {} });
+  const promptTicket = (opened._meta as { "cptr/prompt"?: { ticket?: string } } | undefined)?.["cptr/prompt"]?.ticket;
+  const sessionId = (opened.structuredContent as { session_id?: string } | undefined)?.session_id;
+  assert.ok(promptTicket);
+  assert.ok(sessionId);
+  await first.client.close();
+  await first.server.close();
+
+  const second = await connectedServer(computer, promptSessions, tickets);
+  const command = await second.client.callTool({
+    name: "cptr_code_run_command",
+    arguments: {
+      workspace_id: "ws-1",
+      worker_id: "dcw-live-terminal",
+      command: "printf 'worker stdout\\n'; printf 'worker stderr\\n' >&2",
+      workbench_session_id: sessionId,
+    },
+  });
+  assert.equal(command.isError, undefined);
+
+  const replay = promptSessions.replay(promptTicket, 0);
+  assert.ok(replay);
+  const workerActivity = replay.events.filter((event) => event.type === "direct.worker");
+  const liveBind = replay.events.find((event) => event.type === "live.bind");
+  assert.equal(liveBind?.type, "live.bind", "worker commands must bind the same Workbench to the real command SSE target");
+  if (liveBind?.type === "live.bind") {
+    assert.equal(liveBind.payload.live.targetType, "command");
+    assert.equal(liveBind.payload.live.targetId, "command-stateless-1");
+    assert.equal(liveBind.payload.live.workspaceId, "ws-1");
+  }
+  assert.equal(workerActivity.length, 2, "compact worker metadata remains available around the live command binding");
+  assert.ok(workerActivity[0]!.sequence < liveBind!.sequence, "worker start metadata must precede the command binding");
+  assert.ok(liveBind!.sequence < workerActivity[1]!.sequence, "worker completion metadata may follow binding without clearing the command target");
+
+  await second.client.close();
+  await second.server.close();
+});
+
+
 test("routes stateless command follow-up activity back to the prompt that owns the live target", async () => {
   const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
   const tickets = new LiveTicketStore();
