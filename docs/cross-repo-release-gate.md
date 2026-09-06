@@ -164,19 +164,19 @@ Run this without an MCP bearer token and declare the intended production auth mo
 ```bash
 CPTR_DEPLOYED_MCP_URL="$CPTR_DEPLOYED_MCP_URL" \
 CPTR_EDGE_AUTH_MODE="$CPTR_EDGE_AUTH_MODE" \
-CPTR_EDGE_DCR_REDIRECT_URIS="$CPTR_EDGE_DCR_REDIRECT_URIS" \
+CPTR_EDGE_DCR_CLIENTS_JSON="$CPTR_EDGE_DCR_CLIENTS_JSON" \
 npm run check:public-edge
 ```
 
-`CPTR_EDGE_AUTH_MODE` accepts `cloudflare-managed`, `native`, or `auto`; production should use an explicit mode. `CPTR_EDGE_DCR_REDIRECT_URIS` is the set of real client callbacks that must work in production. The check verifies through the actual public proxy/WAF path:
+`CPTR_EDGE_AUTH_MODE` accepts `cloudflare-managed`, `native`, or `auto`; production should use an explicit mode. `CPTR_EDGE_DCR_CLIENTS_JSON` is the preferred qualification input: a JSON array of real client registrations containing `client_name`, `redirect_uris`, and optionally `application_type`. When `application_type` is omitted, HTTP loopback-only callbacks are inferred as `native`; other valid callbacks are `web`. The legacy `CPTR_EDGE_DCR_REDIRECT_URIS` input remains supported and is converted into independently inferred client profiles. The check verifies through the actual public proxy/WAF path:
 
 1. `/health` is production-ready.
 2. An unauthenticated MCP `2026-07-28` request receives `401` with an HTTPS RFC 9728 `resource_metadata` URL.
 3. The live challenge mode matches `CPTR_EDGE_AUTH_MODE`: the canonical origin metadata path for native mode or Cloudflare's Access protected-resource path for Managed OAuth.
 4. The advertised protected-resource metadata names the exact deployed `/mcp` resource and at least one authorization server.
 5. The authorization server discovered from that document publishes HTTPS authorization, token, and registration endpoints with authorization-code, refresh-token, and PKCE S256 support; native mode additionally requires CIMD advertisement.
-6. Dynamic client registration succeeds for **every** URI in `CPTR_EDGE_DCR_REDIRECT_URIS` and preserves the registered callback.
-7. A PKCE authorization request using each newly registered client reaches the authorization stage without returning an OAuth redirect error. This catches configurations where DCR returns `201` but the application-level redirect policy later rejects the same URI.
+6. Dynamic client registration succeeds for every configured connector profile, preserves every registered callback, and does not change the requested `application_type`.
+7. A PKCE authorization request using each newly registered client/callback pair reaches the authorization stage without returning an OAuth redirect error. This catches configurations where DCR returns `201` but the application-level redirect policy later rejects the same URI or application class.
 
 A connector being able to open is not a substitute for this gate, and a successful DCR response alone is not proof that the complete authorization path accepts the client.
 

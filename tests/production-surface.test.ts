@@ -43,5 +43,8 @@ test("public edge verifier supports both native and Cloudflare Managed OAuth RFC
   assert.match(publicEdgeSource, /registration_endpoint/);
   assert.match(publicEdgeSource, /code_challenge_method/);
   assert.match(publicEdgeSource, /CPTR_EDGE_DCR_REDIRECT_URIS/);
+  assert.match(publicEdgeSource, /CPTR_EDGE_DCR_CLIENTS_JSON/);
+  assert.match(publicEdgeSource, /application_type: profile\.application_type/);
+  assert.doesNotMatch(publicEdgeSource, /application_type: "native"/);
   assert.doesNotMatch(publicEdgeSource, /must be disabled for that route/);
 });

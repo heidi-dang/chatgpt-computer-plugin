@@ -10,6 +10,7 @@
     "copy:web": "node scripts/copy-workbench-assets.mjs",
     "check:cross-repo-contract": "node scripts/check-cross-repo-browser-contract.mjs",
     "check:public-edge": "node scripts/check-public-edge.mjs",
+    "connector:register": "node scripts/register-mcp-connector.mjs",
     "check:host-release": "node scripts/check-host-release.mjs",
     "check:deployed-contract": "node scripts/check-deployed-contract.mjs",
     "check:release": "npm run typecheck && npm test && npm run build && npm run check:cross-repo-contract",
@@ -17,7 +18,7 @@
     "benchmark:mcp-latency": "tsx scripts/benchmark-mcp-latency.ts",
     "benchmark:runtime-lifecycle": "tsx scripts/benchmark-runtime-lifecycle.ts",
     "build": "npm run build:web && tsc -p tsconfig.json && npm run copy:web",
-    "test": "tsx --test tests/*.test.ts",
+    "test": "tsx --test tests/*.test.ts tests/*.test.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p web/tsconfig.json"
   },
   "dependencies": {
