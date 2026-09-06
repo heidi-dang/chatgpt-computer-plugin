@@ -74,6 +74,7 @@ const expectedTools = [
   "cptr_list_tasks",
   "cptr_list_workbench_sessions",
   "cptr_list_workspaces",
+  "cptr_memory",
   "cptr_lsp_discover",
   "cptr_lsp_request",
   "cptr_lsp_start",
@@ -107,7 +108,7 @@ const auxiliaryTools = new Set([
   "cptr_ssh_list_hosts", "cptr_ssh_run_command", "cptr_ssh_get_command", "cptr_ssh_cancel_command",
 ]);
 const expectedPlannedTools = expectedTools.filter((name) => !auxiliaryTools.has(name));
-const expectedRegisteredToolCount = 90;
+const expectedRegisteredToolCount = 91;
 const expectedResource = "ui://cptr/live-workbench.html";
 
 if (!endpoint || !token) {

@@ -434,6 +434,20 @@ export class ComputerClient {
     query.set("limit", String(input.limit ?? 20));
     return this.request(`/autonomous?${query}`);
   }
+
+  async readMemory(input: {
+    action: "search" | "inspect" | "timeline" | "health";
+    workspace_id?: string;
+    query?: string;
+    memory_id?: string;
+    at_ms?: number;
+    known_at_ms?: number;
+    limit?: number;
+    include_historical?: boolean;
+  }): Promise<Record<string, unknown>> {
+    return this.request("/memory/read", { method: "POST", body: input });
+  }
+
   async getTaskEvents(input: { task_id: string; after_sequence?: number; max_events?: number }): Promise<Record<string, unknown>> {
     return this.request(`/tasks/${encodeURIComponent(input.task_id)}/events?after_sequence=${input.after_sequence ?? 0}&max_events=${input.max_events ?? 50}`);
   }

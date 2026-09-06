@@ -34,11 +34,11 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   const listed = await client.listTools();
   const tools = new Map(listed.tools.map((tool) => [tool.name, tool]));
   const surface = getMcpToolSurfaceProfile(server);
-  assert.equal(surface?.registered_tools, 90);
-  assert.equal(surface?.direct_tools, 71);
+  assert.equal(surface?.registered_tools, 91);
+  assert.equal(surface?.direct_tools, 72);
   assert.equal(surface?.delegated_tools, 19);
   assert.equal(surface?.budget, MCP_REGISTERED_TOOL_BUDGET);
-  assert.equal(MCP_REGISTERED_TOOL_BUDGET, 90);
+  assert.equal(MCP_REGISTERED_TOOL_BUDGET, 91);
   assert.equal((surface?.registration_ms ?? -1) >= 0, true);
 
   assert.deepEqual(
@@ -66,6 +66,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
       "cptr_list_tasks",
       "cptr_list_autonomous",
       "cptr_get_task_events",
+      "cptr_memory",
       "cptr_code_read_many_files",
       "cptr_code_apply_edits",
       "cptr_code_list_files",
@@ -136,6 +137,11 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
     ].sort(),
     [...tools.keys()].sort(),
   );
+  assert.equal(tools.get("cptr_memory")?.annotations?.readOnlyHint, true);
+  assert.equal(tools.get("cptr_memory")?.annotations?.destructiveHint, false);
+  assert.equal(tools.get("cptr_memory")?.annotations?.openWorldHint, false);
+  assert.notEqual(tools.get("cptr_memory")?.inputSchema.properties?.action, undefined);
+  assert.equal(tools.get("cptr_memory")?.inputSchema.properties?.memory_id !== undefined, true);
   assert.equal(tools.get("cptr_code_list_files")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_code_read_file")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_code_search_files")?.annotations?.readOnlyHint, true);
@@ -257,7 +263,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   }
   assert.match(CPTR_APP_VERSION, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/);
   assert.equal(MCP_CONTRACT_VERSION, CPTR_APP_VERSION);
-  assert.equal(MCP_CONTRACT_TOOL_COUNT, 83);
+  assert.equal(MCP_CONTRACT_TOOL_COUNT, 84);
   assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT + 7);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
@@ -571,13 +577,13 @@ test("reports plugin release status through the stable update action", async () 
     arguments: {
       action: "verify_server",
       expected_contract_version: CPTR_APP_VERSION,
-      expected_tool_count: 83,
+      expected_tool_count: 84,
     },
   });
   const value = response.structuredContent as Record<string, unknown> | undefined;
   assert.equal(response.isError, undefined);
   assert.equal(value?.version, CPTR_APP_VERSION);
-  assert.equal(value?.tool_count, 83);
+  assert.equal(value?.tool_count, 84);
   assert.equal(value?.contract_matches, true);
   assert.equal(value?.tool_count_matches, true);
   assert.deepEqual((value?.verification as { tool?: string } | undefined)?.tool, "cptr_plugin_update");

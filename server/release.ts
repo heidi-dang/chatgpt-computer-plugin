@@ -1,7 +1,7 @@
 import { CPTR_APP_VERSION } from "./version.js";
 
 export const MCP_CONTRACT_VERSION = CPTR_APP_VERSION;
-export const MCP_CONTRACT_TOOL_COUNT = 83;
+export const MCP_CONTRACT_TOOL_COUNT = 84;
 export const CPTR_PLUGIN_VERSION = CPTR_APP_VERSION;
 export const CPTR_PLUGIN_SCHEMA_REVISION = CPTR_APP_VERSION;
 
@@ -32,13 +32,16 @@ export function currentPluginUpdateManifest(env: NodeJS.ProcessEnv = process.env
     contract_version: MCP_CONTRACT_VERSION,
     tool_count: MCP_CONTRACT_TOOL_COUNT,
     release_sha: env.GIT_COMMIT_SHA ?? env.RAILWAY_GIT_COMMIT_SHA ?? env.CPTR_WORKBENCH_BUILD_ID ?? null,
-    released_at: "2026-09-04",
-    summary: `CPTR Computer v${CPTR_APP_VERSION} completes the MCP latency audit with resume-first long operations, prewarmed stateless serving, and measured telemetry pressure reduction.`,
+    released_at: "2026-09-06",
+    summary: `CPTR Computer v${CPTR_APP_VERSION} adds owner-scoped persistent backend knowledge for ChatGPT while preserving the fail-closed execution-memory gate and bounded MCP surface.`,
     changes: [
+      "Adds one compact read-only cptr_memory action for hybrid persistent-memory search, record inspection, bi-temporal timeline reads, and sanitized health; identity/workspace remain server-bound and memory mutation is not exposed to ChatGPT Official.",
+      "Adds a dedicated memory:read Control API scope and records successful ChatGPT memory searches as bounded recall provenance so the /mcp Memory Observatory can explain what persistent knowledge was retrieved.",
+      "Adds server instructions that tell ChatGPT to query persistent memory when prior preferences, decisions, procedures, corrections, failure history, or historical state materially affect a task, while requiring live verification for mutable operational facts.",
       "Caps resumable command, test, and SSH inline waits at 60 seconds and makes their MCP guidance ID/resume-first; Dark Factory stop attempts are run-ID/status-first and capped at 15 seconds.",
-      "Prewarms a bounded pool of unconnected single-use stateless MCP servers, preserving transport isolation while moving the 90-tool registration cost off the compatibility request hot path.",
+      "Prewarms a bounded pool of unconnected single-use stateless MCP servers, preserving transport isolation while moving the 91-tool registration cost off the compatibility request hot path.",
       "Separately instruments request-adapter, stateful-setup, and stateless-setup latency, including stateless pool-hit classification in backend topology diagnostics.",
-      "Profiles and enforces the MCP action surface at 90 registered actions: 71 ChatGPT Direct Coding and 19 Delegated Agent actions, with a hard registration budget to prevent accidental surface growth.",
+      "Profiles and enforces the MCP action surface at 91 registered actions: 72 ChatGPT Direct Coding and 19 Delegated Agent actions, with a hard registration budget to prevent accidental surface growth.",
       "Adds a reproducible MCP latency benchmark: 1-second batching reduced synthetic telemetry deliveries by 75% with zero drops, while prewarmed stateless checkout measured far below full server registration cost.",
       "Reduces cptr_execute_task inline waiting to 5 seconds by default and 15 seconds maximum, while directing durable work toward start/status/events/output follow-up instead of long-held MCP requests.",
       "Measures observed request time from HTTP ingress and classifies intentional bounded/long waits so they remain visible in telemetry without falsely degrading transport health.",
@@ -55,7 +58,7 @@ export function currentPluginUpdateManifest(env: NodeJS.ProcessEnv = process.env
       "Adds exact chrome-extension:// origin support to MCP_ALLOWED_ORIGINS without enabling wildcard extension origins; the production CPTR Live Computer ID is pinned by its manifest public key.",
       "Proxies only /api/browser-device/v1 HTTP and WebSocket traffic to CPTR_BASE_URL so the public MCP origin can host pairing/device channels while MCP bearer, cookies, and Cloudflare assertions are never forwarded to the browser-device backend.",
       "Keeps browser-device CORS authoritative at the public plugin boundary, strips upstream CORS and Set-Cookie headers, rejects wrong WebSocket origins, and couples both sides of proxied WebSocket shutdown to prevent leaked device connections.",
-      `Releases CPTR Computer ${CPTR_APP_VERSION} with 83 core control tools and 90 total registered MCP actions including the durable Dark Factory control surface, standardized benchmark lifecycle, PTY controls, LSP, FDX, paired-user Chrome, managed browser, SSH, and update auxiliaries.`,
+      `Releases CPTR Computer ${CPTR_APP_VERSION} with 84 core control tools and 91 total registered MCP actions including persistent memory, the durable Dark Factory control surface, standardized benchmark lifecycle, PTY controls, LSP, FDX, paired-user Chrome, managed browser, SSH, and update auxiliaries.`,
       "Adds nine thin Dark Factory actions for start, status, events, evidence, message, pause, resume, approval, and quiescent stop while keeping transition, trust, gate, and Victory authority exclusively in the CPTR backend.",
       "Adds four direct benchmark actions to start isolated standardized coding work, submit it to the server-owned randomized grader, inspect objective case evidence, and compare a suite-versioned model leaderboard.",
       "Forwards each benchmark start's exact self-reported ChatGPT client_model to the backend without allowing the model to provide or override its own score.",

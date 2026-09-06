@@ -253,6 +253,21 @@ export const listWorkspacesSchema = {
   include_unavailable: z.boolean().default(false),
 };
 
+export const memoryReadSchema = {
+  action: z.enum(["search", "inspect", "timeline", "health"]).describe(
+    "Read-only persistent-memory operation. Use search first when prior user/workspace knowledge may materially affect the task; inspect one returned memory_id for detail; timeline answers historical-state questions; health diagnoses the memory subsystem.",
+  ),
+  workspace_id: z.string().min(1).max(200).optional().describe(
+    "Optional owned CPTR workspace. When supplied, retrieval includes both durable user memory and that workspace's memory; omit it for user-scoped memory only.",
+  ),
+  query: z.string().min(1).max(12_000).optional().describe("Required when action=search."),
+  memory_id: z.string().min(1).max(200).optional().describe("Required when action=inspect."),
+  at_ms: z.number().int().min(0).optional().describe("Required when action=timeline; Unix epoch milliseconds for valid-time lookup."),
+  known_at_ms: z.number().int().min(0).optional().describe("Optional timeline knowledge-time cutoff in Unix epoch milliseconds."),
+  limit: z.number().int().min(1).max(20).default(8),
+  include_historical: z.boolean().default(false).describe("Search superseded/historical memory as well as active memory."),
+};
+
 export const codingListSchema = {
   workspace_id: z.string().min(1).max(200),
   ...optionalWorkerTargetSchema,
