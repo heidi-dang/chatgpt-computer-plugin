@@ -9,8 +9,12 @@ const expectedContractVersion = packageMetadata.version;
 if (typeof expectedContractVersion !== "string" || !expectedContractVersion.trim()) {
   throw new Error("package.json is missing the canonical CPTR Computer version");
 }
+const expectedToolSurface = process.env.CPTR_EXPECTED_TOOL_SURFACE?.trim() || "compact";
+if (expectedToolSurface !== "compact" && expectedToolSurface !== "legacy") {
+  throw new Error("CPTR_EXPECTED_TOOL_SURFACE must be either compact or legacy");
+}
 
-const expectedTools = [
+const legacyExpectedTools = [
   "cptr_approve_autonomous",
   "cptr_archive_workbench_session",
   "cptr_benchmark_get",
@@ -103,13 +107,35 @@ const expectedTools = [
   "cptr_workspace_search_symbols",
   "cptr_workspace_tree",
 ];
+const compactExpectedTools = [
+  "cptr_agent_monitor",
+  "cptr_agent_task",
+  "cptr_benchmark",
+  "cptr_chrome_browser",
+  "cptr_code",
+  "cptr_command",
+  "cptr_factory",
+  "cptr_fdx_intelligence",
+  "cptr_lsp",
+  "cptr_memory",
+  "cptr_open_live_workbench",
+  "cptr_plugin_update",
+  "cptr_render_live_terminal",
+  "cptr_ssh",
+  "cptr_user_chrome",
+  "cptr_workbench",
+  "cptr_worker",
+  "cptr_workspace",
+];
+const expectedTools = expectedToolSurface === "compact" ? compactExpectedTools : legacyExpectedTools;
 const auxiliaryTools = new Set([
   "cptr_plugin_update", "cptr_chrome_browser", "cptr_user_chrome",
   "cptr_ssh_list_hosts", "cptr_ssh_run_command", "cptr_ssh_get_command", "cptr_ssh_cancel_command",
 ]);
-const expectedPlannedTools = expectedTools.filter((name) => !auxiliaryTools.has(name));
-const expectedRegisteredToolCount = 91;
+const expectedHealthPlannedTools = legacyExpectedTools.filter((name) => !auxiliaryTools.has(name));
+const expectedRegisteredToolCount = expectedTools.length;
 const expectedResource = "ui://cptr/live-workbench.html";
+const compactToolsListMaxBytes = 100_000;
 
 if (!endpoint || !token) {
   throw new Error("Set CPTR_DEPLOYED_MCP_URL and CPTR_DEPLOYED_MCP_TOKEN before running the deployed contract check.");
@@ -161,8 +187,8 @@ for (const developmentPath of [
 if (health?.mcp_contract?.version !== expectedContractVersion) {
   throw new Error(`MCP contract version drift: expected ${expectedContractVersion}, got ${health?.mcp_contract?.version ?? "missing"}`);
 }
-if (health?.mcp_contract?.tool_count !== expectedPlannedTools.length) {
-  throw new Error(`MCP health planned-tool-count drift: expected ${expectedPlannedTools.length}, got ${health?.mcp_contract?.tool_count ?? "missing"}`);
+if (health?.mcp_contract?.tool_count !== expectedHealthPlannedTools.length) {
+  throw new Error(`MCP health planned-tool-count drift: expected ${expectedHealthPlannedTools.length}, got ${health?.mcp_contract?.tool_count ?? "missing"}`);
 }
 
 const client = new Client(
@@ -190,6 +216,10 @@ const tools = await client.listTools();
 exactSet((tools.tools ?? []).map((tool) => tool.name), expectedTools, "tool contract");
 if ((tools.tools ?? []).length !== expectedRegisteredToolCount) {
   throw new Error(`MCP registered-tool-count drift: expected ${expectedRegisteredToolCount}, got ${(tools.tools ?? []).length}`);
+}
+const toolsListBytes = Buffer.byteLength(JSON.stringify(tools));
+if (expectedToolSurface === "compact" && toolsListBytes >= compactToolsListMaxBytes) {
+  throw new Error(`compact tools/list size drift: expected < ${compactToolsListMaxBytes} bytes, got ${toolsListBytes}`);
 }
 const toolsMissingClientModel = (tools.tools ?? [])
   .filter((tool) => tool?.inputSchema?.properties?.client_model?.type !== "string")
@@ -231,4 +261,4 @@ if (typeof resource.text === "string" && resource.text.includes("/__cptr/dev/"))
   throw new Error("production Workbench resource references development-only routes");
 }
 await client.close();
-console.log(`CPTR deployed MCP contract verified: MCP 2026-07-28 modern era, ${expectedPlannedTools.length} planned tools, ${expectedRegisteredToolCount} registered actions, current-model reporting on every action, ${expectedResource}, and widget domain ${expectedWidgetDomain}`);
+console.log(`CPTR deployed MCP contract verified: MCP 2026-07-28 modern era, ${expectedToolSurface} surface, ${expectedRegisteredToolCount} registered actions, tools/list ${toolsListBytes} bytes, current-model reporting on every action, ${expectedResource}, and widget domain ${expectedWidgetDomain}`);
