@@ -2,6 +2,8 @@ import { CPTR_APP_VERSION } from "./version.js";
 
 export const MCP_CONTRACT_VERSION = CPTR_APP_VERSION;
 export const MCP_CONTRACT_TOOL_COUNT = 84;
+export const MCP_LEGACY_REGISTERED_TOOL_COUNT = 91;
+export const MCP_COMPACT_REGISTERED_TOOL_COUNT = 18;
 export const CPTR_PLUGIN_VERSION = CPTR_APP_VERSION;
 export const CPTR_PLUGIN_SCHEMA_REVISION = CPTR_APP_VERSION;
 
@@ -10,7 +12,11 @@ export type PluginUpdateManifest = {
   version: string;
   schema_revision: string;
   contract_version: string;
+  tool_surface: "legacy" | "compact";
   tool_count: number;
+  registered_tool_count: number;
+  core_tool_count: number;
+  legacy_registered_tool_count: number;
   release_sha: string | null;
   released_at: string;
   summary: string;
@@ -24,13 +30,23 @@ export type PluginUpdateManifest = {
   };
 };
 
-export function currentPluginUpdateManifest(env: NodeJS.ProcessEnv = process.env): PluginUpdateManifest {
+export function currentPluginUpdateManifest(
+  env: NodeJS.ProcessEnv = process.env,
+  toolSurface: "legacy" | "compact" = env.CPTR_MCP_TOOL_SURFACE?.trim().toLowerCase() === "compact" ? "compact" : "legacy",
+): PluginUpdateManifest {
+  const registeredToolCount = toolSurface === "compact"
+    ? MCP_COMPACT_REGISTERED_TOOL_COUNT
+    : MCP_LEGACY_REGISTERED_TOOL_COUNT;
   return {
     product: "CPTR Computer",
     version: CPTR_PLUGIN_VERSION,
     schema_revision: CPTR_PLUGIN_SCHEMA_REVISION,
     contract_version: MCP_CONTRACT_VERSION,
-    tool_count: MCP_CONTRACT_TOOL_COUNT,
+    tool_surface: toolSurface,
+    tool_count: registeredToolCount,
+    registered_tool_count: registeredToolCount,
+    core_tool_count: MCP_CONTRACT_TOOL_COUNT,
+    legacy_registered_tool_count: MCP_LEGACY_REGISTERED_TOOL_COUNT,
     release_sha: env.GIT_COMMIT_SHA ?? env.RAILWAY_GIT_COMMIT_SHA ?? env.CPTR_WORKBENCH_BUILD_ID ?? null,
     released_at: "2026-09-06",
     summary: `CPTR Computer v${CPTR_APP_VERSION} adds owner-scoped persistent backend knowledge for ChatGPT while preserving the fail-closed execution-memory gate and bounded MCP surface.`,

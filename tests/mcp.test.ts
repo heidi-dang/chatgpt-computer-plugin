@@ -583,13 +583,17 @@ test("reports plugin release status through the stable update action", async () 
     arguments: {
       action: "verify_server",
       expected_contract_version: CPTR_APP_VERSION,
-      expected_tool_count: 84,
+      expected_tool_count: 91,
     },
   });
   const value = response.structuredContent as Record<string, unknown> | undefined;
   assert.equal(response.isError, undefined);
   assert.equal(value?.version, CPTR_APP_VERSION);
-  assert.equal(value?.tool_count, 84);
+  assert.equal(value?.tool_surface, "legacy");
+  assert.equal(value?.tool_count, 91);
+  assert.equal(value?.registered_tool_count, 91);
+  assert.equal(value?.core_tool_count, 84);
+  assert.equal(value?.legacy_registered_tool_count, 91);
   assert.equal(value?.contract_matches, true);
   assert.equal(value?.tool_count_matches, true);
   assert.deepEqual((value?.verification as { tool?: string } | undefined)?.tool, "cptr_plugin_update");

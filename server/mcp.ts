@@ -1391,7 +1391,11 @@ export function createMcpServer(
               version: z.string(),
               schema_revision: z.string(),
               contract_version: z.string(),
+              tool_surface: z.enum(["legacy", "compact"]),
               tool_count: z.number().int(),
+              registered_tool_count: z.number().int(),
+              core_tool_count: z.number().int(),
+              legacy_registered_tool_count: z.number().int(),
               release_sha: z.string().nullable(),
               released_at: z.string(),
               summary: z.string(),
@@ -1410,7 +1414,7 @@ export function createMcpServer(
       _meta: workbenchToolMetadata,
     },
     async (input) => {
-      const manifest = currentPluginUpdateManifest();
+      const manifest = currentPluginUpdateManifest(process.env, toolSurface);
       const verification = input.action === "verify_server"
         ? {
             contract_matches:
@@ -1418,7 +1422,7 @@ export function createMcpServer(
               input.expected_contract_version === manifest.contract_version,
             tool_count_matches:
               input.expected_tool_count === undefined ||
-              input.expected_tool_count === manifest.tool_count,
+              input.expected_tool_count === manifest.registered_tool_count,
           }
         : {};
       return activityResult(
