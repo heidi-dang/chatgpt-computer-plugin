@@ -7,6 +7,11 @@ on:
         description: Full 40-character Git SHA expected to be live
         required: true
         type: string
+      run_managed_oauth_contract:
+        description: Run the authenticated MCP contract with a short-lived Managed OAuth client token
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: "43 3 * * *"
 
@@ -35,10 +40,10 @@ jobs:
           test -n "$CPTR_DEPLOYED_MCP_URL" || test -n "$CPTR_DEPLOYED_PUBLIC_ORIGIN"
 
       - name: Checkout verifier revision
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: npm
@@ -50,10 +55,10 @@ jobs:
         run: npm run check:public-edge
 
   authenticated-contract:
-    name: Bearer-authenticated MCP 2026 contract
-    # Cloudflare Managed OAuth owns the public /mcp authentication boundary. A raw
-    # origin bearer cannot and must not bypass Access, so this verifier is valid
-    # only for native OAuth deployments where /mcp reaches the origin directly.
+    name: Native OAuth authenticated MCP 2026 contract
+    # Native mode reaches this origin verifier directly with the configured
+    # operator bearer. Managed OAuth has a separate client-token job below and
+    # must never be qualified by bypassing Cloudflare Access with an origin token.
     if: ${{ github.event_name == 'workflow_dispatch' && vars.CPTR_EDGE_AUTH_MODE == 'native' }}
     needs: public-edge
     runs-on: ubuntu-latest
@@ -63,6 +68,7 @@ jobs:
       CPTR_DEPLOYED_PUBLIC_ORIGIN: ${{ vars.CPTR_DEPLOYED_PUBLIC_ORIGIN }}
       CPTR_DEPLOYED_MCP_TOKEN: ${{ secrets.CPTR_DEPLOYED_MCP_TOKEN }}
       CPTR_EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
+      CPTR_EXPECTED_TOOL_SURFACE: compact
     steps:
       - name: Require native-mode immutable release and bearer configuration
         run: |
@@ -71,12 +77,12 @@ jobs:
           printf '%s' "$CPTR_EXPECTED_RELEASE_SHA" | grep -Eq '^[0-9a-f]{40}$'
 
       - name: Checkout expected release
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ inputs.expected_release_sha }}
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: npm
@@ -86,3 +92,52 @@ jobs:
 
       - name: Verify deployed MCP 2026 contract and exact release SHA
         run: npm run check:deployed-contract
+
+  managed-oauth-authenticated-contract:
+    name: Managed OAuth authenticated MCP 2026 contract
+    if: ${{ github.event_name == 'workflow_dispatch' && vars.CPTR_EDGE_AUTH_MODE == 'cloudflare-managed' && inputs.run_managed_oauth_contract }}
+    needs: public-edge
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CPTR_DEPLOYED_MCP_URL: ${{ vars.CPTR_DEPLOYED_MCP_URL }}
+      # This must be a short-lived access token obtained through the intended
+      # Cloudflare Managed OAuth client flow. It is not an origin bypass token.
+      CPTR_DEPLOYED_MCP_TOKEN: ${{ secrets.CPTR_MANAGED_OAUTH_ACCESS_TOKEN }}
+      CPTR_EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
+      CPTR_EXPECTED_TOOL_SURFACE: compact
+    steps:
+      - name: Require Managed OAuth acceptance credentials and immutable release
+        run: |
+          test -n "$CPTR_DEPLOYED_MCP_URL"
+          test -n "$CPTR_DEPLOYED_MCP_TOKEN"
+          printf '%s' "$CPTR_EXPECTED_RELEASE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+
+      - name: Checkout exact release under test
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.expected_release_sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify authenticated MCP through Managed OAuth and exact release SHA
+        run: npm run check:deployed-contract
+
+      - name: Record authenticated Managed OAuth acceptance evidence
+        if: ${{ success() }}
+        run: |
+          {
+            echo '### Managed OAuth authenticated acceptance'
+            echo
+            echo "- release: \`$CPTR_EXPECTED_RELEASE_SHA\`"
+            echo '- auth path: Cloudflare Managed OAuth client token'
+            echo '- MCP contract: passed'
+            echo '- expected tool surface: compact'
+          } >> "$GITHUB_STEP_SUMMARY"

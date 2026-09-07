@@ -132,6 +132,15 @@ const nativeOAuthIssuer = (
 const nativeOAuthStateDb =
   process.env.MCP_NATIVE_OAUTH_DB?.trim() ||
   (process.env.NODE_ENV === "production" ? undefined : ":memory:");
+const liveTicketStateDb =
+  process.env.CPTR_LIVE_TICKET_DB?.trim() ||
+  nativeOAuthStateDb ||
+  (process.env.NODE_ENV === "production" ? undefined : ":memory:");
+if (liveTicketSecret && !liveTicketStateDb) {
+  throw new Error(
+    "CPTR_LIVE_TICKET_DB is required in production so live-ticket revocation and generation survive restart",
+  );
+}
 const nativeOAuthScopes = (process.env.MCP_NATIVE_OAUTH_SCOPES ?? "mcp")
   .split(/[ ,]+/)
   .map((scope) => scope.trim())
@@ -277,6 +286,7 @@ const liveTickets = new LiveTicketStore({
   snapshotUrl: `${publicOrigin}/live/snapshot`,
   renewUrl: `${publicOrigin}/live/renew`,
   ticketSecret: liveTicketSecret,
+  stateDbPath: liveTicketStateDb,
 });
 const liveGateway = new LiveGateway(client, liveTickets);
 const promptSessions = new PromptTerminalStore({
@@ -1611,6 +1621,7 @@ async function shutdown(signal: string) {
     [...mcpSessions.keys()].map((sessionId) => closeMcpSession(sessionId)),
   );
   await modernMcpHandler.close().catch(() => undefined);
+  liveTickets.close();
   nativeOAuthServer?.close();
   const telemetryDeadline = new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, 1_000);

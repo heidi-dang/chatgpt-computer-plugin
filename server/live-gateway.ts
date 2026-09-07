@@ -10,8 +10,36 @@ function bearerValue(request: IncomingMessage): string | null {
   return token || null;
 }
 
-async function waitForDrain(request: IncomingMessage, response: ServerResponse): Promise<boolean> {
-  if (request.destroyed || response.destroyed) return false;
+async function readUntilAbort(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal: AbortSignal,
+): Promise<ReadableStreamReadResult<Uint8Array> | null> {
+  if (signal.aborted) return null;
+  return await new Promise<ReadableStreamReadResult<Uint8Array> | null>((resolve, reject) => {
+    let settled = false;
+    const finish = (value: ReadableStreamReadResult<Uint8Array> | null, error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", onAbort);
+      if (error !== undefined) reject(error);
+      else resolve(value);
+    };
+    const onAbort = () => finish(null);
+    signal.addEventListener("abort", onAbort, { once: true });
+    reader.read().then(
+      (value) => finish(value),
+      (error) => finish(null, error),
+    );
+    if (signal.aborted) onAbort();
+  });
+}
+
+async function waitForDrain(
+  request: IncomingMessage,
+  response: ServerResponse,
+  signal: AbortSignal,
+): Promise<boolean> {
+  if (request.destroyed || response.destroyed || signal.aborted) return false;
   return await new Promise<boolean>((resolve) => {
     let settled = false;
     const finish = (drained: boolean) => {
@@ -20,14 +48,17 @@ async function waitForDrain(request: IncomingMessage, response: ServerResponse):
       response.removeListener("drain", onDrain);
       request.removeListener("close", onClose);
       response.removeListener("close", onClose);
+      signal.removeEventListener("abort", onAbort);
       resolve(drained);
     };
     const onDrain = () => finish(true);
     const onClose = () => finish(false);
+    const onAbort = () => finish(false);
     response.once("drain", onDrain);
     request.once("close", onClose);
     response.once("close", onClose);
-    if (request.destroyed || response.destroyed) finish(false);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (request.destroyed || response.destroyed || signal.aborted) finish(false);
   });
 }
 
@@ -193,6 +224,17 @@ export class LiveGateway {
       return;
     }
     const afterSequence = typeof lastEventId === "string" ? Number(lastEventId) : 0;
+    const maxDurationMs = Math.max(1, this.limits.maxDurationMs ?? 10 * 60_000);
+    const lifecycle = new AbortController();
+    const deadlineTimer = setTimeout(() => lifecycle.abort(), maxDurationMs);
+    deadlineTimer.unref?.();
+    const abortOnClose = () => lifecycle.abort();
+    request.once("close", abortOnClose);
+    const finishLifecycle = () => {
+      clearTimeout(deadlineTimer);
+      request.removeListener("close", abortOnClose);
+    };
+
     let upstream: Response;
     try {
       upstream = claims.targetType === "command"
@@ -202,19 +244,31 @@ export class LiveGateway {
             afterSequence,
             claims.workspaceId,
             claims.workerId,
+            lifecycle.signal,
           )
-        : await this.client.streamLive(claims.targetType, claims.targetId, afterSequence);
+        : await this.client.streamLive(
+            claims.targetType,
+            claims.targetId,
+            afterSequence,
+            undefined,
+            undefined,
+            lifecycle.signal,
+          );
     } catch {
+      finishLifecycle();
       this.activeStreams -= 1;
       releaseViewer();
-      response.writeHead(502, {
-        "content-type": "application/json",
-        "cache-control": "no-store",
-      });
-      response.end(JSON.stringify({ error: "live stream unavailable" }));
+      if (!request.destroyed && !response.destroyed) {
+        response.writeHead(lifecycle.signal.aborted ? 504 : 502, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+        });
+        response.end(JSON.stringify({ error: lifecycle.signal.aborted ? "live stream deadline reached" : "live stream unavailable" }));
+      }
       return;
     }
     if (!upstream.ok || !upstream.body) {
+      finishLifecycle();
       this.activeStreams -= 1;
       releaseViewer();
       response.writeHead(upstream.status >= 400 ? upstream.status : 502, {
@@ -233,45 +287,41 @@ export class LiveGateway {
       "x-accel-buffering": "no",
     });
     reader = upstream.body.getReader();
+    const cancelReader = () => void reader?.cancel().catch(() => undefined);
+    lifecycle.signal.addEventListener("abort", cancelReader, { once: true });
     if (superseded) {
+      lifecycle.abort();
       await reader.cancel().catch(() => undefined);
       reader.releaseLock();
+      lifecycle.signal.removeEventListener("abort", cancelReader);
+      finishLifecycle();
       this.activeStreams -= 1;
       releaseViewer();
       return;
     }
-    request.on("close", () => void reader?.cancel());
     const maxBytes = this.limits.maxBytes ?? 1_048_576;
-    const deadline = Date.now() + (this.limits.maxDurationMs ?? 10 * 60_000);
     let bytes = 0;
     try {
-      while (true) {
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) break;
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        const next = await Promise.race([
-          reader.read(),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error("live stream duration limit reached")), remaining);
-          }),
-        ]).finally(() => {
-          if (timer) clearTimeout(timer);
-        });
-        if (next.done) break;
+      while (!lifecycle.signal.aborted) {
+        const next = await readUntilAbort(reader, lifecycle.signal);
+        if (!next || next.done) break;
         const chunk = Buffer.from(next.value);
         bytes += chunk.byteLength;
         if (bytes > maxBytes) break;
         const writable = response.write(chunk);
         if (!writable && typeof response.once === "function") {
-          if (!(await waitForDrain(request, response))) break;
+          if (!(await waitForDrain(request, response, lifecycle.signal))) break;
         }
       }
     } finally {
+      lifecycle.abort();
       await reader.cancel().catch(() => undefined);
       reader.releaseLock();
+      lifecycle.signal.removeEventListener("abort", cancelReader);
+      finishLifecycle();
       this.activeStreams -= 1;
       releaseViewer();
-      response.end();
+      if (!response.writableEnded) response.end();
     }
   }
 }
