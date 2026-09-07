@@ -1162,13 +1162,14 @@ const httpServer = createServer(async (req, res) => {
   }
 
   if (url.pathname === "/plugin/update" && req.method === "GET") {
-    writeJson(res, 200, currentPluginUpdateManifest());
+    writeJson(res, 200, currentPluginUpdateManifest(process.env, mcpToolSurface));
     return;
   }
 
   if (url.pathname === "/health") {
     const assets = currentWorkbenchAssets();
     const reload = resolveWorkbenchHotReload(assets);
+    const updateManifest = currentPluginUpdateManifest(process.env, mcpToolSurface);
     const status = assets.ready ? 200 : 503;
     res
       .writeHead(status, {
@@ -1186,6 +1187,8 @@ const httpServer = createServer(async (req, res) => {
           mcp_contract: {
             version: MCP_CONTRACT_VERSION,
             tool_count: MCP_CONTRACT_TOOL_COUNT,
+            tool_surface: updateManifest.tool_surface,
+            registered_tool_count: updateManifest.registered_tool_count,
           },
           release:
             process.env.GIT_COMMIT_SHA ??

@@ -4,8 +4,10 @@ import test from "node:test";
 import {
   CPTR_PLUGIN_SCHEMA_REVISION,
   CPTR_PLUGIN_VERSION,
+  MCP_COMPACT_REGISTERED_TOOL_COUNT,
   MCP_CONTRACT_TOOL_COUNT,
   MCP_CONTRACT_VERSION,
+  MCP_LEGACY_REGISTERED_TOOL_COUNT,
   currentPluginUpdateManifest,
 } from "../server/release.js";
 import { CPTR_APP_VERSION } from "../server/version.js";
@@ -26,9 +28,20 @@ test("publishes a bounded CPTR update manifest for the current MCP contract", ()
   assert.equal(CPTR_PLUGIN_SCHEMA_REVISION, CPTR_APP_VERSION);
   assert.equal(MCP_CONTRACT_VERSION, CPTR_APP_VERSION);
   assert.equal(MCP_CONTRACT_TOOL_COUNT, 84);
+  assert.equal(MCP_LEGACY_REGISTERED_TOOL_COUNT, 91);
+  assert.equal(MCP_COMPACT_REGISTERED_TOOL_COUNT, 18);
   assert.equal(manifest.version, CPTR_PLUGIN_VERSION);
   assert.equal(manifest.contract_version, MCP_CONTRACT_VERSION);
-  assert.equal(manifest.tool_count, MCP_CONTRACT_TOOL_COUNT);
+  assert.equal(manifest.tool_surface, "legacy");
+  assert.equal(manifest.tool_count, MCP_LEGACY_REGISTERED_TOOL_COUNT);
+  assert.equal(manifest.registered_tool_count, MCP_LEGACY_REGISTERED_TOOL_COUNT);
+  assert.equal(manifest.core_tool_count, MCP_CONTRACT_TOOL_COUNT);
+  assert.equal(manifest.legacy_registered_tool_count, MCP_LEGACY_REGISTERED_TOOL_COUNT);
+  const compactManifest = currentPluginUpdateManifest({ GIT_COMMIT_SHA: "abc123" }, "compact");
+  assert.equal(compactManifest.tool_surface, "compact");
+  assert.equal(compactManifest.tool_count, MCP_COMPACT_REGISTERED_TOOL_COUNT);
+  assert.equal(compactManifest.registered_tool_count, MCP_COMPACT_REGISTERED_TOOL_COUNT);
+  assert.equal(compactManifest.core_tool_count, MCP_CONTRACT_TOOL_COUNT);
   assert.equal(manifest.release_sha, "abc123");
   assert.equal(manifest.refresh_required, true);
   assert.equal(manifest.verification.tool, "cptr_plugin_update");
@@ -48,6 +61,6 @@ test("Workbench omits the release/update card while the MCP update contract rema
   assert.doesNotMatch(terminalSource, /updateCenter|terminal-update-center/);
   assert.doesNotMatch(workbenchCss, /\.plugin-update|\.terminal-update-center/);
   assert.match(mcpSource, /server\.registerTool\(\s*"cptr_plugin_update"/);
-  assert.match(mcpSource, /const manifest = currentPluginUpdateManifest\(\)/);
+  assert.match(mcpSource, /const manifest = currentPluginUpdateManifest\(process\.env, toolSurface\)/);
   assert.match(serverSource, /url\.pathname === "\/plugin\/update"/);
 });
