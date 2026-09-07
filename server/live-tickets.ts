@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { LiveTicketCodec } from "./live-ticket-codec.js";
+import { LiveTicketStateStore } from "./live-ticket-state.js";
 
 export type LiveTarget =
   | { targetType: "task" | "monitor"; targetId: string }
@@ -72,6 +73,7 @@ export class LiveTicketStore {
   private readonly renewUrl: string;
   private readonly maxTickets: number;
   private readonly codec: LiveTicketCodec;
+  private readonly durableState: LiveTicketStateStore | null;
 
   constructor(options: {
     now?: () => number;
@@ -82,6 +84,7 @@ export class LiveTicketStore {
     renewUrl?: string;
     maxTickets?: number;
     ticketSecret?: string | Buffer;
+    stateDbPath?: string;
   } = {}) {
     this.now = options.now ?? (() => Date.now());
     this.ttlMs = Math.max(1_000, options.ttlMs ?? 15 * 60_000);
@@ -94,11 +97,26 @@ export class LiveTicketStore {
     this.renewUrl = options.renewUrl ?? this.streamUrl.replace(/\/stream(?:\?.*)?$/, "/renew");
     this.maxTickets = Math.max(1, options.maxTickets ?? 4_096);
     this.codec = new LiveTicketCodec(options.ticketSecret);
+    this.durableState = options.stateDbPath ? new LiveTicketStateStore(options.stateDbPath) : null;
   }
 
   get size(): number {
     this.pruneExpired(this.now());
     return this.sessions.size;
+  }
+
+  close(): void {
+    this.durableState?.close();
+  }
+
+  private isDurablyCurrent(session: TicketSession, ticket: string, now: number): boolean {
+    return this.durableState?.isCurrent(
+      session.sessionId,
+      ticket,
+      session.generation,
+      now,
+      true,
+    ) ?? true;
   }
 
   private pruneExpired(now: number): void {
@@ -142,11 +160,16 @@ export class LiveTicketStore {
     if (!decoded) return null;
     const now = this.now();
     if ((this.revokedUntil.get(decoded.sessionId) ?? 0) > now) return null;
+    if (this.durableState && !this.durableState.isCurrent(decoded.sessionId, ticket, decoded.generation, now, true)) return null;
     if ((allowExpired ? decoded.renewUntil : decoded.expiresAt) <= now) return null;
     const current = this.sessions.get(decoded.sessionId);
     if (current) {
       if (current.ticket === ticket && current.generation === decoded.generation) return current;
-      return null;
+      // A replica may still cache the previous generation after another process
+      // atomically renewed the session. Durable state already proved this exact
+      // ticket/generation is authoritative, so replace only that stale local cache.
+      if (!this.durableState) return null;
+      this.sessions.delete(decoded.sessionId);
     }
     this.evictOldestIfFull();
     const restored: TicketSession = { ...decoded, ticket };
@@ -167,13 +190,18 @@ export class LiveTicketStore {
     };
     const ticket = this.codec.seal("live", claims);
     const session: TicketSession = { ...claims, ticket };
+    this.durableState?.remember(claims.sessionId, ticket, claims.generation, claims.renewUntil, now);
     this.sessions.set(claims.sessionId, session);
     return this.metadata(session) as unknown as WidgetStreamMetadata<T>;
   }
 
   validate(ticket: string, target?: LiveTarget): TicketClaims | null {
-    const session = [...this.sessions.values()].find((candidate) => candidate.ticket === ticket) ?? this.restore(ticket, false);
+    let session = [...this.sessions.values()].find((candidate) => candidate.ticket === ticket) ?? this.restore(ticket, false);
     const now = this.now();
+    if (session && !this.isDurablyCurrent(session, ticket, now)) {
+      this.sessions.delete(session.sessionId);
+      session = null;
+    }
     if (!session || session.expiresAt <= now) return null;
     if (target && (session.targetType !== target.targetType || session.targetId !== target.targetId)) return null;
     if (
@@ -190,7 +218,8 @@ export class LiveTicketStore {
 
   sessionIdentity(ticket: string): string | null {
     const session = [...this.sessions.values()].find((candidate) => candidate.ticket === ticket) ?? this.restore(ticket, false);
-    return session?.sessionId ?? null;
+    if (!session || !this.isDurablyCurrent(session, ticket, this.now())) return null;
+    return session.sessionId;
   }
 
   renew(ticket: string): WidgetStreamMetadata | null {
@@ -199,7 +228,11 @@ export class LiveTicketStore {
     if (!decoded || decoded.renewUntil <= now || (this.revokedUntil.get(decoded.sessionId) ?? 0) > now) return null;
     let session = this.sessions.get(decoded.sessionId);
     if (session && session.ticket !== ticket) {
-      if (decoded.generation <= session.generation && session.renewUntil > this.now()) return this.metadata(session);
+      if (
+        decoded.generation <= session.generation
+        && session.renewUntil > now
+        && this.isDurablyCurrent(session, session.ticket, now)
+      ) return this.metadata(session);
       return null;
     }
     if (!session) session = this.restore(ticket, true) ?? undefined;
@@ -219,7 +252,20 @@ export class LiveTicketStore {
       expiresAt: now + this.ttlMs,
       renewUntil: now + this.ttlMs + this.renewGraceMs,
     };
-    const next: TicketSession = { ...nextClaims, ticket: this.codec.seal("live", nextClaims) };
+    const nextTicket = this.codec.seal("live", nextClaims);
+    if (
+      this.durableState
+      && !this.durableState.advance(
+        session.sessionId,
+        ticket,
+        session.generation,
+        nextTicket,
+        nextClaims.generation,
+        nextClaims.renewUntil,
+        now,
+      )
+    ) return null;
+    const next: TicketSession = { ...nextClaims, ticket: nextTicket };
     this.sessions.set(next.sessionId, next);
     return this.metadata(next);
   }
@@ -227,7 +273,9 @@ export class LiveTicketStore {
   revoke(ticket: string): void {
     const decoded = parseClaims(this.codec.open<unknown>(ticket, "live"));
     if (!decoded) return;
+    const now = this.now();
     this.revokedUntil.set(decoded.sessionId, decoded.renewUntil);
+    this.durableState?.revoke(decoded.sessionId, decoded.renewUntil, now);
     this.sessions.delete(decoded.sessionId);
   }
 }

@@ -5,6 +5,19 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      plugin_sha:
+        description: Exact 40-character plugin commit to qualify
+        required: true
+        type: string
+      backend_sha:
+        description: Exact 40-character CPTR backend commit to qualify
+        required: true
+        type: string
+      extension_sha:
+        description: Exact 40-character Chrome extension commit to qualify
+        required: true
+        type: string
   schedule:
     - cron: "17 3 * * *"
 
@@ -21,26 +34,56 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Validate immutable release tuple inputs
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          PLUGIN_SHA: ${{ inputs.plugin_sha }}
+          BACKEND_SHA: ${{ inputs.backend_sha }}
+          EXTENSION_SHA: ${{ inputs.extension_sha }}
+        run: |
+          printf '%s\n' "$PLUGIN_SHA" "$BACKEND_SHA" "$EXTENSION_SHA" | grep -E '^[0-9a-f]{40}$' | wc -l | grep -qx '3'
+
       - name: Checkout plugin
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.plugin_sha || github.sha }}
           path: plugin
 
-      - name: Checkout backend main
-        uses: actions/checkout@v4
+      - name: Checkout backend release member
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: heidi-dang/computer
-          ref: main
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.backend_sha || 'main' }}
           path: computer
           token: ${{ secrets.CPTR_CROSS_REPO_TOKEN || github.token }}
 
-      - name: Checkout extension main
-        uses: actions/checkout@v4
+      - name: Checkout extension release member
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: heidi-dang/chatgpt-chrome-extension
-          ref: main
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.extension_sha || 'main' }}
           path: extension
           token: ${{ secrets.CPTR_CROSS_REPO_TOKEN || github.token }}
+
+      - name: Verify checked-out release tuple
+        env:
+          EXPECTED_PLUGIN_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.plugin_sha || '' }}
+          EXPECTED_BACKEND_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.backend_sha || '' }}
+          EXPECTED_EXTENSION_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.extension_sha || '' }}
+        run: |
+          plugin_sha=$(git -C plugin rev-parse HEAD)
+          backend_sha=$(git -C computer rev-parse HEAD)
+          extension_sha=$(git -C extension rev-parse HEAD)
+          if [ -n "$EXPECTED_PLUGIN_SHA" ]; then test "$plugin_sha" = "$EXPECTED_PLUGIN_SHA"; fi
+          if [ -n "$EXPECTED_BACKEND_SHA" ]; then test "$backend_sha" = "$EXPECTED_BACKEND_SHA"; fi
+          if [ -n "$EXPECTED_EXTENSION_SHA" ]; then test "$extension_sha" = "$EXPECTED_EXTENSION_SHA"; fi
+          {
+            echo '### Qualified cross-repository tuple'
+            echo
+            echo "- plugin: \`$plugin_sha\`"
+            echo "- backend: \`$backend_sha\`"
+            echo "- extension: \`$extension_sha\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify exact browser contract convergence
         env:

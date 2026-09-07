@@ -150,6 +150,54 @@ test("rejects a stream without a bearer ticket", async () => {
   assert.equal(response.ended, true);
 });
 
+test("enforces the live-stream deadline while waiting on client backpressure", async () => {
+  const store = new LiveTicketStore({ ttlMs: 5_000 });
+  const issued = store.issue({ targetType: "task", targetId: "task-deadline" });
+  let cancelCount = 0;
+  const client = {
+    streamLive: async () => ({
+      ok: true,
+      body: {
+        getReader() {
+          return {
+            async read() {
+              return { done: false, value: new TextEncoder().encode("data: x\n\n") };
+            },
+            async cancel() { cancelCount += 1; },
+            releaseLock() {},
+          };
+        },
+      },
+    }),
+  };
+  const gateway = new LiveGateway(client as never, store, {
+    maxConcurrent: 1,
+    maxDurationMs: 25,
+  });
+  const request = Object.assign(new EventEmitter(), {
+    url: "/live/stream",
+    headers: { authorization: `Bearer ${issued.ticket}` },
+    destroyed: false,
+  });
+  const response = Object.assign(new EventEmitter(), {
+    destroyed: false,
+    writableEnded: false,
+    writeHead() {},
+    write() { return false; },
+    end() { this.writableEnded = true; },
+    once: EventEmitter.prototype.once,
+    removeListener: EventEmitter.prototype.removeListener,
+  });
+
+  await Promise.race([
+    gateway.handle(request as never, response as never),
+    new Promise<never>((_, reject) => setTimeout(() => reject(new Error("backpressured stream exceeded its deadline")), 500)),
+  ]);
+
+  assert.equal(response.writableEnded, true);
+  assert.ok(cancelCount >= 1);
+});
+
 test("releases capacity when a backpressured client disconnects", async () => {
   const store = new LiveTicketStore({ ttlMs: 5_000 });
   const issued = store.issue({ targetType: "task", targetId: "task-1" });

@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { LiveGateway } from "../server/live-gateway.js";
 import { LiveTicketCodec } from "../server/live-ticket-codec.js";
@@ -39,8 +42,10 @@ test("live renewal is idempotent for duplicate stale-card requests", () => {
 test("tampered or cross-kind sealed capabilities fail closed", () => {
   const codec = new LiveTicketCodec(SECRET);
   const ticket = codec.seal("live", { targetId: "hidden" });
-  const last = ticket.at(-1) ?? "A";
-  const tampered = `${ticket.slice(0, -1)}${last === "A" ? "B" : "A"}`;
+  const [version, iv, ciphertext, tag] = ticket.split(".");
+  const ciphertextBytes = Buffer.from(ciphertext, "base64url");
+  ciphertextBytes[0] ^= 0x01;
+  const tampered = [version, iv, ciphertextBytes.toString("base64url"), tag].join(".");
 
   assert.deepEqual(codec.open(ticket, "live"), { targetId: "hidden" });
   assert.equal(codec.open(ticket, "prompt"), null);
@@ -79,6 +84,84 @@ test("explicit live revocation cannot be undone by presenting the sealed ticket 
 
   assert.equal(store.validate(issued.ticket), null);
   assert.equal(store.renew(issued.ticket), null);
+});
+
+test("live revocation survives restart and is visible to a second store", () => {
+  const directory = mkdtempSync(join(tmpdir(), "cptr-live-ticket-state-"));
+  const stateDbPath = join(directory, "live-tickets.sqlite");
+  let now = 10_000;
+  try {
+    const before = new LiveTicketStore({
+      ticketSecret: SECRET,
+      stateDbPath,
+      ttlMs: 5_000,
+      renewGraceMs: 5_000,
+      now: () => now,
+    });
+    const issued = before.issue({ targetType: "task", targetId: "task-restart-revoked" });
+    before.revoke(issued.ticket);
+    before.close();
+
+    const restarted = new LiveTicketStore({
+      ticketSecret: SECRET,
+      stateDbPath,
+      ttlMs: 5_000,
+      renewGraceMs: 5_000,
+      now: () => now,
+    });
+    const replica = new LiveTicketStore({
+      ticketSecret: SECRET,
+      stateDbPath,
+      ttlMs: 5_000,
+      renewGraceMs: 5_000,
+      now: () => now,
+    });
+    assert.equal(restarted.validate(issued.ticket), null);
+    assert.equal(restarted.renew(issued.ticket), null);
+    assert.equal(replica.validate(issued.ticket), null);
+    assert.equal(replica.renew(issued.ticket), null);
+    restarted.close();
+    replica.close();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("durable ticket generation prevents stale replay across instances", () => {
+  const directory = mkdtempSync(join(tmpdir(), "cptr-live-ticket-generation-"));
+  const stateDbPath = join(directory, "live-tickets.sqlite");
+  let now = 20_000;
+  try {
+    const first = new LiveTicketStore({
+      ticketSecret: SECRET,
+      stateDbPath,
+      ttlMs: 5_000,
+      renewGraceMs: 5_000,
+      now: () => now,
+    });
+    const second = new LiveTicketStore({
+      ticketSecret: SECRET,
+      stateDbPath,
+      ttlMs: 5_000,
+      renewGraceMs: 5_000,
+      now: () => now,
+    });
+    const issued = first.issue({ targetType: "task", targetId: "task-generation" });
+    const renewed = first.renew(issued.ticket);
+    assert.ok(renewed);
+    // A replica that still caches generation 0 must accept the exact durable
+    // generation 1 ticket immediately; it must not require an old-ticket probe
+    // to evict its stale local cache first.
+    assert.ok(second.validate(renewed!.ticket));
+    assert.equal(second.validate(issued.ticket), null);
+    const converged = second.renew(issued.ticket);
+    assert.ok(converged);
+    assert.equal(converged!.ticket, renewed!.ticket);
+    first.close();
+    second.close();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("legacy target snapshot becomes terminal so pre-fix clients stop reconnecting", async () => {
