@@ -1709,6 +1709,19 @@ export class ComputerClient {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         const rawDetail = payload?.detail;
+        if (
+          response.status === 404 &&
+          typeof rawDetail === "string" &&
+          rawDetail.trim().toLowerCase() === "workspace not found"
+        ) {
+          throw new ComputerApiError(
+            404,
+            "Workspace is no longer available. Re-list CPTR workspaces and retry with a current workspace_id.",
+            "workspace_not_found",
+            false,
+            "workspace_id",
+          );
+        }
         if (rawDetail && typeof rawDetail === "object" && !Array.isArray(rawDetail)) {
           const detail = rawDetail as Record<string, unknown>;
           throw new ComputerApiError(

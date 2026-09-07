@@ -1164,6 +1164,22 @@ export function createMcpServer(
               { error: activityErrorJson },
             );
           }
+          if (error instanceof ComputerApiError && error.code === "workspace_not_found") {
+            const recovery = { tool: "cptr_workspace", action: "list" };
+            const recoverable = { ok: false, error: envelope, recovery };
+            const inputRecord = input && typeof input === "object" && !Array.isArray(input)
+              ? input as Record<string, unknown>
+              : {};
+            const action = typeof inputRecord.action === "string" ? inputRecord.action : null;
+            const recoveryResult =
+              toolSurface === "compact" && COMPACT_DOMAIN_TOOL_NAMES.has(name) && action
+                ? result({ action, result: recoverable })
+                : {
+                    content: [{ type: "text" as const, text: JSON.stringify(recoverable) }],
+                  };
+            emitUsage("error", recoveryResult);
+            return recoveryResult as never;
+          }
           const errorResult = {
             isError: true,
             content: [{ type: "text" as const, text: JSON.stringify(envelope) }],
