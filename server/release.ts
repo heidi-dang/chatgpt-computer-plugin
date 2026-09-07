@@ -1,6 +1,7 @@
 import { CPTR_APP_VERSION } from "./version.js";
 
 export const MCP_CONTRACT_VERSION = CPTR_APP_VERSION;
+export const MCP_PROTOCOL_VERSION = "2026-07-28";
 export const MCP_CONTRACT_TOOL_COUNT = 84;
 export const MCP_LEGACY_REGISTERED_TOOL_COUNT = 91;
 export const MCP_COMPACT_REGISTERED_TOOL_COUNT = 18;
@@ -41,7 +42,7 @@ export function currentPluginUpdateManifest(
     product: "CPTR Computer",
     version: CPTR_PLUGIN_VERSION,
     schema_revision: CPTR_PLUGIN_SCHEMA_REVISION,
-    contract_version: MCP_CONTRACT_VERSION,
+    contract_version: toolSurface === "compact" ? MCP_PROTOCOL_VERSION : MCP_CONTRACT_VERSION,
     tool_surface: toolSurface,
     tool_count: registeredToolCount,
     registered_tool_count: registeredToolCount,
