@@ -118,6 +118,14 @@ const cloudflareConfig =
       }
     : undefined;
 const nativeOAuthSecret = process.env.MCP_NATIVE_OAUTH_SECRET?.trim();
+const configuredLiveTicketSecret = process.env.CPTR_LIVE_TICKET_SECRET?.trim();
+if (configuredLiveTicketSecret && configuredLiveTicketSecret.length < 32) {
+  throw new Error("CPTR_LIVE_TICKET_SECRET must be at least 32 characters");
+}
+const liveTicketSecret = configuredLiveTicketSecret || nativeOAuthSecret || mcpAccessToken?.trim();
+if (process.env.NODE_ENV === "production" && !liveTicketSecret) {
+  throw new Error("CPTR_LIVE_TICKET_SECRET is required in production when no stable MCP authentication secret is available");
+}
 const nativeOAuthIssuer = (
   process.env.MCP_NATIVE_OAUTH_ISSUER?.trim() || publicOrigin
 ).replace(/\/$/, "");
@@ -268,6 +276,7 @@ const liveTickets = new LiveTicketStore({
   streamUrl: `${publicOrigin}/live/stream`,
   snapshotUrl: `${publicOrigin}/live/snapshot`,
   renewUrl: `${publicOrigin}/live/renew`,
+  ticketSecret: liveTicketSecret,
 });
 const liveGateway = new LiveGateway(client, liveTickets);
 const promptSessions = new PromptTerminalStore({
@@ -279,6 +288,7 @@ const promptSessions = new PromptTerminalStore({
   // Prompt activity is intentionally lightweight and remains available even
   // when raw live-terminal streaming is disabled for chat/UI performance.
   streamingEnabled: true,
+  ticketSecret: liveTicketSecret,
 });
 const promptGateway = new PromptTerminalGateway(promptSessions);
 const browserFrameGateway = new PromptBrowserFrameGateway(
@@ -1318,8 +1328,9 @@ const httpServer = createServer(async (req, res) => {
         .writeHead(204, {
           ...originHeaders,
           "access-control-allow-headers":
-            "Authorization, Accept, Last-Event-ID, Content-Type",
+            "Authorization, Accept, Last-Event-ID, Content-Type, X-CPTR-Viewer-ID, X-CPTR-Viewer-Started-At",
           "access-control-allow-methods": "GET, POST, OPTIONS",
+          "access-control-max-age": "600",
           "cache-control": "no-store",
         })
         .end();

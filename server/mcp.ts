@@ -1267,8 +1267,8 @@ export function createMcpServer(
           });
       const prompt = input.resume_session_id
         ? promptSessions.resumeWorkbenchSession(session.session_id, { allowDelegate: delegationAllowed })
-          ?? promptSessions.open({ allowDelegate: delegationAllowed })
-        : promptSessions.open({ allowDelegate: delegationAllowed });
+          ?? promptSessions.open({ allowDelegate: delegationAllowed, workbenchSessionId: session.session_id })
+        : promptSessions.open({ allowDelegate: delegationAllowed, workbenchSessionId: session.session_id });
       activePromptTicket = prompt.ticket;
       promptTicketContext.enterWith(prompt.ticket);
       promptSessions.bindWorkbenchSession(prompt.ticket, session.session_id);
