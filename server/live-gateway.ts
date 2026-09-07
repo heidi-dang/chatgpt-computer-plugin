@@ -1,6 +1,7 @@
 import type { ServerResponse, IncomingMessage } from "node:http";
 import type { ComputerClient } from "./client/computer-client.js";
 import { LiveTicketStore } from "./live-tickets.js";
+import { LiveViewerRegistry, liveViewerIdentity } from "./live-viewers.js";
 
 function bearerValue(request: IncomingMessage): string | null {
   const value = request.headers.authorization;
@@ -32,6 +33,7 @@ async function waitForDrain(request: IncomingMessage, response: ServerResponse):
 
 export class LiveGateway {
   private activeStreams = 0;
+  private readonly viewers = new LiveViewerRegistry();
 
   constructor(
     private readonly client: ComputerClient,
@@ -74,12 +76,29 @@ export class LiveGateway {
       return;
     }
     const claims = this.tickets.validate(ticket);
+    const rawAfter = url.searchParams.get("after") ?? "0";
     if (!claims) {
+      if (!/^\d{1,12}$/.test(rawAfter)) {
+        response.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
+        response.end(JSON.stringify({ error: "invalid live-event cursor" }));
+        return;
+      }
+      if (!ticket.startsWith("v1.")) {
+        response.writeHead(200, {
+          "content-type": "application/json",
+          "cache-control": "no-store",
+          "x-cptr-stream-state": "legacy-retired",
+        });
+        response.end(JSON.stringify({
+          snapshot: { status: "BLOCKED" },
+          replay: { events: [], last_sequence: Number(rawAfter) },
+        }));
+        return;
+      }
       response.writeHead(401, { "content-type": "application/json", "cache-control": "no-store", "www-authenticate": "Bearer" });
       response.end(JSON.stringify({ error: "live snapshot ticket is invalid or expired" }));
       return;
     }
-    const rawAfter = url.searchParams.get("after") ?? "0";
     if (!/^\d{1,12}$/.test(rawAfter)) {
       response.writeHead(400, { "content-type": "application/json", "cache-control": "no-store" });
       response.end(JSON.stringify({ error: "invalid live-event cursor" }));
@@ -139,10 +158,33 @@ export class LiveGateway {
       return;
     }
 
+    const streamScope = this.tickets.sessionIdentity(ticket);
+    const viewer = liveViewerIdentity(request);
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let superseded = false;
+    const closeViewer = () => {
+      superseded = true;
+      void reader?.cancel().catch(() => undefined);
+      if (!response.writableEnded) response.end();
+    };
+    if (streamScope && this.viewers.claim(streamScope, viewer, closeViewer) === "superseded") {
+      response.writeHead(409, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+        "x-cptr-stream-state": "superseded",
+      });
+      response.end(JSON.stringify({ error: "live viewer was superseded by a newer Workbench" }));
+      return;
+    }
+    const releaseViewer = () => {
+      if (streamScope) this.viewers.release(streamScope, viewer);
+    };
+
     this.activeStreams += 1;
     const lastEventId = request.headers["last-event-id"];
     if (typeof lastEventId === "string" && !/^\d{1,12}$/.test(lastEventId)) {
       this.activeStreams -= 1;
+      releaseViewer();
       response.writeHead(400, {
         "content-type": "application/json",
         "cache-control": "no-store",
@@ -164,6 +206,7 @@ export class LiveGateway {
         : await this.client.streamLive(claims.targetType, claims.targetId, afterSequence);
     } catch {
       this.activeStreams -= 1;
+      releaseViewer();
       response.writeHead(502, {
         "content-type": "application/json",
         "cache-control": "no-store",
@@ -173,6 +216,7 @@ export class LiveGateway {
     }
     if (!upstream.ok || !upstream.body) {
       this.activeStreams -= 1;
+      releaseViewer();
       response.writeHead(upstream.status >= 400 ? upstream.status : 502, {
         "content-type": "application/json",
         "cache-control": "no-store",
@@ -188,8 +232,15 @@ export class LiveGateway {
       connection: "keep-alive",
       "x-accel-buffering": "no",
     });
-    const reader = upstream.body.getReader();
-    request.on("close", () => void reader.cancel());
+    reader = upstream.body.getReader();
+    if (superseded) {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
+      this.activeStreams -= 1;
+      releaseViewer();
+      return;
+    }
+    request.on("close", () => void reader?.cancel());
     const maxBytes = this.limits.maxBytes ?? 1_048_576;
     const deadline = Date.now() + (this.limits.maxDurationMs ?? 10 * 60_000);
     let bytes = 0;
@@ -219,6 +270,7 @@ export class LiveGateway {
       await reader.cancel().catch(() => undefined);
       reader.releaseLock();
       this.activeStreams -= 1;
+      releaseViewer();
       response.end();
     }
   }

@@ -122,6 +122,12 @@ test("routes OAuth consent through the dedicated opaque-origin policy", () => {
   assert.match(indexSource, /isOauthConsentPath[\s\S]*?isAllowedOAuthConsentOrigin\(/);
 });
 
+test("live Workbench preflight admits viewer arbitration headers and caches the result", () => {
+  const indexSource = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
+  assert.match(indexSource, /X-CPTR-Viewer-ID, X-CPTR-Viewer-Started-At/);
+  assert.match(indexSource, /"access-control-max-age": "600"/);
+});
+
 test("permits a localhost public origin only outside production", () => {
   assert.equal(resolvePublicOrigin({}, "127.0.0.1", 8787), "http://127.0.0.1:8787");
 });

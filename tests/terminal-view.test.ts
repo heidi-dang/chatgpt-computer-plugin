@@ -368,6 +368,12 @@ test("Workbench recovery contract survives iOS suspension, replay, and browser l
   assert.ok(promptConsume.indexOf("const response = await fetch(url") < promptConsume.indexOf("await applySnapshot()"), "prompt SSE must open before snapshot fallback so startup is not delayed by an extra round trip");
   assert.match(promptConsume, /setConnection\("connecting prompt activity"\)/);
   assert.doesNotMatch(source, /retryAttempts\s*>=\s*8/);
+  assert.match(source, /terminalFailure/);
+  assert.match(source, /X-CPTR-Viewer-ID/);
+  assert.match(source, /X-CPTR-Viewer-Started-At/);
+  assert.match(source, /response\.status === 409/);
+  assert.match(source, /\[401, 403, 410\]\.includes\(response\.status\)/);
+  assert.match(promptHook, /if \(stopped \|\| terminalFailure\) return/);
   assert.match(source, /addEventListener\("pageshow"/);
   assert.match(source, /addEventListener\("online"/);
   assert.match(source, /visibilitychange/);

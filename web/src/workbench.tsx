@@ -60,6 +60,13 @@ type PromptMetadata = {
   streamingEnabled?: boolean;
 };
 
+type ViewerIdentity = {
+  id: string;
+  startedAt: number;
+};
+
+type RenewalOutcome = "renewed" | "terminal" | "retry";
+
 type BrowserSurfaceState = {
   action: string;
   deviceId?: string;
@@ -160,6 +167,7 @@ function usePromptActivity(
   setBrowserSurface: React.Dispatch<React.SetStateAction<BrowserSurfaceState | null>>,
   setSurfaceMode: React.Dispatch<React.SetStateAction<"terminal" | "browser">>,
   streamingEnabled: boolean,
+  viewer: ViewerIdentity,
 ) {
   const cursor = useRef(0);
   const activePromptTools = useRef(0);
@@ -186,6 +194,7 @@ function usePromptActivity(
     let stopped = false;
     let retryTimer: number | undefined;
     let retryAttempts = 0;
+    let terminalFailure = false;
 
     const applyEvent = (event: PromptEvent, isLiveEvent = false) => {
       if (event.sequence <= cursor.current) return;
@@ -279,8 +288,8 @@ function usePromptActivity(
       if (typeof value.replay?.last_sequence === "number") cursor.current = Math.max(cursor.current, value.replay.last_sequence);
     };
 
-    const renewPromptTicket = async (): Promise<boolean> => {
-      if (!meta.renewUrl) return false;
+    const renewPromptTicket = async (): Promise<RenewalOutcome> => {
+      if (!meta.renewUrl) return "terminal";
       setConnection("renewing prompt activity");
       try {
         const response = await fetch(new URL(meta.renewUrl, window.location.href), {
@@ -288,18 +297,26 @@ function usePromptActivity(
           headers: { Authorization: `Bearer ${meta.ticket}`, Accept: "application/json" },
           signal: controller.signal,
         });
-        if (!response.ok) return false;
+        if ([401, 403, 410].includes(response.status)) return "terminal";
+        if (!response.ok) return "retry";
         const renewed = await response.json() as PromptMetadata;
-        if (!renewed.ticket || !renewed.streamUrl || !renewed.snapshotUrl || !renewed.renewUrl) return false;
+        if (!renewed.ticket || !renewed.streamUrl || !renewed.snapshotUrl || !renewed.renewUrl) return "terminal";
         setPromptMetadata(renewed);
-        return true;
-      } catch {
-        return false;
+        return "renewed";
+      } catch (error) {
+        return error instanceof DOMException && error.name === "AbortError" && stopped ? "terminal" : "retry";
       }
     };
 
+    const stopTerminalFailure = (message: string) => {
+      terminalFailure = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      setConnection(message);
+      setStatus("DISCONNECTED");
+    };
+
     const scheduleRetry = (run: () => void) => {
-      if (stopped) return;
+      if (stopped || terminalFailure) return;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
       const delay = Math.min(15_000, 1_000 * 2 ** Math.min(retryAttempts, 4));
       retryAttempts += 1;
@@ -318,11 +335,23 @@ function usePromptActivity(
         const url = new URL(meta.streamUrl!, window.location.href);
         url.searchParams.set("after", String(cursor.current));
         const response = await fetch(url, {
-          headers: { Authorization: `Bearer ${meta.ticket}`, Accept: "text/event-stream", "Last-Event-ID": String(cursor.current) },
+          headers: {
+            Authorization: `Bearer ${meta.ticket}`,
+            Accept: "text/event-stream",
+            "Last-Event-ID": String(cursor.current),
+            "X-CPTR-Viewer-ID": viewer.id,
+            "X-CPTR-Viewer-Started-At": String(viewer.startedAt),
+          },
           signal: controller.signal,
         });
+        if (response.status === 409) {
+          stopTerminalFailure("superseded by newer Workbench");
+          return;
+        }
         if (response.status === 401) {
-          if (!(await renewPromptTicket())) scheduleRetry(consume);
+          const outcome = await renewPromptTicket();
+          if (outcome === "terminal") stopTerminalFailure("prompt session expired");
+          else if (outcome === "retry") scheduleRetry(consume);
           return;
         }
         if (!response.ok || !response.body) {
@@ -362,7 +391,9 @@ function usePromptActivity(
           ? (error as { status?: unknown }).status
           : undefined;
         if (status === 401) {
-          if (!(await renewPromptTicket())) scheduleRetry(consume);
+          const outcome = await renewPromptTicket();
+          if (outcome === "terminal") stopTerminalFailure("prompt session expired");
+          else if (outcome === "retry") scheduleRetry(consume);
           return;
         }
         const transportMessage = error instanceof Error ? error.message : "prompt stream error";
@@ -373,7 +404,9 @@ function usePromptActivity(
             ? (snapshotError as { status?: unknown }).status
             : undefined;
           if (snapshotStatus === 401) {
-            if (!(await renewPromptTicket())) scheduleRetry(consume);
+            const outcome = await renewPromptTicket();
+            if (outcome === "terminal") stopTerminalFailure("prompt session expired");
+            else if (outcome === "retry") scheduleRetry(consume);
             return;
           }
         }
@@ -383,7 +416,7 @@ function usePromptActivity(
     };
 
     const wake = () => {
-      if (stopped) return;
+      if (stopped || terminalFailure) return;
       retryAttempts = 0;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
       controller.abort();
@@ -405,7 +438,7 @@ function usePromptActivity(
       window.removeEventListener("online", wake);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [promptMetadata?.ticket, promptMetadata?.streamUrl, promptMetadata?.snapshotUrl, promptMetadata?.renewUrl, setPromptMetadata, setMeta, setState, streamingEnabled]);
+  }, [promptMetadata?.ticket, promptMetadata?.streamUrl, promptMetadata?.snapshotUrl, promptMetadata?.renewUrl, setPromptMetadata, setMeta, setState, streamingEnabled, viewer.id, viewer.startedAt]);
 
   return { connection, status };
 }
@@ -462,6 +495,7 @@ function useLiveSession(
   setMeta: React.Dispatch<React.SetStateAction<LiveMetadata | null>>,
   setState: React.Dispatch<React.SetStateAction<WorkbenchState>>,
   streamingEnabled: boolean,
+  viewer: ViewerIdentity,
 ) {
   const [connection, setConnection] = useState("waiting for live terminal");
   const liveTarget = useRef(new LiveTargetSession());
@@ -484,10 +518,11 @@ function useLiveSession(
     let renewalTimer: number | undefined;
     let stopped = false;
     let terminalSeen = false;
+    let terminalFailure = false;
     let retryAttempts = 0;
 
-    const renewTicket = async (): Promise<boolean> => {
-      if (!meta.targetType || !meta.targetId || !meta.renewUrl) return false;
+    const renewTicket = async (): Promise<RenewalOutcome> => {
+      if (!meta.targetType || !meta.targetId || !meta.renewUrl) return "terminal";
       liveTarget.current.renewalAttempts += 1;
       setConnection("renewing session");
       try {
@@ -496,26 +531,36 @@ function useLiveSession(
           headers: { Authorization: `Bearer ${meta.ticket}`, Accept: "application/json" },
           signal: controller.signal,
         });
-        if (!response.ok) return false;
+        if ([401, 403, 410].includes(response.status)) return "terminal";
+        if (!response.ok) return "retry";
         const renewed = await response.json() as LiveMetadata;
         const sameTarget =
           renewed.targetType === meta.targetType &&
           renewed.targetId === meta.targetId &&
           (meta.targetType !== "command" || renewed.workspaceId === meta.workspaceId);
-        if (!sameTarget || !renewed.ticket || !renewed.streamUrl || !renewed.snapshotUrl || !renewed.renewUrl) return false;
+        if (!sameTarget || !renewed.ticket || !renewed.streamUrl || !renewed.snapshotUrl || !renewed.renewUrl) return "terminal";
         liveTarget.current.renewalAttempts = 0;
         setMeta(renewed);
-        return true;
-      } catch {
-        return false;
+        return "renewed";
+      } catch (error) {
+        return error instanceof DOMException && error.name === "AbortError" && stopped ? "terminal" : "retry";
       }
+    };
+
+    const stopTerminalFailure = (message: string) => {
+      terminalFailure = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      if (renewalTimer !== undefined) window.clearTimeout(renewalTimer);
+      setConnection(message);
     };
 
     if (typeof meta.expiresAt === "number" && meta.renewUrl) {
       const renewInMs = Math.max(1_000, meta.expiresAt - Date.now() - 60_000);
       renewalTimer = window.setTimeout(() => {
-        void renewTicket().then((renewed) => {
-          if (!renewed && !stopped) scheduleRetry(consume);
+        void renewTicket().then((outcome) => {
+          if (stopped) return;
+          if (outcome === "terminal") stopTerminalFailure("live session expired");
+          else if (outcome === "retry") scheduleRetry(consume);
         });
       }, renewInMs);
     }
@@ -556,7 +601,7 @@ function useLiveSession(
     };
 
     const scheduleRetry = (run: () => void) => {
-      if (stopped) return;
+      if (stopped || terminalFailure) return;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
       const delay = Math.min(15_000, 1_000 * 2 ** Math.min(retryAttempts, 4));
       retryAttempts += 1;
@@ -577,15 +622,23 @@ function useLiveSession(
             Authorization: `Bearer ${meta.ticket}`,
             Accept: "text/event-stream",
             "Last-Event-ID": String(liveTarget.current.cursor),
+            "X-CPTR-Viewer-ID": viewer.id,
+            "X-CPTR-Viewer-Started-At": String(viewer.startedAt),
           },
           signal: controller.signal,
         });
+        if (response.status === 409) {
+          stopTerminalFailure("superseded by newer Workbench");
+          return;
+        }
         if (response.status === 401) {
-          if (!(await renewTicket())) scheduleRetry(consume);
+          const outcome = await renewTicket();
+          if (outcome === "terminal") stopTerminalFailure("live session expired");
+          else if (outcome === "retry") scheduleRetry(consume);
           return;
         }
         if ([403, 404, 410].includes(response.status)) {
-          setConnection(`stream unavailable (${response.status})`);
+          stopTerminalFailure(`stream unavailable (${response.status})`);
           return;
         }
         if (!response.ok || !response.body) throw new Error(`stream unavailable (${response.status})`);
@@ -624,7 +677,7 @@ function useLiveSession(
           data = [];
         };
 
-        while (!stopped) {
+        while (!stopped && !terminalFailure) {
           const next = await reader.read();
           if (next.done) break;
           buffer += decoder.decode(next.value, { stream: true });
@@ -637,14 +690,16 @@ function useLiveSession(
           }
         }
         if (!stopped && data.length) dispatch();
-        if (!stopped && !terminalSeen) scheduleRetry(consume);
+        if (!stopped && !terminalSeen && !terminalFailure) scheduleRetry(consume);
       } catch (error) {
         if (stopped || (error instanceof DOMException && error.name === "AbortError")) return;
         const status = error && typeof error === "object" && "status" in error
           ? (error as { status?: unknown }).status
           : undefined;
         if (status === 401) {
-          if (!(await renewTicket())) scheduleRetry(consume);
+          const outcome = await renewTicket();
+          if (outcome === "terminal") stopTerminalFailure("live session expired");
+          else if (outcome === "retry") scheduleRetry(consume);
           return;
         }
         setConnection(error instanceof Error ? error.message : "stream error");
@@ -653,7 +708,7 @@ function useLiveSession(
     };
 
     const wake = () => {
-      if (stopped || terminalSeen) return;
+      if (stopped || terminalSeen || terminalFailure) return;
       retryAttempts = 0;
       liveTarget.current.renewalAttempts = 0;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
@@ -677,7 +732,7 @@ function useLiveSession(
       window.removeEventListener("online", wake);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [meta?.ticket, meta?.streamUrl, meta?.snapshotUrl, meta?.renewUrl, meta?.expiresAt, meta?.targetType, meta?.targetId, meta?.workspaceId, setMeta, setState, streamingEnabled]);
+  }, [meta?.ticket, meta?.streamUrl, meta?.snapshotUrl, meta?.renewUrl, meta?.expiresAt, meta?.targetType, meta?.targetId, meta?.workspaceId, setMeta, setState, streamingEnabled, viewer.id, viewer.startedAt]);
 
   return connection;
 }
@@ -693,6 +748,7 @@ function targetLabel(meta: LiveMetadata | null): string {
 function OwnedWorkbench() {
   const [state, setState] = useState(initialWorkbenchState);
   const [actionStatus, setActionStatus] = useState("");
+  const viewer = useRef<ViewerIdentity>({ id: crypto.randomUUID(), startedAt: Date.now() });
   useMcpBridge();
   const [promptMetadata, setPromptMetadata] = useState<PromptMetadata | null>(() => findPromptMetadata(hostBridge()?.toolResponseMetadata));
   const liveStreamingEnabled = promptMetadata?.streamingEnabled === true;
@@ -700,8 +756,8 @@ function OwnedWorkbench() {
   const [surfaceMode, setSurfaceMode] = useState<"terminal" | "browser">("terminal");
   const [browserSurface, setBrowserSurface] = useState<BrowserSurfaceState | null>(null);
   const [terminalViewState, setTerminalViewState] = useState({ follow: true, scrollTop: 0 });
-  const promptActivity = usePromptActivity(promptMetadata, setPromptMetadata, setMeta, setState, setBrowserSurface, setSurfaceMode, liveStreamingEnabled);
-  const targetConnection = useLiveSession(meta, setMeta, setState, liveStreamingEnabled);
+  const promptActivity = usePromptActivity(promptMetadata, setPromptMetadata, setMeta, setState, setBrowserSurface, setSurfaceMode, liveStreamingEnabled, viewer.current);
+  const targetConnection = useLiveSession(meta, setMeta, setState, liveStreamingEnabled, viewer.current);
   const connection = meta?.targetId && !isTerminalWorkbenchStatus(state.status) ? targetConnection : promptActivity.connection;
   const visibleTarget = useRef<string | null>(null);
   const displayStatus = meta?.targetType && meta.targetId ? state.status : promptActivity.status;

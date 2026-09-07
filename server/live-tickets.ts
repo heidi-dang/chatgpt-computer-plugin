@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { LiveTicketCodec } from "./live-ticket-codec.js";
 
 export type LiveTarget =
   | { targetType: "task" | "monitor"; targetId: string }
@@ -12,10 +13,57 @@ export type WidgetStreamMetadata<T extends LiveTarget = LiveTarget> = T & {
   expiresAt: number;
 };
 
-type TicketClaims = LiveTarget & { expiresAt: number; renewUntil: number };
+type TicketClaims = LiveTarget & {
+  sessionId: string;
+  generation: number;
+  expiresAt: number;
+  renewUntil: number;
+};
+
+type TicketSession = TicketClaims & { ticket: string };
+
+type RawTicketClaims = {
+  targetType?: unknown;
+  targetId?: unknown;
+  workspaceId?: unknown;
+  workerId?: unknown;
+  sessionId?: unknown;
+  generation?: unknown;
+  expiresAt?: unknown;
+  renewUntil?: unknown;
+};
+
+function parseClaims(value: unknown): TicketClaims | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as RawTicketClaims;
+  if (typeof raw.sessionId !== "string" || !raw.sessionId) return null;
+  if (typeof raw.generation !== "number" || !Number.isSafeInteger(raw.generation) || raw.generation < 0) return null;
+  if (typeof raw.expiresAt !== "number" || !Number.isFinite(raw.expiresAt)) return null;
+  if (typeof raw.renewUntil !== "number" || !Number.isFinite(raw.renewUntil) || raw.renewUntil < raw.expiresAt) return null;
+  if (typeof raw.targetId !== "string" || !raw.targetId) return null;
+  const common = {
+    sessionId: raw.sessionId,
+    generation: raw.generation,
+    expiresAt: raw.expiresAt,
+    renewUntil: raw.renewUntil,
+  };
+  if (raw.targetType === "task" || raw.targetType === "monitor") {
+    return { targetType: raw.targetType, targetId: raw.targetId, ...common };
+  }
+  if (raw.targetType !== "command" || typeof raw.workspaceId !== "string" || !raw.workspaceId) return null;
+  if (raw.workerId !== undefined && typeof raw.workerId !== "string") return null;
+  return {
+    targetType: "command",
+    targetId: raw.targetId,
+    workspaceId: raw.workspaceId,
+    ...(raw.workerId ? { workerId: raw.workerId } : {}),
+    ...common,
+  };
+}
 
 export class LiveTicketStore {
-  private readonly tickets = new Map<string, TicketClaims>();
+  private readonly sessions = new Map<string, TicketSession>();
+  private readonly revokedUntil = new Map<string, number>();
   private readonly now: () => number;
   private readonly ttlMs: number;
   private readonly renewGraceMs: number;
@@ -23,6 +71,7 @@ export class LiveTicketStore {
   private readonly snapshotUrl: string;
   private readonly renewUrl: string;
   private readonly maxTickets: number;
+  private readonly codec: LiveTicketCodec;
 
   constructor(options: {
     now?: () => number;
@@ -32,11 +81,9 @@ export class LiveTicketStore {
     snapshotUrl?: string;
     renewUrl?: string;
     maxTickets?: number;
+    ticketSecret?: string | Buffer;
   } = {}) {
     this.now = options.now ?? (() => Date.now());
-    // A single backend stream is bounded to ten minutes; retain the opaque
-    // target-bound ticket beyond that interval so ordinary reconnects do not
-    // fail merely because the browser briefly lost connectivity.
     this.ttlMs = Math.max(1_000, options.ttlMs ?? 15 * 60_000);
     this.renewGraceMs = Math.max(
       0,
@@ -46,88 +93,141 @@ export class LiveTicketStore {
     this.snapshotUrl = options.snapshotUrl ?? this.streamUrl.replace(/\/stream(?:\?.*)?$/, "/snapshot");
     this.renewUrl = options.renewUrl ?? this.streamUrl.replace(/\/stream(?:\?.*)?$/, "/renew");
     this.maxTickets = Math.max(1, options.maxTickets ?? 4_096);
+    this.codec = new LiveTicketCodec(options.ticketSecret);
   }
 
   get size(): number {
     this.pruneExpired(this.now());
-    return this.tickets.size;
+    return this.sessions.size;
   }
 
   private pruneExpired(now: number): void {
-    for (const [ticket, claims] of this.tickets) {
-      if (claims.renewUntil <= now) this.tickets.delete(ticket);
+    for (const [sessionId, session] of this.sessions) {
+      if (session.renewUntil <= now) this.sessions.delete(sessionId);
+    }
+    for (const [sessionId, until] of this.revokedUntil) {
+      if (until <= now) this.revokedUntil.delete(sessionId);
     }
   }
 
   private evictOldestIfFull(): void {
-    while (this.tickets.size >= this.maxTickets) {
-      const oldest = this.tickets.keys().next().value;
+    while (this.sessions.size >= this.maxTickets) {
+      const oldest = this.sessions.keys().next().value;
       if (typeof oldest !== "string") return;
-      this.tickets.delete(oldest);
+      this.sessions.delete(oldest);
     }
   }
 
-  issue<T extends LiveTarget>(target: T): WidgetStreamMetadata<T> {
-    const now = this.now();
-    this.pruneExpired(now);
-    this.evictOldestIfFull();
-    const ticket = randomBytes(32).toString("base64url");
-    const expiresAt = now + this.ttlMs;
-    const renewUntil = expiresAt + this.renewGraceMs;
-    this.tickets.set(ticket, { ...target, expiresAt, renewUntil });
+  private metadata(session: TicketSession): WidgetStreamMetadata {
+    const target = session.targetType === "command"
+      ? {
+          targetType: "command" as const,
+          targetId: session.targetId,
+          workspaceId: session.workspaceId,
+          ...(session.workerId ? { workerId: session.workerId } : {}),
+        }
+      : { targetType: session.targetType, targetId: session.targetId };
     return {
       ...target,
-      ticket,
-      expiresAt,
+      ticket: session.ticket,
+      expiresAt: session.expiresAt,
       streamUrl: this.streamUrl,
       snapshotUrl: this.snapshotUrl,
       renewUrl: this.renewUrl,
     };
   }
 
-  validate(ticket: string, target?: LiveTarget): TicketClaims | null {
-    const claims = this.tickets.get(ticket);
+  private restore(ticket: string, allowExpired: boolean): TicketSession | null {
+    const decoded = parseClaims(this.codec.open<unknown>(ticket, "live"));
+    if (!decoded) return null;
     const now = this.now();
-    if (!claims || claims.expiresAt <= now) {
-      if (claims && claims.renewUntil <= now) this.tickets.delete(ticket);
+    if ((this.revokedUntil.get(decoded.sessionId) ?? 0) > now) return null;
+    if ((allowExpired ? decoded.renewUntil : decoded.expiresAt) <= now) return null;
+    const current = this.sessions.get(decoded.sessionId);
+    if (current) {
+      if (current.ticket === ticket && current.generation === decoded.generation) return current;
       return null;
     }
-    if (target && (claims.targetType !== target.targetType || claims.targetId !== target.targetId)) {
-      return null;
-    }
+    this.evictOldestIfFull();
+    const restored: TicketSession = { ...decoded, ticket };
+    this.sessions.set(decoded.sessionId, restored);
+    return restored;
+  }
+
+  issue<T extends LiveTarget>(target: T): WidgetStreamMetadata<T> {
+    const now = this.now();
+    this.pruneExpired(now);
+    this.evictOldestIfFull();
+    const claims: TicketClaims = {
+      ...target,
+      sessionId: randomBytes(18).toString("base64url"),
+      generation: 0,
+      expiresAt: now + this.ttlMs,
+      renewUntil: now + this.ttlMs + this.renewGraceMs,
+    };
+    const ticket = this.codec.seal("live", claims);
+    const session: TicketSession = { ...claims, ticket };
+    this.sessions.set(claims.sessionId, session);
+    return this.metadata(session) as unknown as WidgetStreamMetadata<T>;
+  }
+
+  validate(ticket: string, target?: LiveTarget): TicketClaims | null {
+    const session = [...this.sessions.values()].find((candidate) => candidate.ticket === ticket) ?? this.restore(ticket, false);
+    const now = this.now();
+    if (!session || session.expiresAt <= now) return null;
+    if (target && (session.targetType !== target.targetType || session.targetId !== target.targetId)) return null;
     if (
       target?.targetType === "command" &&
       (
-        claims.targetType !== "command" ||
-        claims.workspaceId !== target.workspaceId ||
-        claims.workerId !== target.workerId
+        session.targetType !== "command"
+        || session.workspaceId !== target.workspaceId
+        || session.workerId !== target.workerId
       )
-    ) {
-      return null;
-    }
+    ) return null;
+    const { ticket: _ticket, ...claims } = session;
     return { ...claims };
   }
 
+  sessionIdentity(ticket: string): string | null {
+    const session = [...this.sessions.values()].find((candidate) => candidate.ticket === ticket) ?? this.restore(ticket, false);
+    return session?.sessionId ?? null;
+  }
+
   renew(ticket: string): WidgetStreamMetadata | null {
-    const claims = this.tickets.get(ticket);
+    const decoded = parseClaims(this.codec.open<unknown>(ticket, "live"));
     const now = this.now();
-    if (!claims || claims.renewUntil <= now) {
-      if (claims) this.tickets.delete(ticket);
+    if (!decoded || decoded.renewUntil <= now || (this.revokedUntil.get(decoded.sessionId) ?? 0) > now) return null;
+    let session = this.sessions.get(decoded.sessionId);
+    if (session && session.ticket !== ticket) {
+      if (decoded.generation <= session.generation && session.renewUntil > this.now()) return this.metadata(session);
       return null;
     }
-    const target: LiveTarget = claims.targetType === "command"
-      ? {
-          targetType: "command",
-          targetId: claims.targetId,
-          workspaceId: claims.workspaceId,
-          ...(claims.workerId ? { workerId: claims.workerId } : {}),
-        }
-      : { targetType: claims.targetType, targetId: claims.targetId };
-    this.tickets.delete(ticket);
-    return this.issue(target);
+    if (!session) session = this.restore(ticket, true) ?? undefined;
+    if (!session) return null;
+
+    const nextClaims: TicketClaims = {
+      ...(session.targetType === "command"
+        ? {
+            targetType: "command" as const,
+            targetId: session.targetId,
+            workspaceId: session.workspaceId,
+            ...(session.workerId ? { workerId: session.workerId } : {}),
+          }
+        : { targetType: session.targetType, targetId: session.targetId }),
+      sessionId: session.sessionId,
+      generation: session.generation + 1,
+      expiresAt: now + this.ttlMs,
+      renewUntil: now + this.ttlMs + this.renewGraceMs,
+    };
+    const next: TicketSession = { ...nextClaims, ticket: this.codec.seal("live", nextClaims) };
+    this.sessions.set(next.sessionId, next);
+    return this.metadata(next);
   }
 
   revoke(ticket: string): void {
-    this.tickets.delete(ticket);
+    const decoded = parseClaims(this.codec.open<unknown>(ticket, "live"));
+    if (!decoded) return;
+    this.revokedUntil.set(decoded.sessionId, decoded.renewUntil);
+    this.sessions.delete(decoded.sessionId);
   }
 }
