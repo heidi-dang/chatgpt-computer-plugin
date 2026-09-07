@@ -70,11 +70,16 @@ test("compact MCP surface exposes 18 domain tools under 100 KB while legacy stay
   assert.match(compactTools.get("cptr_command")?.description ?? "", /run\(workspace_id,command/);
   const update = await compact.client.callTool({
     name: "cptr_plugin_update",
-    arguments: { action: "verify_server", expected_tool_count: 18 },
+    arguments: {
+      action: "verify_server",
+      expected_contract_version: "2026-07-28",
+      expected_tool_count: 18,
+    },
   });
   const updateValue = update.structuredContent as Record<string, unknown> | undefined;
   assert.equal(update.isError, undefined);
   assert.equal(updateValue?.tool_surface, "compact");
+  assert.equal(updateValue?.contract_version, "2026-07-28");
   assert.equal(updateValue?.tool_count, 18);
   assert.equal(updateValue?.registered_tool_count, 18);
   assert.equal(updateValue?.core_tool_count, 84);
