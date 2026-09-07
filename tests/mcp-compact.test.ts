@@ -189,6 +189,61 @@ test("compact workspace inspection maps actions onto the existing inspect endpoi
   await server.close();
 });
 
+test("compact stale workspace errors stay recoverable without poisoning the MCP surface", async () => {
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async (url) => {
+      const requestUrl = String(url);
+      if (requestUrl.includes("/workspaces/stale-workspace/coding/commands")) {
+        return new Response(JSON.stringify({ detail: "workspace not found" }), { status: 404 });
+      }
+      if (requestUrl.includes("/workspaces?")) {
+        return new Response(JSON.stringify({
+          workspaces: [
+            { workspace_id: "workspace-current", name: "current", available: true, last_used_at: 1 },
+          ],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    },
+  });
+  const { server, client } = await connectedServer(computer, "compact");
+
+  const stale = await client.callTool({
+    name: "cptr_command",
+    arguments: {
+      action: "run",
+      payload: { workspace_id: "stale-workspace", command: "pwd", allow_network: false },
+    },
+  });
+  assert.equal(stale.isError, undefined);
+  const staleValue = stale.structuredContent as {
+    action?: string;
+    result?: {
+      ok?: boolean;
+      error?: { code?: string; field?: string };
+      recovery?: { tool?: string; action?: string };
+    };
+  } | undefined;
+  assert.equal(staleValue?.action, "run");
+  assert.equal(staleValue?.result?.ok, false);
+  assert.equal(staleValue?.result?.error?.code, "workspace_not_found");
+  assert.equal(staleValue?.result?.error?.field, "workspace_id");
+  assert.deepEqual(staleValue?.result?.recovery, { tool: "cptr_workspace", action: "list" });
+
+  const listed = await client.callTool({
+    name: "cptr_workspace",
+    arguments: { action: "list", payload: {} },
+  });
+  assert.equal(listed.isError, undefined);
+  const listedValue = listed.structuredContent as { result?: { workspaces?: Array<{ workspace_id: string }> } };
+  assert.equal(listedValue.result?.workspaces?.[0]?.workspace_id, "workspace-current");
+
+  await client.close();
+  await server.close();
+});
+
 test("compact command run preserves durable Workbench command binding", async () => {
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",

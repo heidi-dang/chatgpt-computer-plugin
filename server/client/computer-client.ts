@@ -1594,8 +1594,12 @@ export class ComputerClient {
     afterSequence = 0,
     workspaceId?: string,
     workerId?: string,
+    signal?: AbortSignal,
   ): Promise<Response> {
     const controller = new AbortController();
+    const abortFromCaller = () => controller.abort();
+    if (signal?.aborted) abortFromCaller();
+    else signal?.addEventListener("abort", abortFromCaller, { once: true });
     const timeout = setTimeout(() => controller.abort(), Math.max(this.timeoutMs, 60_000));
     try {
       let path: string;
@@ -1620,6 +1624,7 @@ export class ComputerClient {
       );
     } finally {
       clearTimeout(timeout);
+      signal?.removeEventListener("abort", abortFromCaller);
     }
   }
 
@@ -1709,6 +1714,19 @@ export class ComputerClient {
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         const rawDetail = payload?.detail;
+        if (
+          response.status === 404 &&
+          typeof rawDetail === "string" &&
+          rawDetail.trim().toLowerCase() === "workspace not found"
+        ) {
+          throw new ComputerApiError(
+            404,
+            "Workspace is no longer available. Re-list CPTR workspaces and retry with a current workspace_id.",
+            "workspace_not_found",
+            false,
+            "workspace_id",
+          );
+        }
         if (rawDetail && typeof rawDetail === "object" && !Array.isArray(rawDetail)) {
           const detail = rawDetail as Record<string, unknown>;
           throw new ComputerApiError(

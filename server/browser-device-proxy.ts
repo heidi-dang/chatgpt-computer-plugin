@@ -24,11 +24,41 @@ const hopByHopHeaders = new Set([
 
 function targetFor(baseUrl: string, requestUrl: string | undefined): URL {
   const base = new URL(baseUrl);
-  if (!/^https?:$/.test(base.protocol) || base.username || base.password) {
+  if (
+    !/^https?:$/.test(base.protocol)
+    || base.username
+    || base.password
+    || base.pathname !== "/"
+    || base.search
+    || base.hash
+  ) {
     throw new Error("CPTR_BASE_URL must be an http(s) origin for browser-device proxying");
   }
-  const target = new URL(requestUrl ?? BROWSER_DEVICE_PREFIX, base);
-  if (!isBrowserDevicePath(target.pathname)) throw new Error("browser-device proxy path escaped its allowed prefix");
+
+  const rawTarget = requestUrl ?? BROWSER_DEVICE_PREFIX;
+  if (!rawTarget.startsWith("/") || rawTarget.startsWith("//") || rawTarget.includes("\\")) {
+    throw new Error("browser-device proxy requires an origin-form request target");
+  }
+  const target = new URL(rawTarget, base);
+  if (target.origin !== base.origin || target.username || target.password) {
+    throw new Error("browser-device proxy target escaped the configured upstream origin");
+  }
+
+  let decodedPath: string;
+  try {
+    decodedPath = decodeURIComponent(target.pathname);
+  } catch {
+    throw new Error("browser-device proxy path contains invalid encoding");
+  }
+  const decodedSegments = decodedPath.split("/");
+  if (
+    decodedPath.includes("\\")
+    || decodedSegments.some((segment) => segment === "." || segment === "..")
+    || !isBrowserDevicePath(target.pathname)
+    || !isBrowserDevicePath(decodedPath)
+  ) {
+    throw new Error("browser-device proxy path escaped its allowed prefix");
+  }
   return target;
 }
 

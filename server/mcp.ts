@@ -1164,6 +1164,22 @@ export function createMcpServer(
               { error: activityErrorJson },
             );
           }
+          if (error instanceof ComputerApiError && error.code === "workspace_not_found") {
+            const recovery = { tool: "cptr_workspace", action: "list" };
+            const recoverable = { ok: false, error: envelope, recovery };
+            const inputRecord = input && typeof input === "object" && !Array.isArray(input)
+              ? input as Record<string, unknown>
+              : {};
+            const action = typeof inputRecord.action === "string" ? inputRecord.action : null;
+            const recoveryResult =
+              toolSurface === "compact" && COMPACT_DOMAIN_TOOL_NAMES.has(name) && action
+                ? result({ action, result: recoverable })
+                : {
+                    content: [{ type: "text" as const, text: JSON.stringify(recoverable) }],
+                  };
+            emitUsage("error", recoveryResult);
+            return recoveryResult as never;
+          }
           const errorResult = {
             isError: true,
             content: [{ type: "text" as const, text: JSON.stringify(envelope) }],
@@ -2366,7 +2382,7 @@ export function createMcpServer(
     {
       title: "Run a bounded validation command in an authorized CPTR workspace",
       description:
-        "Use this only when the user explicitly asks ChatGPT to run a development or validation command in the selected CPTR workspace. CPTR rejects destructive commands. Commands that might contact external services require explicit user approval through allow_network=true.",
+        "Use this only when the user explicitly asks ChatGPT to run a development or validation command in the selected CPTR workspace. This is trusted host-shell execution, not an execution sandbox. CPTR's command classifier rejects known destructive patterns and requires allow_network=true plus command:external for known external-command patterns, but allow_network=false is an authorization/intent gate rather than OS egress confinement. Do not use this endpoint for untrusted or multi-user code; those workloads require a separately qualified isolation boundary.",
       inputSchema: codingCommandSchema,
       outputSchema: directCommandOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { createServer, request as httpRequest, type IncomingMessage } from "node:http";
 import { connect as connectTcp } from "node:net";
 import test from "node:test";
@@ -36,6 +37,43 @@ test("recognizes only the browser-device API prefix", () => {
   assert.equal(isBrowserDevicePath("/api/browser-device/v1/pairing/request"), true);
   assert.equal(isBrowserDevicePath("/api/browser-device/v10/pairing/request"), false);
   assert.equal(isBrowserDevicePath("/mcp"), false);
+});
+
+test("browser-device proxy rejects request targets that can change or escape the upstream origin", async () => {
+  const unsafeTargets = [
+    "http://127.0.0.1:9/api/browser-device/v1/pairing/request",
+    "//127.0.0.1:9/api/browser-device/v1/pairing/request",
+    "/api/browser-device/v1/%2e%2e/%2e%2e/other",
+    "/api/browser-device/v1/%5c..%5cother",
+  ];
+  for (const url of unsafeTargets) {
+    const request = Object.assign(new EventEmitter(), {
+      url,
+      method: "GET",
+      headers: {},
+      pipe() {
+        throw new Error("unsafe request target must be rejected before proxying");
+      },
+    });
+    const response = {
+      status: 0,
+      body: "",
+      writeHead(status: number) {
+        this.status = status;
+        return this;
+      },
+      end(body?: string) {
+        this.body = body ?? "";
+        return this;
+      },
+    };
+    await proxyBrowserDeviceHttp(
+      request as never,
+      response as never,
+      "http://127.0.0.1:65535",
+    );
+    assert.equal(response.status, 502, `unsafe target must fail closed: ${url}`);
+  }
 });
 
 test("HTTP browser-device proxy strips ambient auth and upstream CORS", async () => {

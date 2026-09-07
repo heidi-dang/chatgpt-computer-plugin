@@ -316,6 +316,28 @@ test("normalizes CPTR errors without exposing credentials", async () => {
   });
 });
 
+test("classifies a stale workspace id as a recoverable workspace selection error", async () => {
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async () => new Response(JSON.stringify({ detail: "workspace not found" }), { status: 404 }),
+  });
+
+  await assert.rejects(
+    client.runCodingCommand({ workspace_id: "stale-workspace", command: "pwd" }),
+    (error: unknown) => {
+      assert.ok(error instanceof ComputerApiError);
+      assert.equal(error.status, 404);
+      assert.equal(error.code, "workspace_not_found");
+      assert.equal(error.retriable, false);
+      assert.equal(error.field, "workspace_id");
+      assert.match(error.message, /re-list CPTR workspaces/i);
+      assert.equal(error.message.includes("stale-workspace"), false);
+      return true;
+    },
+  );
+});
+
 test("redacts Unix and Windows host paths from public API errors", async () => {
   const client = new ComputerClient({
     baseUrl: "http://cptr.test",
