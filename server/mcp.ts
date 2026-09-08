@@ -3364,7 +3364,7 @@ export function createMcpServer(
       cptr_worker: "create(workspace_id,name,responsibility?,repo_path?), list(workspace_id), get(workspace_id,worker_id), overview(workspace_id), integrate(workspace_id,worker_ids), close(workspace_id,worker_id,discard_changes?)",
       cptr_lsp: "discover(workspace_id,worker_id?), start(workspace_id,server_id,root?,worker_id?), request(workspace_id,lsp_id,method,params?,timeout_seconds?,worker_id?), stop(workspace_id,lsp_id,worker_id?)",
       cptr_ssh: "list_hosts(workspace_id), run(workspace_id,alias,command,wait_seconds?), status(workspace_id,command_id,offset?,wait_seconds?), cancel(workspace_id,command_id)",
-      cptr_factory: "start(workspace_id,mission,acceptance_criteria,policy,budget?,model_id?,idempotency_key?), status(run_id), events(run_id,cursor?,limit?), evidence(run_id,cursor?,limit?), message(run_id,content,idempotency_key?), pause(run_id,idempotency_key), resume(run_id,idempotency_key), approve(run_id,approval_id,approved,note?,idempotency_key?), stop(run_id,idempotency_key,timeout_ms?)",
+      cptr_factory: "Capability OS kernel: inspect(task_id,artifact_digest?,limit?), resolve(task_id,required,optional?,forbidden?), forge(task_id,operation,payload), execute(task_id,capability_digest,lease_id?,spec?,inputs?,approval_id?), acquire(task_id,operation,payload), reflect(task_id,kind,claims,artifact_digest?,lease_id?,comparison?,change_class?,promotion_target_state?,owner_approval_id?). Dark Factory compatibility: start(workspace_id,mission,acceptance_criteria,policy,budget?,model_id?,idempotency_key?), status(run_id), events(run_id,cursor?,limit?), evidence(run_id,cursor?,limit?), message(run_id,content,idempotency_key?), pause(run_id,idempotency_key), resume(run_id,idempotency_key), approve(run_id,approval_id,approved,note?,idempotency_key?), stop(run_id,idempotency_key,timeout_ms?)",
       cptr_benchmark: "start(suite_id?), submit(run_id), get(run_id), leaderboard(suite_id?)",
       cptr_agent_task: "models(), list(workspace_id?,status?,limit?), start(workspace_id,prompt,model_id?,execution_policy?,workbench_session_id?), execute(workspace_id,prompt,model_id?,wait_seconds?,execution_policy?,workbench_session_id?), events(task_id,after_sequence?,max_events?), get(task_id), output(task_id,offset?,max_chars?), review(task_id,max_diff_bytes?), review_decision(task_id,decision,note?,idempotency_key?), message(task_id,content,idempotency_key?), cancel(task_id)",
       cptr_agent_monitor: "list(workspace_id?,status?,limit?), start(workspace_id,goal,acceptance_criteria,model_id?,execution_policy?,workbench_session_id?), get(monitor_id), events(monitor_id,after_sequence?,max_events?), evidence(monitor_id,scope_id?), steer(monitor_id,content,idempotency_key?), approve(monitor_id,approval_id,approved,note?), cancel(monitor_id)",
@@ -3705,11 +3705,18 @@ export function createMcpServer(
 
     registerCompactDomain(
       "cptr_factory",
-      "Manage Dark Factory runs",
-      ["start", "status", "events", "evidence", "message", "pause", "resume", "approve", "stop"],
+      "Operate the CPTR Capability OS and Dark Factory compatibility surface",
+      ["inspect", "resolve", "forge", "execute", "acquire", "reflect", "start", "status", "events", "evidence", "message", "pause", "resume", "approve", "stop"],
       { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
       async (action, payload) => {
         switch (action) {
+          case "inspect":
+          case "resolve":
+          case "forge":
+          case "execute":
+          case "acquire":
+          case "reflect":
+            return c.capabilityOs(action, payload);
           case "start": return c.startFactoryRun(payload);
           case "status": return c.getFactoryRun(compactText(payload, "run_id"));
           case "events": return c.getFactoryEvents(payload);
