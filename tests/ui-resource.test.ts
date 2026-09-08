@@ -45,6 +45,7 @@ test("publishes the configured widget domain and bounded MCP Apps metadata", asy
   assert.match(resource.contents[0].text, /Waiting for terminal session…/);
   assert.match(resource.contents[0].text, /Terminal UI ready\./);
   assert.match(resource.contents[0].text, /viewport-fit=cover/);
+  assert.match(resource.contents[0].text, /name="color-scheme" content="dark light"/);
   assert.doesNotMatch(resource.contents[0].text, /Ready for real CPTR activity/);
   assert.doesNotMatch(resource.contents[0].text, /<div id="root"><\/div>/);
 });

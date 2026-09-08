@@ -73,7 +73,7 @@ export async function createWorkbenchResource(
     ? CRITICAL_TERMINAL_GEOMETRY
     : `<style>${styles}</style><script type="module">${bundle}</script>`;
   const text = `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="dark">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="dark light">
 <title>CPTR Live Terminal</title>${assetMarkup}</head><body><div id="root">${STATIC_TERMINAL_SHELL}</div>${reloadScript}</body></html>`;
   return {
     contents: [{

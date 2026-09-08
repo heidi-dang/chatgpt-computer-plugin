@@ -12,7 +12,11 @@
   --tw: #f0f6fc;
   --tk: #484f58;
 }
-:root[data-theme="light"] { --tr:#cf222e; --tg:#1a7f37; --ty:#9a6700; --tb:#0969da; --tm:#8250df; --tc:#1b7c83; --tw:#24292f; --tk:#57606a; }
+:root[data-theme="light"] { color-scheme: light; color:#172230; --tr:#cf222e; --tg:#1a7f37; --ty:#9a6700; --tb:#0969da; --tm:#8250df; --tc:#1b7c83; --tw:#24292f; --tk:#57606a; }
+:root[data-theme="dark"] { color-scheme: dark; }
+:root[data-theme="light"] button { border-color:#c7d4e1; color:#26384a; background:#ffffff; }
+:root[data-theme="light"] button:hover:not(:disabled) { border-color:#9db6cf; background:#edf4fb; }
+:root[data-theme="light"] button.danger { border-color:#d8b8be; color:#8c3948; background:#fff6f7; }
 
 * { box-sizing: border-box; }
 html, body, #root { margin: 0; width: 100%; max-width: 100%; min-width: 0; min-height: 100%; background: transparent; }
@@ -431,10 +435,10 @@ button.danger { border-color: #65404a; color: #efc2c2; background: #28181e; }
 .worker-footer > div { gap: 6px; }
 
 @media (prefers-color-scheme: light) {
-  :root { color-scheme: light; color: #172230; }
-  button { border-color: #c7d4e1; color: #26384a; background: #ffffff; }
-  button:hover:not(:disabled) { border-color: #9db6cf; background: #edf4fb; }
-  button.danger { border-color: #d8b8be; color: #8c3948; background: #fff6f7; }
+  :root:not([data-theme]) { color-scheme: light; color: #172230; }
+  :root:not([data-theme]) button { border-color: #c7d4e1; color: #26384a; background: #ffffff; }
+  :root:not([data-theme]) button:hover:not(:disabled) { border-color: #9db6cf; background: #edf4fb; }
+  :root:not([data-theme]) button.danger { border-color: #d8b8be; color: #8c3948; background: #fff6f7; }
 }
 
 @media (max-width: 560px) {

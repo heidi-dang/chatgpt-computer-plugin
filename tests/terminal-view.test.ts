@@ -248,6 +248,9 @@ test("terminal CSS preserves the reference desktop and mobile geometry", () => {
   assert.match(css, /-webkit-text-size-adjust:\s*100%/);
   assert.match(css, /touch-action:\s*pan-y/);
   assert.match(css, /safe-area-inset-left/);
+  assert.match(css, /:root\[data-theme="light"\][^{]*\{[^}]*color-scheme:\s*light/);
+  assert.match(css, /:root\[data-theme="dark"\][^{]*\{[^}]*color-scheme:\s*dark/);
+  assert.match(css, /@media \(prefers-color-scheme: light\)[\s\S]*:root:not\(\[data-theme\]\)/);
   assert.match(css, /@media \(max-width: 560px\) and \(orientation: landscape\)/);
   assert.equal(css.includes(".terminal-toolbar"), false);
   assert.equal(css.includes(".terminal-seq"), false);
