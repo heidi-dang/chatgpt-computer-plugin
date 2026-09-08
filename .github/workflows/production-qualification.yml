@@ -10,7 +10,7 @@ on:
       run_managed_oauth_contract:
         description: Run the authenticated MCP contract with a short-lived Managed OAuth client token
         required: false
-        default: false
+        default: true
         type: boolean
   schedule:
     - cron: "43 3 * * *"
@@ -140,4 +140,50 @@ jobs:
             echo '- auth path: Cloudflare Managed OAuth client token'
             echo '- MCP contract: passed'
             echo '- expected tool surface: compact'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  manual-release-acceptance:
+    name: Manual exact-SHA release acceptance
+    if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+    needs:
+      - public-edge
+      - authenticated-contract
+      - managed-oauth-authenticated-contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require public-edge qualification
+        run: |
+          test "${{ needs['public-edge'].result }}" = "success"
+
+      - name: Require auth-mode-specific authenticated contract
+        env:
+          EDGE_AUTH_MODE: ${{ vars.CPTR_EDGE_AUTH_MODE }}
+          RUN_MANAGED_OAUTH_CONTRACT: ${{ inputs.run_managed_oauth_contract }}
+          NATIVE_CONTRACT_RESULT: ${{ needs['authenticated-contract'].result }}
+          MANAGED_CONTRACT_RESULT: ${{ needs['managed-oauth-authenticated-contract'].result }}
+        run: |
+          case "$EDGE_AUTH_MODE" in
+            native)
+              test "$NATIVE_CONTRACT_RESULT" = "success"
+              ;;
+            cloudflare-managed)
+              test "$RUN_MANAGED_OAUTH_CONTRACT" = "true"
+              test "$MANAGED_CONTRACT_RESULT" = "success"
+              ;;
+            *)
+              echo "Unsupported production edge auth mode: $EDGE_AUTH_MODE" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Record manual release acceptance
+        run: |
+          {
+            echo '### Manual exact-SHA release acceptance'
+            echo
+            echo "- release: \`${{ inputs.expected_release_sha }}\`"
+            echo "- edge auth mode: \`${{ vars.CPTR_EDGE_AUTH_MODE }}\`"
+            echo '- public edge: passed'
+            echo '- authenticated MCP contract: passed'
           } >> "$GITHUB_STEP_SUMMARY"
