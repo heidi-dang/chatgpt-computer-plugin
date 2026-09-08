@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TerminalRow } from "./state.js";
 
 export type TerminalViewProps = {
@@ -237,7 +237,7 @@ export function TerminalView({
   const [renderedRowLimit, setRenderedRowLimit] = useState(initialRenderedRowLimit);
   const state = displayState(status, connection);
   const transport = transportState(connection);
-  const exitCode = exitCodeFromRows(rows);
+  const exitCode = useMemo(() => exitCodeFromRows(rows), [rows]);
   const hiddenRowCount = Math.max(0, rows.length - renderedRowLimit);
   const visibleRows = useMemo(
     () => hiddenRowCount ? rows.slice(rows.length - renderedRowLimit) : rows,
@@ -265,7 +265,7 @@ export function TerminalView({
     if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
   }, []);
 
-  const onScroll = () => {
+  const onScroll = useCallback(() => {
     if (scrollFrame.current !== null) return;
     scrollFrame.current = window.requestAnimationFrame(() => {
       scrollFrame.current = null;
@@ -274,7 +274,7 @@ export function TerminalView({
       onScrollTopChange?.(element.scrollTop);
       setFollow(element.scrollHeight - element.scrollTop - element.clientHeight < 24);
     });
-  };
+  }, [onScrollTopChange]);
 
   return <section className="terminal-shell" data-state={state} data-transport={transport} aria-label="CPTR live terminal">
     <header className="terminal-header">

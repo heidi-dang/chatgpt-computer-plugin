@@ -307,6 +307,10 @@ export function BrowserSurface({
           }
           if (!response.ok) throw new Error(`browser frame unavailable (${response.status})`);
           await drawFrame(response);
+          // Throttle to ~11fps maximum client-side to prevent CPU/network
+          // saturation when the server has frames queued. The server caps at
+          // 10fps but frame-ready latency jitter can cause brief bursts.
+          await new Promise((resolve) => window.setTimeout(resolve, 90));
         }
       } catch (error) {
         if (!stopped && !(error instanceof DOMException && error.name === "AbortError")) {

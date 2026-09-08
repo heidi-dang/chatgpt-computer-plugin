@@ -720,6 +720,11 @@ function useLiveSession(
         let eventName = "message";
         let data: string[] = [];
 
+        // Batch events from a single chunk into one setState call to avoid
+        // triggering multiple React re-renders when several events arrive
+        // together (common during replay and high-frequency terminal output).
+        const eventBatch: WorkbenchEvent[] = [];
+
         const dispatch = () => {
           if (!data.length) return;
           try {
@@ -734,7 +739,7 @@ function useLiveSession(
               const event = value as WorkbenchEvent;
               if (event.sequence > liveTarget.current.cursor) {
                 liveTarget.current.cursor = event.sequence;
-                setState((current) => reduceWorkbenchEvent(current, event));
+                eventBatch.push(event);
               }
               if (eventTerminatesWorkbench(event)) terminalSeen = true;
             }
@@ -743,6 +748,12 @@ function useLiveSession(
           }
           eventName = "message";
           data = [];
+        };
+
+        const flushBatch = () => {
+          if (!eventBatch.length) return;
+          const batch = eventBatch.splice(0);
+          setState((current) => reduceWorkbenchEvents(current, batch));
         };
 
         while (!stopped && !terminalFailure) {
@@ -756,8 +767,11 @@ function useLiveSession(
             else if (line.startsWith("event:")) eventName = line.slice(6).trim();
             else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
           }
+          // Flush accumulated events from this chunk in a single setState
+          flushBatch();
         }
         if (!stopped && data.length) dispatch();
+        flushBatch();
         if (!stopped && !terminalSeen && !terminalFailure) scheduleRetry(consume);
       } catch (error) {
         if (stopped || (error instanceof DOMException && error.name === "AbortError")) return;

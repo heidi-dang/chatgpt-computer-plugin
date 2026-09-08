@@ -193,7 +193,11 @@ export function eventTerminatesWorkbench(event: WorkbenchEvent): boolean {
 }
 
 function bounded<T>(items: T[], limit: number): T[] {
-  return items.length > limit ? items.slice(items.length - limit) : items;
+  // Return same reference when already within bounds to avoid GC pressure
+  // on every SSE event. The caller spreads into a new array before calling
+  // bounded, so the identity check is about avoiding slice on the hot path.
+  if (items.length <= limit) return items;
+  return items.slice(items.length - limit);
 }
 
 function stringValue(value: unknown, fallback = ""): string {
@@ -213,7 +217,15 @@ export function appendDirectWorkerActivity(
   const workerId = stringValue(payload.worker_id);
   if (!workerId) return state;
   const existing = state.workers[workerId];
-  if (existing?.activity.some((row) => row.id === event.event_id)) return state;
+  // Check only the last 8 activity rows for dedup. Worker events arrive
+  // in sequence so duplicates cluster at the tail.
+  if (existing) {
+    const a = existing.activity;
+    const start = Math.max(0, a.length - 8);
+    for (let i = start; i < a.length; i++) {
+      if (a[i].id === event.event_id) return state;
+    }
+  }
   const status = stringValue(payload.status, existing?.status ?? "READY").toUpperCase();
   const summary = stringValue(payload.summary, existing?.summary ?? "Worker ready");
   const changedPaths = stringArray(payload.changed_paths) ?? existing?.changedPaths ?? [];
@@ -262,7 +274,14 @@ export function appendDirectWorkerActivity(
 
 export function appendMcpToolActivity(state: WorkbenchState, activity: McpToolActivity): WorkbenchState {
   const rowPrefix = `${activity.event_id}:mcp`;
-  if (state.transcript.some((row) => row.id.startsWith(rowPrefix))) return state;
+  // Check only the last 12 rows for dedup instead of scanning the entire
+  // 2000-row transcript. MCP events arrive in near-real-time order so
+  // duplicates only appear near the tail.
+  const tail = state.transcript;
+  const scanStart = Math.max(0, tail.length - 12);
+  for (let i = scanStart; i < tail.length; i++) {
+    if (tail[i].id.startsWith(rowPrefix)) return state;
+  }
   const payload = activity.payload ?? {};
   const toolName = stringValue(payload.tool_name, "CPTR tool");
   const summary = stringValue(payload.summary, `ChatGPT completed ${toolName}.`);
@@ -411,13 +430,19 @@ export function initialWorkbenchState(): WorkbenchState {
 
 export function reduceWorkbenchEvent(state: WorkbenchState, event: WorkbenchEvent): WorkbenchState {
   if (!Number.isFinite(event.sequence) || event.sequence <= state.lastSequence) return state;
+  const authoritativeStatus = authoritativeWorkbenchStatus(event);
+  const rows = terminalRows(event);
+  // Avoid allocating a new state object when the event only advances the
+  // sequence counter and produces no visible change. This is common for
+  // heartbeats and events the terminal view does not render.
+  if (!authoritativeStatus && !rows.length) {
+    return { ...state, lastSequence: event.sequence };
+  }
   const next: WorkbenchState = {
     ...state,
     lastSequence: event.sequence,
   };
-  const authoritativeStatus = authoritativeWorkbenchStatus(event);
   if (authoritativeStatus) next.status = authoritativeStatus;
-  const rows = terminalRows(event);
   if (rows.length) {
     next.transcript = bounded([...state.transcript, ...rows], MAX_TERMINAL_ROWS);
   }
