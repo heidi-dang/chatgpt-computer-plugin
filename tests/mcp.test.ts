@@ -169,6 +169,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.notEqual(tools.get("cptr_workspace_run_test_target")?.inputSchema.properties?.target, undefined);
   assert.match(tools.get("cptr_code_run_command")?.title ?? "", /^\[ChatGPT Direct Coding\]/);
   assert.match(tools.get("cptr_code_run_command")?.description ?? "", /^Direct Coding\./);
+  assert.match(tools.get("cptr_code_run_command")?.description ?? "", /# cptr-root: use root/);
   assert.doesNotMatch(tools.get("cptr_code_run_command")?.description ?? "", /ChatGPT itself must inspect, edit, run, verify/);
   assert.match(tools.get("cptr_start_task")?.title ?? "", /^\[Delegated Agent\]/);
   assert.match(tools.get("cptr_start_task")?.description ?? "", /^Delegated Agent; requires prompt-scoped `allow:delegate`\./);

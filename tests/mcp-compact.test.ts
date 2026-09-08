@@ -68,6 +68,7 @@ test("compact MCP surface exposes 18 domain tools under 100 KB while legacy stay
   assert.ok(workspaceAction?.enum?.includes("create"));
   assert.match(compactTools.get("cptr_workspace")?.description ?? "", /create\(path/);
   assert.match(compactTools.get("cptr_command")?.description ?? "", /run\(workspace_id,command/);
+  assert.match(compactTools.get("cptr_command")?.description ?? "", /# cptr-root: use root/);
   const factoryAction = (compactTools.get("cptr_factory")?.inputSchema as {
     properties?: { action?: { enum?: string[] } };
   }).properties?.action;
@@ -301,14 +302,18 @@ test("compact command run preserves durable Workbench command binding", async ()
     last_event_at: null,
     archived_at: null,
   });
-  (computer as any).runCodingCommand = async () => ({
-    command_id: "cmd-1",
-    status: "RUNNING",
-    output: "",
-    output_offset: 0,
-    next_offset: 0,
-    output_truncated: false,
-  });
+  let commandInput: unknown = null;
+  (computer as any).runCodingCommand = async (input: unknown) => {
+    commandInput = structuredClone(input);
+    return {
+      command_id: "cmd-1",
+      status: "RUNNING",
+      output: "",
+      output_offset: 0,
+      next_offset: 0,
+      output_truncated: false,
+    };
+  };
   let binding: unknown = null;
   (computer as any).bindWorkbenchSession = async (input: unknown) => {
     binding = structuredClone(input);
@@ -333,6 +338,11 @@ test("compact command run preserves durable Workbench command binding", async ()
     },
   });
   assert.equal(result.isError, undefined);
+  assert.deepEqual(commandInput, {
+    workspace_id: "workspace-1",
+    command: "printf compact",
+    workbench_session_id: "wbs_compact_command_0001",
+  });
   assert.deepEqual(binding, {
     session_id: "wbs_compact_command_0001",
     target_type: "command",
