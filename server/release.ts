@@ -50,8 +50,9 @@ export function currentPluginUpdateManifest(
     legacy_registered_tool_count: MCP_LEGACY_REGISTERED_TOOL_COUNT,
     release_sha: env.GIT_COMMIT_SHA ?? env.RAILWAY_GIT_COMMIT_SHA ?? env.CPTR_WORKBENCH_BUILD_ID ?? null,
     released_at: env.CPTR_RELEASED_AT?.trim() || "2026-09-08",
-    summary: `CPTR Computer v${CPTR_APP_VERSION} completes the compact Capability OS release with restart-safe live state, hardened cross-repo security, and provider-compatible OAuth qualification.`,
+    summary: `CPTR Computer v${CPTR_APP_VERSION} restores Live Workbench activity routing across compact stateless MCP requests while preserving the Capability OS security and execution boundaries.`,
     changes: [
+      "Restores the ChatGPT Official Live Terminal across fresh compact stateless MCP servers by routing every supported call through the owning Workbench session, recognizing nested compact payload target identities, and stripping route-only metadata before backend dispatch.",
       "Completes the compact 18-tool Capability OS edge while keeping execution, persistence, authority, recovery, MCP acquisition, and artifact ownership server-authoritative in CPTR.",
       "Makes Live Workbench restart-safe with sealed capabilities and durable generation/revocation state backed by the configured production state database.",
       "Qualifies provider-specific OAuth/DCR profiles for ChatGPT, Claude, Gemini CLI, and Grok while preserving fail-closed exact-SHA release verification.",
