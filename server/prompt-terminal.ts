@@ -334,7 +334,11 @@ export class PromptTerminalStore {
     } as PromptTerminalEvent;
     session.events.push(fullEvent);
     if (session.events.length > this.maxEvents) {
-      session.events.splice(0, session.events.length - this.maxEvents);
+      // Trim to 75% of max to reduce splice frequency. Each splice is O(n)
+      // because it shifts all remaining elements. By trimming to 75%, we
+      // amortize the cost over more appends before the next trim.
+      const keepCount = Math.floor(this.maxEvents * 0.75);
+      session.events.splice(0, session.events.length - keepCount);
     }
     for (const listener of session.listeners) listener(fullEvent);
     return fullEvent;
@@ -395,14 +399,15 @@ export class PromptTerminalStore {
     session.ticket = this.codec.seal("prompt", claims);
     this.sessions.set(session.ticket, session);
     this.sessionsById.set(session.sessionId, session.ticket);
-    for (const [workbenchSessionId, mappedTicket] of this.workbenchTickets) {
-      if (mappedTicket === previousTicket) this.workbenchTickets.set(workbenchSessionId, session.ticket);
+    // Remap via stored identity sets instead of scanning all maps O(1) vs O(n).
+    if (session.workbenchSessionId) {
+      this.workbenchTickets.set(session.workbenchSessionId, session.ticket);
     }
-    for (const [browserSessionId, mappedTicket] of this.browserSessionTickets) {
-      if (mappedTicket === previousTicket) this.browserSessionTickets.set(browserSessionId, session.ticket);
+    for (const browserSessionId of session.browserSessionIds) {
+      this.browserSessionTickets.set(browserSessionId, session.ticket);
     }
-    for (const [targetKey, mappedTicket] of this.liveTargetTickets) {
-      if (mappedTicket === previousTicket) this.liveTargetTickets.set(targetKey, session.ticket);
+    for (const targetKey of session.liveTargetKeys) {
+      this.liveTargetTickets.set(targetKey, session.ticket);
     }
     return this.metadata(session);
   }
@@ -521,11 +526,13 @@ export class PromptTerminalStore {
     session.listeners.clear();
     this.sessions.delete(ticket);
     if (this.sessionsById.get(session.sessionId) === ticket) this.sessionsById.delete(session.sessionId);
-    for (const [workbenchSessionId, mappedTicket] of this.workbenchTickets) {
-      if (mappedTicket === ticket) this.workbenchTickets.delete(workbenchSessionId);
+    // Direct delete via stored session identity instead of iterating all maps.
+    // This turns O(n) scans into O(1) lookups for the common case.
+    if (session.workbenchSessionId && this.workbenchTickets.get(session.workbenchSessionId) === ticket) {
+      this.workbenchTickets.delete(session.workbenchSessionId);
     }
-    for (const [browserSessionId, mappedTicket] of this.browserSessionTickets) {
-      if (mappedTicket === ticket) this.browserSessionTickets.delete(browserSessionId);
+    for (const browserSessionId of session.browserSessionIds) {
+      if (this.browserSessionTickets.get(browserSessionId) === ticket) this.browserSessionTickets.delete(browserSessionId);
     }
     for (const targetKey of session.liveTargetKeys) {
       if (this.liveTargetTickets.get(targetKey) === ticket) this.liveTargetTickets.delete(targetKey);
@@ -706,11 +713,14 @@ export class PromptTerminalGateway {
       let cursor = after;
       while (!closed && Date.now() < deadline) {
         while (queue.length && !closed) {
-          const event = queue.shift()!;
-          if (event.sequence <= cursor) continue;
-          cursor = event.sequence;
-          const frame = `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
-          if (!(await write(frame))) return;
+          const batch = queue.splice(0);
+          for (const event of batch) {
+            if (closed) break;
+            if (event.sequence <= cursor) continue;
+            cursor = event.sequence;
+            const frame = `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+            if (!(await write(frame))) return;
+          }
         }
         if (closed) return;
         const remaining = Math.min(heartbeatMs, Math.max(0, deadline - Date.now()));

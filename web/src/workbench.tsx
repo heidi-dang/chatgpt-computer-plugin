@@ -29,7 +29,7 @@ type LiveMetadata = {
   snapshotUrl?: string;
   renewUrl?: string;
   expiresAt?: number;
-  targetType?: "task" | "monitor" | "command";
+  targetType?: "workbench" | "task" | "monitor" | "command";
   targetId?: string;
   workspaceId?: string;
 };
@@ -197,6 +197,18 @@ function useWorkbenchAutoSize() {
   }, []);
 }
 
+function findLiveMetadata(value: unknown): LiveMetadata | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const direct = record["cptr/live"];
+  if (direct && typeof direct === "object" && "ticket" in direct) return direct as LiveMetadata;
+  for (const key of ["_meta", "params", "result", "toolResult"]) {
+    const found = findLiveMetadata(record[key]);
+    if (found) return found;
+  }
+  return null;
+}
+
 function findPromptMetadata(value: unknown): PromptMetadata | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
@@ -249,86 +261,100 @@ function usePromptActivity(
     let retryAttempts = 0;
     let terminalFailure = false;
 
-    const applyEvent = (event: PromptEvent, isLiveEvent = false) => {
-      if (event.sequence <= cursor.current) return;
-      cursor.current = event.sequence;
-      if (event.type === "mcp.tool") {
-        const toolName = typeof event.payload?.tool_name === "string" ? event.payload.tool_name : "";
-        const toolStatus = typeof event.payload?.status === "string" ? event.payload.status.toUpperCase() : "";
-        activePromptTools.current = nextPromptActiveToolCount(activePromptTools.current, toolStatus);
-        setStatus(promptLifecycleStatus(activePromptTools.current));
-        if (toolName === "cptr_open_live_workbench" || toolName === "cptr_render_live_terminal") return;
-        setState((current) => appendMcpToolActivity(current, {
-          event_id: event.event_id,
-          timestamp: event.timestamp,
-          type: "mcp.tool",
-          payload: {
-            tool_name: event.payload?.tool_name,
-            summary: event.payload?.summary,
-            status: event.payload?.status,
-            arguments_json: event.payload?.arguments_json,
-            result_json: event.payload?.result_json,
-            error: event.payload?.error,
-          },
-        }));
-      } else if (event.type === "direct.worker") {
-        const payload = event.payload;
-        if (typeof payload?.worker_id !== "string") return;
-        // Direct worker lifecycle events update compact metadata only. Preserve
-        // any command live.bind target so later WORKING/COMPLETE metadata cannot
-        // detach the unified terminal from the worker's real stdout/stderr SSE.
-        setState((current) => appendDirectWorkerActivity(current, {
-          event_id: event.event_id,
-          timestamp: event.timestamp,
-          type: "direct.worker",
-          payload: {
-            worker_id: payload.worker_id,
-            workspace_id: payload.workspace_id,
-            name: payload.name,
-            responsibility: payload.responsibility,
-            repo_path: payload.repo_path,
-            status: payload.status,
-            summary: payload.summary,
-            changed_file_count: payload.changed_file_count,
-            changed_paths: payload.changed_paths,
-            active_command_ids: payload.active_command_ids,
-            recent_command_ids: payload.recent_command_ids,
-          },
-        } as DirectWorkerActivity));
-      } else if (event.type === "live.bind" && event.payload?.live) {
-        setMeta(event.payload.live);
-      } else if (event.type === "browser.surface") {
-        const payload = event.payload ?? {};
-        const sessionId = typeof payload.session_id === "string" && payload.session_id ? payload.session_id : null;
-        // Discovery/pairing activity is not a renderable browser surface. Keep
-        // the terminal visible until CPTR has bound a real browser session.
-        if (!sessionId) return;
-        const stateValue = typeof payload.state === "string" ? payload.state : "OBSERVING";
-        const owner = typeof payload.owner === "string" ? payload.owner : undefined;
-        const mode = owner === "none"
-          ? "DISCONNECTED"
-          : (["OBSERVING", "AGENT_CONTROL", "HANDOFF_REQUIRED", "HUMAN_CONTROL", "DISCONNECTED"] as const)
-              .includes(stateValue as BrowserSurfaceState["mode"])
-            ? stateValue as BrowserSurfaceState["mode"]
-            : "OBSERVING";
-        const shouldAutoOpenBrowser =
-          isLiveEvent &&
-          owner !== "none" &&
-          surfacePreference.current === undefined &&
-          visibleBrowserSession.current !== sessionId;
-        if (owner !== "none") visibleBrowserSession.current = sessionId;
-        setBrowserSurface({
-          action: typeof payload.action === "string" ? payload.action : "unknown",
-          ...(typeof payload.device_id === "string" ? { deviceId: payload.device_id } : {}),
-          sessionId,
-          mode,
-          ...(owner ? { owner } : {}),
-          ...(typeof payload.epoch === "number" ? { epoch: payload.epoch } : {}),
-          ...(typeof payload.hostname === "string" ? { hostname: payload.hostname } : {}),
+    const applyEvents = (events: readonly PromptEvent[], isLiveEvent = false) => {
+      const stateReducers: Array<(current: WorkbenchState) => WorkbenchState> = [];
+      for (const event of events) {
+        if (event.sequence <= cursor.current) continue;
+        cursor.current = event.sequence;
+        if (event.type === "mcp.tool") {
+          const toolName = typeof event.payload?.tool_name === "string" ? event.payload.tool_name : "";
+          const toolStatus = typeof event.payload?.status === "string" ? event.payload.status.toUpperCase() : "";
+          activePromptTools.current = nextPromptActiveToolCount(activePromptTools.current, toolStatus);
+          setStatus(promptLifecycleStatus(activePromptTools.current));
+          if (toolName === "cptr_open_live_workbench" || toolName === "cptr_render_live_terminal") continue;
+          stateReducers.push((current) => appendMcpToolActivity(current, {
+            event_id: event.event_id,
+            timestamp: event.timestamp,
+            type: "mcp.tool",
+            payload: {
+              tool_name: event.payload?.tool_name,
+              summary: event.payload?.summary,
+              status: event.payload?.status,
+              arguments_json: event.payload?.arguments_json,
+              result_json: event.payload?.result_json,
+              error: event.payload?.error,
+            },
+          }));
+        } else if (event.type === "direct.worker") {
+          const payload = event.payload;
+          if (typeof payload?.worker_id !== "string") continue;
+          // Direct worker lifecycle events update compact metadata only. Preserve
+          // any command live.bind target so later WORKING/COMPLETE metadata cannot
+          // detach the unified terminal from the worker's real stdout/stderr SSE.
+          stateReducers.push((current) => appendDirectWorkerActivity(current, {
+            event_id: event.event_id,
+            timestamp: event.timestamp,
+            type: "direct.worker",
+            payload: {
+              worker_id: payload.worker_id,
+              workspace_id: payload.workspace_id,
+              name: payload.name,
+              responsibility: payload.responsibility,
+              repo_path: payload.repo_path,
+              status: payload.status,
+              summary: payload.summary,
+              changed_file_count: payload.changed_file_count,
+              changed_paths: payload.changed_paths,
+              active_command_ids: payload.active_command_ids,
+              recent_command_ids: payload.recent_command_ids,
+            },
+          } as DirectWorkerActivity));
+        } else if (event.type === "live.bind" && event.payload?.live) {
+          setMeta(event.payload.live);
+        } else if (event.type === "browser.surface") {
+          const payload = event.payload ?? {};
+          const sessionId = typeof payload.session_id === "string" && payload.session_id ? payload.session_id : null;
+          // Discovery/pairing activity is not a renderable browser surface. Keep
+          // the terminal visible until CPTR has bound a real browser session.
+          const handleBrowserSurface = () => {
+            if (!sessionId) return;
+            const stateValue = typeof payload.state === "string" ? payload.state : "OBSERVING";
+            const owner = typeof payload.owner === "string" ? payload.owner : undefined;
+            const mode = owner === "none"
+              ? "DISCONNECTED"
+              : (["OBSERVING", "AGENT_CONTROL", "HANDOFF_REQUIRED", "HUMAN_CONTROL", "DISCONNECTED"] as const)
+                  .includes(stateValue as BrowserSurfaceState["mode"])
+                ? stateValue as BrowserSurfaceState["mode"]
+                : "OBSERVING";
+            const shouldAutoOpenBrowser =
+              isLiveEvent &&
+              owner !== "none" &&
+              surfacePreference.current === undefined &&
+              visibleBrowserSession.current !== sessionId;
+            if (owner !== "none") visibleBrowserSession.current = sessionId;
+            setBrowserSurface({
+              action: typeof payload.action === "string" ? payload.action : "unknown",
+              ...(typeof payload.device_id === "string" ? { deviceId: payload.device_id } : {}),
+              sessionId,
+              mode,
+              ...(owner ? { owner } : {}),
+              ...(typeof payload.epoch === "number" ? { epoch: payload.epoch } : {}),
+              ...(typeof payload.hostname === "string" ? { hostname: payload.hostname } : {}),
+            });
+            if (shouldAutoOpenBrowser) setSurfaceMode("browser");
+          };
+          handleBrowserSurface();
+        }
+      }
+      if (stateReducers.length) {
+        setState((current) => {
+          let next = current;
+          for (const reducer of stateReducers) next = reducer(next);
+          return next;
         });
-        if (shouldAutoOpenBrowser) setSurfaceMode("browser");
       }
     };
+    const applyEvent = (event: PromptEvent, isLiveEvent = false) => applyEvents([event], isLiveEvent);
 
     const applySnapshot = async () => {
       const url = new URL(meta.snapshotUrl!, window.location.href);
@@ -343,7 +369,7 @@ function usePromptActivity(
         throw error;
       }
       const value = await response.json() as { replay?: { events?: PromptEvent[]; last_sequence?: number } };
-      for (const event of value.replay?.events ?? []) applyEvent(event, false);
+      applyEvents(value.replay?.events ?? [], false);
       if (typeof value.replay?.last_sequence === "number") cursor.current = Math.max(cursor.current, value.replay.last_sequence);
     };
 
@@ -425,11 +451,20 @@ function usePromptActivity(
         const decoder = new TextDecoder();
         let buffer = "";
         let data: string[] = [];
+        // Batch prompt events from a single ReadableStream chunk into one
+        // pass to avoid N separate React re-renders during replay bursts
+        // (matches the batching pattern in useLiveSession).
+        const pendingEvents: PromptEvent[] = [];
         const dispatch = () => {
           if (!data.length) return;
-          try { applyEvent(JSON.parse(data.join("\n")) as PromptEvent, true); }
+          try { pendingEvents.push(JSON.parse(data.join("\n")) as PromptEvent); }
           catch { setConnection("received invalid prompt event"); }
           data = [];
+        };
+        const flushPromptBatch = () => {
+          if (!pendingEvents.length) return;
+          const batch = pendingEvents.splice(0);
+          applyEvents(batch, true);
         };
         while (!stopped) {
           const next = await reader.read();
@@ -441,8 +476,10 @@ function usePromptActivity(
             if (line === "") dispatch();
             else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
           }
+          flushPromptBatch();
         }
         if (!stopped && data.length) dispatch();
+        flushPromptBatch();
         if (!stopped) scheduleRetry(consume);
       } catch (error) {
         if (stopped || (error instanceof DOMException && error.name === "AbortError")) return;
@@ -504,6 +541,7 @@ function usePromptActivity(
 
 function useMcpBridge(
   setPromptMetadata: React.Dispatch<React.SetStateAction<PromptMetadata | null>>,
+  setLiveMetadata: React.Dispatch<React.SetStateAction<LiveMetadata | null>>,
 ) {
   const pending = useRef(new Map<string | number, {
     resolve: (value: unknown) => void;
@@ -515,9 +553,13 @@ function useMcpBridge(
       const message = event.data;
       if (!message) return;
       if (message.method === "ui/notifications/tool-result") {
-        const next = findPromptMetadata(message.params)
+        const source = message.params ?? hostBridge()?.toolResponseMetadata;
+        const nextPrompt = findPromptMetadata(source)
           ?? findPromptMetadata(hostBridge()?.toolResponseMetadata);
-        if (next) setPromptMetadata(next);
+        const nextLive = findLiveMetadata(source)
+          ?? findLiveMetadata(hostBridge()?.toolResponseMetadata);
+        if (nextPrompt) setPromptMetadata(nextPrompt);
+        if (nextLive) setLiveMetadata(nextLive);
         return;
       }
       if (message.id === undefined) return;
@@ -546,7 +588,7 @@ function useMcpBridge(
       for (const request of pending.current.values()) request.reject(new Error("MCP bridge closed"));
       pending.current.clear();
     };
-  }, [setPromptMetadata]);
+  }, [setLiveMetadata, setPromptMetadata]);
 
   return useCallback((name: string, args: Record<string, unknown>) => {
     if (hostBridge()?.callTool) return hostBridge()!.callTool!(name, args);
@@ -588,6 +630,7 @@ function useLiveSession(
     let terminalSeen = false;
     let terminalFailure = false;
     let retryAttempts = 0;
+    const persistentWorkbench = meta.targetType === "workbench";
 
     const renewTicket = async (): Promise<RenewalOutcome> => {
       if (!meta.targetType || !meta.targetId || !meta.renewUrl) return "terminal";
@@ -653,13 +696,17 @@ function useLiveSession(
       };
       const status = value.snapshot?.status;
       if (typeof status === "string") {
-        setState((current) => ({ ...current, status: status.toUpperCase() }));
-        terminalSeen = isTerminalWorkbenchStatus(status);
+        const normalizedStatus = status.toUpperCase();
+        setState((current) => ({
+          ...current,
+          status: persistentWorkbench && normalizedStatus === "OPEN" ? "READY" : normalizedStatus,
+        }));
+        terminalSeen = !persistentWorkbench && isTerminalWorkbenchStatus(normalizedStatus);
       }
       const replayEvents = (value.replay?.events ?? []).filter((event) => event.sequence > liveTarget.current.cursor);
       for (const event of replayEvents) {
         liveTarget.current.cursor = event.sequence;
-        if (eventTerminatesWorkbench(event)) terminalSeen = true;
+        if (!persistentWorkbench && eventTerminatesWorkbench(event)) terminalSeen = true;
       }
       if (replayEvents.length) setState((current) => reduceWorkbenchEvents(current, replayEvents));
       const lastSequence = value.replay?.last_sequence;
@@ -681,7 +728,7 @@ function useLiveSession(
       try {
         setConnection("recovering session");
         await applySnapshot();
-        if (terminalSeen || stopped) return;
+        if ((!persistentWorkbench && terminalSeen) || stopped) return;
         const streamUrl = new URL(meta.streamUrl!, window.location.href);
         streamUrl.searchParams.set("after", String(liveTarget.current.cursor));
         setConnection("connecting");
@@ -720,6 +767,11 @@ function useLiveSession(
         let eventName = "message";
         let data: string[] = [];
 
+        // Batch events from a single chunk into one setState call to avoid
+        // triggering multiple React re-renders when several events arrive
+        // together (common during replay and high-frequency terminal output).
+        const eventBatch: WorkbenchEvent[] = [];
+
         const dispatch = () => {
           if (!data.length) return;
           try {
@@ -727,22 +779,32 @@ function useLiveSession(
             if (eventName === "snapshot") {
               const status = (value as { snapshot?: { status?: string } }).snapshot?.status;
               if (typeof status === "string") {
-                setState((current) => ({ ...current, status: status.toUpperCase() }));
-                terminalSeen = isTerminalWorkbenchStatus(status);
+                const normalizedStatus = status.toUpperCase();
+                setState((current) => ({
+                  ...current,
+                  status: persistentWorkbench && normalizedStatus === "OPEN" ? "READY" : normalizedStatus,
+                }));
+                terminalSeen = !persistentWorkbench && isTerminalWorkbenchStatus(normalizedStatus);
               }
             } else {
               const event = value as WorkbenchEvent;
               if (event.sequence > liveTarget.current.cursor) {
                 liveTarget.current.cursor = event.sequence;
-                setState((current) => reduceWorkbenchEvent(current, event));
+                eventBatch.push(event);
               }
-              if (eventTerminatesWorkbench(event)) terminalSeen = true;
+              if (!persistentWorkbench && eventTerminatesWorkbench(event)) terminalSeen = true;
             }
           } catch {
             setConnection("received invalid event");
           }
           eventName = "message";
           data = [];
+        };
+
+        const flushBatch = () => {
+          if (!eventBatch.length) return;
+          const batch = eventBatch.splice(0);
+          setState((current) => reduceWorkbenchEvents(current, batch));
         };
 
         while (!stopped && !terminalFailure) {
@@ -756,9 +818,12 @@ function useLiveSession(
             else if (line.startsWith("event:")) eventName = line.slice(6).trim();
             else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
           }
+          // Flush accumulated events from this chunk in a single setState
+          flushBatch();
         }
         if (!stopped && data.length) dispatch();
-        if (!stopped && !terminalSeen && !terminalFailure) scheduleRetry(consume);
+        flushBatch();
+        if (!stopped && (persistentWorkbench || !terminalSeen) && !terminalFailure) scheduleRetry(consume);
       } catch (error) {
         if (stopped || (error instanceof DOMException && error.name === "AbortError")) return;
         const status = error && typeof error === "object" && "status" in error
@@ -776,7 +841,7 @@ function useLiveSession(
     };
 
     const wake = () => {
-      if (stopped || terminalSeen || terminalFailure) return;
+      if (stopped || (!persistentWorkbench && terminalSeen) || terminalFailure) return;
       retryAttempts = 0;
       liveTarget.current.renewalAttempts = 0;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
@@ -821,10 +886,10 @@ function OwnedWorkbench() {
   const persistedUiState = useRef<WorkbenchUiState>(restoredUiState.current);
   const surfacePreference = useRef<"terminal" | "browser" | undefined>(restoredUiState.current.surfaceMode);
   const [promptMetadata, setPromptMetadata] = useState<PromptMetadata | null>(() => findPromptMetadata(hostBridge()?.toolResponseMetadata));
-  useMcpBridge(setPromptMetadata);
+  const [meta, setMeta] = useState<LiveMetadata | null>(() => findLiveMetadata(hostBridge()?.toolResponseMetadata));
+  useMcpBridge(setPromptMetadata, setMeta);
   useHostTheme();
   const liveStreamingEnabled = promptMetadata?.streamingEnabled === true;
-  const [meta, setMeta] = useState<LiveMetadata | null>(null);
   const [surfaceMode, setSurfaceMode] = useState<"terminal" | "browser">(restoredUiState.current.surfaceMode ?? "terminal");
   const [browserSurface, setBrowserSurface] = useState<BrowserSurfaceState | null>(null);
   const [terminalViewState, setTerminalViewState] = useState({
@@ -843,7 +908,11 @@ function OwnedWorkbench() {
     viewer.current,
   );
   const targetConnection = useLiveSession(meta, setMeta, setState, liveStreamingEnabled, viewer.current);
-  const connection = meta?.targetId && !isTerminalWorkbenchStatus(state.status) ? targetConnection : promptActivity.connection;
+  const connection = meta?.targetType === "workbench"
+    ? targetConnection
+    : meta?.targetId && !isTerminalWorkbenchStatus(state.status)
+      ? targetConnection
+      : promptActivity.connection;
   const visibleTarget = useRef<string | null>(null);
   const displayStatus = meta?.targetType && meta.targetId ? state.status : promptActivity.status;
 

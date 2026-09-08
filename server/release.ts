@@ -4,7 +4,7 @@ export const MCP_CONTRACT_VERSION = CPTR_APP_VERSION;
 export const MCP_PROTOCOL_VERSION = "2026-07-28";
 export const MCP_CONTRACT_TOOL_COUNT = 84;
 export const MCP_LEGACY_REGISTERED_TOOL_COUNT = 91;
-export const MCP_COMPACT_REGISTERED_TOOL_COUNT = 18;
+export const MCP_COMPACT_REGISTERED_TOOL_COUNT = 17;
 export const CPTR_PLUGIN_VERSION = CPTR_APP_VERSION;
 export const CPTR_PLUGIN_SCHEMA_REVISION = CPTR_APP_VERSION;
 
@@ -53,7 +53,7 @@ export function currentPluginUpdateManifest(
     summary: `CPTR Computer v${CPTR_APP_VERSION} restores Live Workbench activity routing across compact stateless MCP requests while preserving the Capability OS security and execution boundaries.`,
     changes: [
       "Restores the ChatGPT Official Live Terminal across fresh compact stateless MCP servers by routing every supported call through the owning Workbench session, recognizing nested compact payload target identities, and stripping route-only metadata before backend dispatch.",
-      "Completes the compact 18-tool Capability OS edge while keeping execution, persistence, authority, recovery, MCP acquisition, and artifact ownership server-authoritative in CPTR.",
+      "Completes the compact 17-tool Capability OS edge by removing explicit Live Terminal rendering from the normal ChatGPT surface while keeping execution, persistence, authority, recovery, MCP acquisition, and artifact ownership server-authoritative in CPTR.",
       "Makes Live Workbench restart-safe with sealed capabilities and durable generation/revocation state backed by the configured production state database.",
       "Qualifies provider-specific OAuth/DCR profiles for ChatGPT, Claude, Gemini CLI, and Grok while preserving fail-closed exact-SHA release verification.",
       "Adds one compact read-only cptr_memory action for hybrid persistent-memory search, record inspection, bi-temporal timeline reads, and sanitized health; identity/workspace remain server-bound and memory mutation is not exposed to ChatGPT Official.",
@@ -94,6 +94,7 @@ export function currentPluginUpdateManifest(
       "Makes ChatGPT Direct Coding the default tool group and blocks CPTR/model/profile delegation unless the prompt session is explicitly authorized with allow:delegate.",
       "Adds workspace/model caching, task and monitor recovery lists, task events, batched file reads, atomic multi-edits, SHA-256 preconditions, bounded diffs, and typed error envelopes.",
       "Uses authenticated SSE as the primary delegated-task terminal detector and exposes bounded review, command tail, timeout, truncation, idempotency, and quiescence state.",
+      "Moves Live Terminal transport ownership to one backend Workbench stream opened once per session; Direct Coding, delegated tasks/subagents, monitors, and routed command output publish into that stream without per-target ChatGPT render calls.",
       "Keeps the single Live Workbench terminal while preloading safe workspace summaries and forwarding bounded recent redacted events and presentation metadata.",
     ],
     refresh_required: true,

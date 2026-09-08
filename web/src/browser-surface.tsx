@@ -303,10 +303,17 @@ export function BrowserSurface({
               setFrameHealth("waiting");
               setFrameStatus("Browser frames paused — waiting for Chrome…");
             }
+            // Back off 200ms when no new frame is available to avoid busy-spinning
+            // HTTP requests and saturating CPU/network during idle screen states.
+            await new Promise((resolve) => window.setTimeout(resolve, 200));
             continue;
           }
           if (!response.ok) throw new Error(`browser frame unavailable (${response.status})`);
           await drawFrame(response);
+          // Throttle to ~11fps maximum client-side to prevent CPU/network
+          // saturation when the server has frames queued. The server caps at
+          // 10fps but frame-ready latency jitter can cause brief bursts.
+          await new Promise((resolve) => window.setTimeout(resolve, 90));
         }
       } catch (error) {
         if (!stopped && !(error instanceof DOMException && error.name === "AbortError")) {

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TerminalRow } from "./state.js";
 
 export type TerminalViewProps = {
@@ -34,6 +34,16 @@ const ANSI_COLORS = ["black", "red", "green", "yellow", "blue", "magenta", "cyan
 const MAX_RENDERED_ROWS = 600;
 const MOBILE_RENDERED_ROWS = 320;
 const MOBILE_RENDER_QUERY = "(max-width: 560px)";
+const FOLLOW_TAIL_THRESHOLD_PX = 24;
+
+export function isNearTerminalTail(
+  scrollHeight: number,
+  scrollTop: number,
+  clientHeight: number,
+  threshold = FOLLOW_TAIL_THRESHOLD_PX,
+): boolean {
+  return scrollHeight - scrollTop - clientHeight <= Math.max(0, threshold);
+}
 
 function initialRenderedRowLimit(): number {
   if (typeof window === "undefined") return MAX_RENDERED_ROWS;
@@ -224,6 +234,7 @@ export function TerminalView({
 }: TerminalViewProps) {
   const output = useRef<HTMLPreElement>(null);
   const scrollFrame = useRef<number | null>(null);
+  const tailFrame = useRef<number | null>(null);
   const [localFollow, setLocalFollow] = useState(true);
   const follow = controlledFollow ?? localFollow;
   const followRef = useRef(follow);
@@ -237,7 +248,7 @@ export function TerminalView({
   const [renderedRowLimit, setRenderedRowLimit] = useState(initialRenderedRowLimit);
   const state = displayState(status, connection);
   const transport = transportState(connection);
-  const exitCode = exitCodeFromRows(rows);
+  const exitCode = useMemo(() => exitCodeFromRows(rows), [rows]);
   const hiddenRowCount = Math.max(0, rows.length - renderedRowLimit);
   const visibleRows = useMemo(
     () => hiddenRowCount ? rows.slice(rows.length - renderedRowLimit) : rows,
@@ -252,29 +263,54 @@ export function TerminalView({
     return () => media.removeEventListener("change", update);
   }, []);
 
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
+  const pinToTail = useCallback(() => {
+    if (tailFrame.current !== null) return;
+    tailFrame.current = window.requestAnimationFrame(() => {
+      tailFrame.current = null;
+      if (!followRef.current) return;
       const element = output.current;
       if (!element) return;
-      element.scrollTop = follow ? element.scrollHeight : scrollTop;
+      element.scrollTop = element.scrollHeight;
     });
-    return () => window.cancelAnimationFrame(frame);
-  }, [visibleRows, follow, scrollTop]);
+  }, []);
+
+  // New SSE rows can arrive faster than React/browser paint cadence. Coalesce
+  // all follow-tail work into one scroll write per frame so the terminal stays
+  // pinned like `tail -f` without smooth-scroll lag or repeated layout churn.
+  useEffect(() => {
+    if (follow) pinToTail();
+  }, [visibleRows, follow, pinToTail]);
+
+  // When follow-tail is paused, preserve the user's viewport while new rows
+  // continue streaming underneath it.
+  useEffect(() => {
+    if (follow) return;
+    const element = output.current;
+    if (element) element.scrollTop = scrollTop;
+  }, [follow, scrollTop]);
 
   useEffect(() => () => {
     if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
+    if (tailFrame.current !== null) window.cancelAnimationFrame(tailFrame.current);
   }, []);
 
-  const onScroll = () => {
+  const onScroll = useCallback(() => {
     if (scrollFrame.current !== null) return;
     scrollFrame.current = window.requestAnimationFrame(() => {
       scrollFrame.current = null;
       const element = output.current;
       if (!element) return;
       onScrollTopChange?.(element.scrollTop);
-      setFollow(element.scrollHeight - element.scrollTop - element.clientHeight < 24);
+      setFollow(isNearTerminalTail(element.scrollHeight, element.scrollTop, element.clientHeight));
     });
-  };
+  }, [onScrollTopChange]);
+
+  const resumeFollowTail = useCallback(() => {
+    setFollow(true);
+    const element = output.current;
+    if (element) element.scrollTop = element.scrollHeight;
+    pinToTail();
+  }, [pinToTail]);
 
   return <section className="terminal-shell" data-state={state} data-transport={transport} aria-label="CPTR live terminal">
     <header className="terminal-header">
@@ -303,7 +339,7 @@ export function TerminalView({
         {hiddenRowCount > 0 && <span className="terminal-history-note">… {hiddenRowCount} earlier lines retained outside the render window{"\n"}</span>}
         {visibleRows.length ? visibleRows.map((row) => <TerminalLine key={row.id} row={row} />) : <>Terminal UI ready.{"\n"}Waiting for terminal stream…</>}
       </pre>
-      {!follow && <button className="terminal-latest" type="button" onClick={() => setFollow(true)}>Latest</button>}
+      {!follow && <button className="terminal-latest" type="button" onClick={resumeFollowTail}>Latest</button>}
     </section>
 
     <footer className="terminal-footer">

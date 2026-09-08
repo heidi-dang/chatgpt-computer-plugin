@@ -1035,13 +1035,14 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
   const initialResponse = await authorizeDelegation(client);
   const initialMeta = initialResponse._meta as {
     ui?: { resourceUri?: string };
-    "cptr/live"?: unknown;
+    "cptr/live"?: { targetType?: string; targetId?: string };
     "cptr/activity"?: { type?: string };
     "cptr/prompt"?: { ticket?: string };
     "cptr/workspaces"?: Array<Record<string, unknown>>;
   } | undefined;
   assert.equal(initialMeta?.ui, undefined);
-  assert.equal(initialMeta?.["cptr/live"], undefined);
+  assert.equal(initialMeta?.["cptr/live"]?.targetType, "workbench");
+  assert.equal(initialMeta?.["cptr/live"]?.targetId, "wbs_session_00000001");
   assert.equal(initialMeta?.["cptr/activity"]?.type, "mcp.tool");
   assert.equal(workspaceRequests, 1);
   assert.deepEqual(initialMeta?.["cptr/workspaces"], [

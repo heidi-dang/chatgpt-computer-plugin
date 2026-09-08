@@ -8,6 +8,7 @@ import {
   nextPromptActiveToolCount,
   promptLifecycleStatus,
   LiveTargetSession,
+  normalizeWorkbenchEvent,
   reduceWorkbenchEvent,
   reduceWorkbenchEvents,
   type WorkbenchState,
@@ -307,6 +308,30 @@ test("keeps command and tool status scoped below the task lifecycle", () => {
     type: "command.completed",
     payload: { status: "COMPLETE" },
   }), false);
+});
+
+test("unwraps backend Workbench projections into the same terminal reducer contract", () => {
+  const projectedChunk = {
+    event_id: "workbench-projected-chunk",
+    sequence: 1,
+    timestamp: "2026-09-08T00:00:00Z",
+    target: { type: "workbench" as const, id: "wbs_1234567890abcdef" },
+    type: "terminal.chunk",
+    payload: {
+      target: { type: "command", id: "cmd-1", workspace_id: "ws-1" },
+      payload: { command_id: "cmd-1", stream: "stdout", text: "backend-owned-output\n" },
+      source_sequence: 4,
+      source_event_id: "command-source-event",
+    },
+  };
+  const normalized = normalizeWorkbenchEvent(projectedChunk);
+  assert.deepEqual(normalized.target, { type: "command", id: "cmd-1", workspace_id: "ws-1" });
+  assert.equal(normalized.payload?.text, "backend-owned-output\n");
+
+  const state = reduceWorkbenchEvent(initialWorkbenchState(), projectedChunk);
+  assert.equal(state.lastSequence, 1, "Workbench stream sequence remains authoritative for replay");
+  assert.equal(state.transcript.at(-1)?.text, " ");
+  assert.equal(state.transcript.at(-2)?.text, "backend-owned-output");
 });
 
 test("uses authoritative command target lifecycle and real exit code", () => {

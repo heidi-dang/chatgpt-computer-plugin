@@ -495,7 +495,6 @@ const COMPACT_PASSTHROUGH_TOOL_NAMES = new Set([
   "cptr_user_chrome",
   "cptr_chrome_browser",
   "cptr_plugin_update",
-  "cptr_render_live_terminal",
 ]);
 
 const COMPACT_DOMAIN_TOOL_NAMES = new Set([
@@ -570,7 +569,7 @@ export const CLIENT_MODEL_INSTRUCTION =
 export const PERSISTENT_MEMORY_INSTRUCTION =
   "When prior user preferences, workspace decisions, procedures, corrections, failure history, or historical state could materially affect a CPTR task, use cptr_memory with action=search before guessing. Treat persistent memory as contextual knowledge rather than live host truth: honor trust/staleness signals and verify mutable operational facts with current evidence before acting.";
 export const LIVE_WORKBENCH_ROUTING_INSTRUCTION =
-  "After cptr_open_live_workbench returns a session_id, pass that exact value as workbench_session_id on each later CPTR call whose schema exposes the field so stateless MCP requests route activity back to the same Live Terminal. This is a UI routing hint only and grants no authority.";
+  "After cptr_open_live_workbench returns a session_id, pass that exact value as workbench_session_id on each later CPTR call whose schema exposes the field. CPTR validates that routing hint server-side and automatically publishes owned command/task/monitor activity into the same backend Workbench stream; do not call a render/bind tool during normal execution. The routing hint grants no authority.";
 export const MCP_SERVER_INSTRUCTIONS = `${DIRECT_GROUP_DESCRIPTION} ${DELEGATE_GROUP_DESCRIPTION} ${CLIENT_MODEL_INSTRUCTION} ${PERSISTENT_MEMORY_INSTRUCTION} ${LIVE_WORKBENCH_ROUTING_INSTRUCTION}`;
 export const CLIENT_MODEL_FIELD_DESCRIPTION =
   "Current ChatGPT model identity for this call, when available.";
@@ -629,6 +628,39 @@ function stripRouteOnlyWorkbenchSessionId(input: unknown): unknown {
   const record = { ...(input as Record<string, unknown>) };
   delete record.workbench_session_id;
   return record;
+}
+
+const COMPACT_BACKEND_WORKBENCH_ROUTE_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+  cptr_command: new Set(["run", "run_test"]),
+  cptr_ssh: new Set(["run"]),
+  cptr_agent_task: new Set(["start", "execute"]),
+  cptr_agent_monitor: new Set(["start"]),
+};
+
+function withCompactBackendWorkbenchRoute(
+  toolName: string,
+  input: unknown,
+  workbenchSessionId: string | undefined,
+): unknown {
+  if (!workbenchSessionId || !input || typeof input !== "object" || Array.isArray(input)) return input;
+  const actions = COMPACT_BACKEND_WORKBENCH_ROUTE_ACTIONS[toolName];
+  if (!actions) return input;
+  const record = input as Record<string, unknown>;
+  const action = typeof record.action === "string" ? record.action : "";
+  if (!actions.has(action)) return input;
+  const payload = record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
+    ? record.payload as Record<string, unknown>
+    : {};
+  return {
+    ...record,
+    payload: {
+      ...payload,
+      // The top-level compact routing hint is authoritative for this MCP call.
+      // Mirror it into only the backend operations that natively own execution
+      // routing so ChatGPT never has to duplicate UI plumbing inside payload.
+      workbench_session_id: workbenchSessionId,
+    },
+  };
 }
 
 export function extractClientModel(input: unknown): { reported: string | null; handlerInput: unknown } {
@@ -966,7 +998,8 @@ export function createMcpServer(
   // Instrument every registered MCP action at the registration boundary. This
   // produces real-time WORK/TOOL CALL/ARGS and RESULT/FAILED rows without
   // exposing private chain-of-thought or transport-only metadata. Rich
-  // task/monitor/command shell streams continue through the live.bind pipeline.
+  // task/monitor/command execution streams through the backend-owned Workbench
+  // transport; legacy target live.bind remains recovery-only outside compact.
   const rawRegisterTool = server.registerTool.bind(server);
   (server as unknown as { registerTool: typeof server.registerTool }).registerTool = ((
     name: string,
@@ -993,9 +1026,12 @@ export function createMcpServer(
         const originalInput = args.length ? args[0] : {};
         const { reported: reportedClientModel, handlerInput: modelInput } = extractClientModel(originalInput);
         const routedWorkbenchSessionId = workbenchSessionIdFrom(modelInput);
-        const input = includeWorkbenchRouting && routedWorkbenchSessionId && !handlerSupportsWorkbenchSessionId
-          ? stripRouteOnlyWorkbenchSessionId(modelInput)
+        const backendRoutedInput = toolSurface === "compact"
+          ? withCompactBackendWorkbenchRoute(name, modelInput, routedWorkbenchSessionId)
           : modelInput;
+        const input = includeWorkbenchRouting && routedWorkbenchSessionId && !handlerSupportsWorkbenchSessionId
+          ? stripRouteOnlyWorkbenchSessionId(backendRoutedInput)
+          : backendRoutedInput;
         const mappedPromptTicket =
           promptSessions.ticketForWorkbenchSession(routedWorkbenchSessionId)
           ?? promptSessions.ticketForLiveTarget(liveTargetFrom(modelInput));
@@ -1292,7 +1328,10 @@ export function createMcpServer(
     _toolName?: string,
     presentation?: Record<string, unknown>,
   ) => {
-    if (liveTerminalStreamingEnabled) {
+    // Compact mode owns one persistent backend Workbench transport and must
+    // never switch targets. Legacy mode retains target tickets/live.bind as a
+    // rollback and explicit recovery compatibility path.
+    if (toolSurface === "legacy" && liveTerminalStreamingEnabled) {
       const live = tickets.issue(target);
       promptSessions.append(currentPromptTicket(), {
         type: "live.bind",
@@ -1339,7 +1378,7 @@ export function createMcpServer(
     {
       title: "Prepare CPTR Live Workbench context",
       description:
-        "Call this first whenever the user explicitly invokes CPTR. Set session_name to the exact current ChatGPT conversation title when the host exposes it; otherwise use a concise prompt-derived Workbench session label and never claim it is the host title. When continuing the same task in a later ChatGPT turn, pass resume_session_id so the existing Live Terminal prompt SSE is renewed and reused rather than replaced. This is the sole CPTR UI-producing tool: it opens exactly one Live Terminal before any target exists. All later task, monitor, command, status, and render/bind calls are data-only and update this existing terminal instead of creating another widget.",
+        "Call this first whenever the user explicitly invokes CPTR. Set session_name to the exact current ChatGPT conversation title when the host exposes it; otherwise use a concise prompt-derived Workbench session label and never claim it is the host title. When continuing the same task in a later ChatGPT turn, pass resume_session_id so the existing Live Terminal streams are renewed and reused rather than replaced. This is the sole CPTR UI-producing tool: it opens exactly one Workbench. Later Direct Coding, delegated task, monitor, and command operations pass workbench_session_id and CPTR publishes their observable activity into this backend-owned stream automatically; normal execution must not call a separate render/bind tool.",
       inputSchema: openWorkbenchSessionSchema,
       outputSchema: z.object({
               session_id: z.string(),
@@ -1387,10 +1426,14 @@ export function createMcpServer(
         "cptr_open_live_workbench",
         "CPTR Live Terminal opened once for the current prompt.",
       );
+      const live = liveTerminalStreamingEnabled
+        ? tickets.issue({ targetType: "workbench", targetId: session.session_id })
+        : null;
       return {
         ...result(value),
         _meta: {
           "cptr/prompt": prompt,
+          ...(live ? { "cptr/live": live } : {}),
           "cptr/activity": activity,
           "cptr/workspaces": preloadedWorkspaces,
         },
@@ -2166,24 +2209,8 @@ export function createMcpServer(
       _meta: workbenchToolMetadata,
     },
     async (input) => {
-      const { workbench_session_id, ...testInput } = input;
-      const command = await client.runWorkspaceTestTarget(testInput);
+      const command = await client.runWorkspaceTestTarget(input);
       if (input.worker_id) {
-        if (workbench_session_id) {
-          await client.bindWorkbenchSession({
-            session_id: workbench_session_id,
-            target_type: "command",
-            target_id: command.command_id,
-            workspace_id: input.workspace_id,
-          });
-          recordWorkbenchActivity(client, workbench_session_id, {
-            event_type: "direct_worker.test.started",
-            state: command.status,
-            workspace_id: input.workspace_id,
-            tool_name: "cptr_workspace_run_test_target",
-            summary: `ChatGPT started ${command.target} in Direct Coding Worker ${input.worker_id}.`,
-          });
-        }
         return workbenchResult(
           { ...command, workspace_id: input.workspace_id },
           {
@@ -2194,23 +2221,6 @@ export function createMcpServer(
           },
           "cptr_workspace_run_test_target",
         );
-      }
-      if (workbench_session_id) {
-        await client.bindWorkbenchSession({
-          session_id: workbench_session_id,
-          target_type: "command",
-          target_id: command.command_id,
-          workspace_id: input.workspace_id,
-        });
-        recordWorkbenchActivity(client, workbench_session_id, {
-          event_type: "test_profile.started",
-          state: command.status,
-          target_type: "command",
-          target_id: command.command_id,
-          workspace_id: input.workspace_id,
-          tool_name: "cptr_workspace_run_test_target",
-          summary: `ChatGPT started the CPTR ${command.target} test profile.`,
-        });
       }
       return workbenchResult(
         { ...command, workspace_id: input.workspace_id },
@@ -2479,21 +2489,6 @@ export function createMcpServer(
         ...(workbench_session_id ? { workbench_session_id } : {}),
       });
       if (input.worker_id) {
-        if (workbench_session_id) {
-          await client.bindWorkbenchSession({
-            session_id: workbench_session_id,
-            target_type: "command",
-            target_id: command.command_id,
-            workspace_id: input.workspace_id,
-          });
-          recordWorkbenchActivity(client, workbench_session_id, {
-            event_type: "direct_worker.command.started",
-            state: command.status,
-            workspace_id: input.workspace_id,
-            tool_name: "cptr_code_run_command",
-            summary: `ChatGPT started a command in Direct Coding Worker ${input.worker_id}.`,
-          });
-        }
         return workbenchResult(
           { ...command, workspace_id: input.workspace_id },
           {
@@ -2504,19 +2499,6 @@ export function createMcpServer(
           },
           "cptr_code_run_command",
         );
-      }
-      if (workbench_session_id) {
-        await client.bindWorkbenchSession({
-          session_id: workbench_session_id,
-          target_type: "command",
-          target_id: command.command_id,
-          workspace_id: input.workspace_id,
-        });
-        // The backend bind is the authoritative durable RUNNING transition and
-        // the command live-event stream already emits command.started. Appending
-        // another plugin-originated started event here can race a very fast
-        // command's terminal reconciliation and produce COMPLETE -> STARTED ->
-        // COMPLETE in Workbench history, making the UI appear to lag backwards.
       }
       return workbenchResult(
         { ...command, workspace_id: input.workspace_id },
@@ -2915,24 +2897,8 @@ export function createMcpServer(
       const task = await client.startTask({
         ...taskInput,
         prompt: delegatedPrompt(workspaceScopedPrompt(input.prompt)),
+        ...(workbench_session_id ? { workbench_session_id } : {}),
       });
-      if (workbench_session_id) {
-        await client.bindWorkbenchSession({
-          session_id: workbench_session_id,
-          target_type: "task",
-          target_id: task.id,
-          workspace_id: task.workspace_id,
-        });
-        recordWorkbenchActivity(client, workbench_session_id, {
-          event_type: "task.started",
-          state: task.status,
-          target_type: "task",
-          target_id: task.id,
-          workspace_id: task.workspace_id,
-          tool_name: "cptr_start_task",
-          summary: "ChatGPT started a CPTR task.",
-        });
-      }
       return workbenchResult(task, { targetType: "task", targetId: task.id }, "cptr_start_task");
     },
   );
@@ -2965,24 +2931,8 @@ export function createMcpServer(
       const task = await client.executeTask({
         ...taskInput,
         prompt: delegatedPrompt(workspaceScopedPrompt(input.prompt)),
+        ...(workbench_session_id ? { workbench_session_id } : {}),
       });
-      if (workbench_session_id) {
-        await client.bindWorkbenchSession({
-          session_id: workbench_session_id,
-          target_type: "task",
-          target_id: task.task_id,
-          workspace_id: task.workspace_id,
-        });
-        recordWorkbenchActivity(client, workbench_session_id, {
-          event_type: "task.executed",
-          state: task.status,
-          target_type: "task",
-          target_id: task.task_id,
-          workspace_id: task.workspace_id,
-          tool_name: "cptr_execute_task",
-          summary: "ChatGPT executed a CPTR task.",
-        });
-      }
       return workbenchResult(task, { targetType: "task", targetId: task.task_id }, "cptr_execute_task");
     },
   );
@@ -3003,6 +2953,7 @@ export function createMcpServer(
       const monitor = await client.createAutonomous({
         ...monitorInput,
         goal: delegatedPrompt(input.goal),
+        ...(workbench_session_id ? { workbench_session_id } : {}),
       });
       const monitorId = String(monitor.monitor_id ?? monitor.goal_id ?? "");
       if (!monitorId) {
@@ -3015,23 +2966,6 @@ export function createMcpServer(
         );
       }
       const normalizedMonitor = { ...monitor, monitor_id: monitorId };
-      if (workbench_session_id) {
-        await client.bindWorkbenchSession({
-          session_id: workbench_session_id,
-          target_type: "monitor",
-          target_id: monitorId,
-          workspace_id: input.workspace_id,
-        });
-        recordWorkbenchActivity(client, workbench_session_id, {
-          event_type: "monitor.started",
-          state: String(monitor.status ?? "RUNNING"),
-          target_type: "monitor",
-          target_id: monitorId,
-          workspace_id: input.workspace_id,
-          tool_name: "cptr_monitor_autonomous",
-          summary: "ChatGPT started a CPTR autonomous monitor.",
-        });
-      }
       return workbenchResult(
         normalizedMonitor,
         { targetType: "monitor", targetId: monitorId },
@@ -3435,14 +3369,14 @@ export function createMcpServer(
       cptr_workbench: "list(include_archived?,limit?), get(workbench_session_id), events(workbench_session_id,after_sequence?,limit?), bind(workbench_session_id,target_type,target_id,workspace_id?), rename(workbench_session_id,name), archive(workbench_session_id), request_delete(workbench_session_id), confirm_delete(confirmation_id)",
       cptr_workspace: "create(path,name?,create_directory?,initialize_git?,idempotency_key?), list(include_unavailable?), get(workspace_id), detect_project(workspace_id,worker_id?), tree(workspace_id,path?,depth?,worker_id?), metadata(workspace_id,path,worker_id?), read_many(workspace_id,paths,worker_id?), search_symbols(workspace_id,query,path?,worker_id?), discover_tests(workspace_id,path?,depth?,worker_id?), dependency_summary(workspace_id,worker_id?), package_scripts(workspace_id,worker_id?), release_readiness(workspace_id,worker_id?)",
       cptr_code: "list(workspace_id,path?,recursive?,worker_id?), read(workspace_id,path,lines?,worker_id?), read_many(workspace_id,files,max_chars?,worker_id?), search(workspace_id,query,path?,worker_id?), write(workspace_id,path,content,...), edit(workspace_id,path,target,replacement,...), apply_edits(workspace_id,path,edits,...), mkdir(workspace_id,path,worker_id?), move(workspace_id,source,destination,...), delete(workspace_id,path,worker_id?), git_status(workspace_id,worker_id?), diff(workspace_id,paths?,max_bytes?,worker_id?)",
-      cptr_command: "run(workspace_id,command,cwd?,wait_seconds?,allow_network?,pty?,worker_id?,workbench_session_id?; explicit root only when user says use root and host operator enabled it: first line '# cptr-root: use root', optional next line '# cptr-root-ttl-seconds: <seconds>', same Workbench session inherits, '# cptr-root: revoke' revokes; root does not bypass allow_network/command:external/dedicated SSH), status(workspace_id,command_id,offset?,wait_seconds?,worker_id?), cancel(workspace_id,command_id,worker_id?), input(workspace_id,command_id,data,worker_id?), resize(workspace_id,command_id,rows,cols,worker_id?), signal(workspace_id,command_id,signal,worker_id?), run_test(workspace_id,target,path?,test_path?,worker_id?,workbench_session_id?)",
+      cptr_command: "run(workspace_id,command,cwd?,wait_seconds?,allow_network?,pty?,worker_id?; explicit root only when user says use root and host operator enabled it: first line '# cptr-root: use root', optional next line '# cptr-root-ttl-seconds: <seconds>', same Workbench session inherits, '# cptr-root: revoke' revokes; root does not bypass allow_network/command:external/dedicated SSH), status(workspace_id,command_id,offset?,wait_seconds?,worker_id?), cancel(workspace_id,command_id,worker_id?), input(workspace_id,command_id,data,worker_id?), resize(workspace_id,command_id,rows,cols,worker_id?), signal(workspace_id,command_id,signal,worker_id?), run_test(workspace_id,target,path?,test_path?,worker_id?)",
       cptr_worker: "create(workspace_id,name,responsibility?,repo_path?), list(workspace_id), get(workspace_id,worker_id), overview(workspace_id), integrate(workspace_id,worker_ids), close(workspace_id,worker_id,discard_changes?)",
       cptr_lsp: "discover(workspace_id,worker_id?), start(workspace_id,server_id,root?,worker_id?), request(workspace_id,lsp_id,method,params?,timeout_seconds?,worker_id?), stop(workspace_id,lsp_id,worker_id?)",
       cptr_ssh: "list_hosts(workspace_id), run(workspace_id,alias,command,wait_seconds?), status(workspace_id,command_id,offset?,wait_seconds?), cancel(workspace_id,command_id)",
       cptr_factory: "Capability OS kernel: inspect(task_id,artifact_digest?,limit?), resolve(task_id,required,optional?,forbidden?), forge(task_id,operation,payload), execute(task_id,capability_digest,lease_id?,spec?,inputs?,approval_id?), acquire(task_id,operation,payload), reflect(task_id,kind,claims,artifact_digest?,lease_id?,comparison?,change_class?,promotion_target_state?,owner_approval_id?). Dark Factory compatibility: start(workspace_id,mission,acceptance_criteria,policy,budget?,model_id?,idempotency_key?), status(run_id), events(run_id,cursor?,limit?), evidence(run_id,cursor?,limit?), message(run_id,content,idempotency_key?), pause(run_id,idempotency_key), resume(run_id,idempotency_key), approve(run_id,approval_id,approved,note?,idempotency_key?), stop(run_id,idempotency_key,timeout_ms?)",
       cptr_benchmark: "start(suite_id?), submit(run_id), get(run_id), leaderboard(suite_id?)",
-      cptr_agent_task: "models(), list(workspace_id?,status?,limit?), start(workspace_id,prompt,model_id?,execution_policy?,workbench_session_id?), execute(workspace_id,prompt,model_id?,wait_seconds?,execution_policy?,workbench_session_id?), events(task_id,after_sequence?,max_events?), get(task_id), output(task_id,offset?,max_chars?), review(task_id,max_diff_bytes?), review_decision(task_id,decision,note?,idempotency_key?), message(task_id,content,idempotency_key?), cancel(task_id)",
-      cptr_agent_monitor: "list(workspace_id?,status?,limit?), start(workspace_id,goal,acceptance_criteria,model_id?,execution_policy?,workbench_session_id?), get(monitor_id), events(monitor_id,after_sequence?,max_events?), evidence(monitor_id,scope_id?), steer(monitor_id,content,idempotency_key?), approve(monitor_id,approval_id,approved,note?), cancel(monitor_id)",
+      cptr_agent_task: "models(), list(workspace_id?,status?,limit?), start(workspace_id,prompt,model_id?,execution_policy?), execute(workspace_id,prompt,model_id?,wait_seconds?,execution_policy?), events(task_id,after_sequence?,max_events?), get(task_id), output(task_id,offset?,max_chars?), review(task_id,max_diff_bytes?), review_decision(task_id,decision,note?,idempotency_key?), message(task_id,content,idempotency_key?), cancel(task_id)",
+      cptr_agent_monitor: "list(workspace_id?,status?,limit?), start(workspace_id,goal,acceptance_criteria,model_id?,execution_policy?), get(monitor_id), events(monitor_id,after_sequence?,max_events?), evidence(monitor_id,scope_id?), steer(monitor_id,content,idempotency_key?), approve(monitor_id,approval_id,approved,note?), cancel(monitor_id)",
     };
     const compactPayload = (input: unknown): Record<string, any> => {
       if (!input || typeof input !== "object" || Array.isArray(input)) return {};
@@ -3600,25 +3534,9 @@ export function createMcpServer(
         let value: any;
         switch (input.action) {
           case "run_test": {
-            const { workbench_session_id, ...testInput } = payload;
-            value = await c.runWorkspaceTestTarget(testInput);
+            value = await c.runWorkspaceTestTarget(payload as never);
             const wrapped = { action: input.action, result: { ...value, workspace_id: payload.workspace_id } };
             if (payload.worker_id) {
-              if (workbench_session_id) {
-                await c.bindWorkbenchSession({
-                  session_id: workbench_session_id,
-                  target_type: "command",
-                  target_id: value.command_id,
-                  workspace_id: payload.workspace_id,
-                });
-                recordWorkbenchActivity(client, workbench_session_id, {
-                  event_type: "direct_worker.test.started",
-                  state: value.status,
-                  workspace_id: payload.workspace_id,
-                  tool_name: "cptr_command",
-                  summary: `ChatGPT started ${value.target} in Direct Coding Worker ${payload.worker_id}.`,
-                });
-              }
               return workbenchResult(
                 wrapped,
                 {
@@ -3629,23 +3547,6 @@ export function createMcpServer(
                 },
                 "cptr_command",
               );
-            }
-            if (workbench_session_id) {
-              await c.bindWorkbenchSession({
-                session_id: workbench_session_id,
-                target_type: "command",
-                target_id: value.command_id,
-                workspace_id: payload.workspace_id,
-              });
-              recordWorkbenchActivity(client, workbench_session_id, {
-                event_type: "test_profile.started",
-                state: value.status,
-                target_type: "command",
-                target_id: value.command_id,
-                workspace_id: payload.workspace_id,
-                tool_name: "cptr_command",
-                summary: `ChatGPT started the CPTR ${value.target} test profile.`,
-              });
             }
             return workbenchResult(
               wrapped,
@@ -3661,21 +3562,6 @@ export function createMcpServer(
             });
             const wrapped = { action: input.action, result: { ...value, workspace_id: payload.workspace_id } };
             if (payload.worker_id) {
-              if (workbench_session_id) {
-                await c.bindWorkbenchSession({
-                  session_id: workbench_session_id,
-                  target_type: "command",
-                  target_id: value.command_id,
-                  workspace_id: payload.workspace_id,
-                });
-                recordWorkbenchActivity(client, workbench_session_id, {
-                  event_type: "direct_worker.command.started",
-                  state: value.status,
-                  workspace_id: payload.workspace_id,
-                  tool_name: "cptr_command",
-                  summary: `ChatGPT started a command in Direct Coding Worker ${payload.worker_id}.`,
-                });
-              }
               return workbenchResult(
                 wrapped,
                 {
@@ -3686,14 +3572,6 @@ export function createMcpServer(
                 },
                 "cptr_command",
               );
-            }
-            if (workbench_session_id) {
-              await c.bindWorkbenchSession({
-                session_id: workbench_session_id,
-                target_type: "command",
-                target_id: value.command_id,
-                workspace_id: payload.workspace_id,
-              });
             }
             return workbenchResult(
               wrapped,
@@ -3844,24 +3722,8 @@ export function createMcpServer(
             const task = await c.startTask({
               ...taskInput,
               prompt: delegatedPrompt(workspaceScopedPrompt(compactText(payload, "prompt"))),
+              ...(workbench_session_id ? { workbench_session_id } : {}),
             });
-            if (workbench_session_id) {
-              await c.bindWorkbenchSession({
-                session_id: workbench_session_id,
-                target_type: "task",
-                target_id: task.id,
-                workspace_id: task.workspace_id,
-              });
-              recordWorkbenchActivity(client, workbench_session_id, {
-                event_type: "task.started",
-                state: task.status,
-                target_type: "task",
-                target_id: task.id,
-                workspace_id: task.workspace_id,
-                tool_name: "cptr_agent_task",
-                summary: "ChatGPT started a CPTR task.",
-              });
-            }
             return task;
           }
           case "execute": {
@@ -3869,24 +3731,8 @@ export function createMcpServer(
             const task = await c.executeTask({
               ...taskInput,
               prompt: delegatedPrompt(workspaceScopedPrompt(compactText(payload, "prompt"))),
+              ...(workbench_session_id ? { workbench_session_id } : {}),
             });
-            if (workbench_session_id) {
-              await c.bindWorkbenchSession({
-                session_id: workbench_session_id,
-                target_type: "task",
-                target_id: task.task_id,
-                workspace_id: task.workspace_id,
-              });
-              recordWorkbenchActivity(client, workbench_session_id, {
-                event_type: "task.executed",
-                state: task.status,
-                target_type: "task",
-                target_id: task.task_id,
-                workspace_id: task.workspace_id,
-                tool_name: "cptr_agent_task",
-                summary: "ChatGPT executed a CPTR task.",
-              });
-            }
             return task;
           }
           case "events": return c.getTaskEvents(payload);
@@ -3935,27 +3781,11 @@ export function createMcpServer(
             const monitor = await c.createAutonomous({
               ...monitorInput,
               goal: delegatedPrompt(compactText(payload, "goal")),
+              ...(workbench_session_id ? { workbench_session_id } : {}),
             });
             const monitorId = String(monitor.monitor_id ?? monitor.goal_id ?? "");
             if (!monitorId) throw new Error("CPTR autonomous creation returned no monitor identity");
             const normalized = { ...monitor, monitor_id: monitorId };
-            if (workbench_session_id) {
-              await c.bindWorkbenchSession({
-                session_id: workbench_session_id,
-                target_type: "monitor",
-                target_id: monitorId,
-                workspace_id: payload.workspace_id,
-              });
-              recordWorkbenchActivity(client, workbench_session_id, {
-                event_type: "monitor.started",
-                state: String(monitor.status ?? "RUNNING"),
-                target_type: "monitor",
-                target_id: monitorId,
-                workspace_id: payload.workspace_id,
-                tool_name: "cptr_agent_monitor",
-                summary: "ChatGPT started a CPTR autonomous monitor.",
-              });
-            }
             return normalized;
           }
           case "get": return c.getAutonomous(compactText(payload, "monitor_id"));

@@ -565,17 +565,20 @@ function responseChunkBuffer(
 
 function trackResponse(res: ServerResponse): ResponseObservation {
   let count = 0;
-  let captured = Buffer.alloc(0);
+  const capturedChunks: Buffer[] = [];
+  let capturedBytes = 0;
   const maxCapturedBytes = 16_384;
   const originalWrite = res.write;
   const originalEnd = res.end;
   const observe = (chunk: unknown, encoding?: unknown) => {
     count += responseChunkBytes(chunk, encoding);
-    if (captured.byteLength >= maxCapturedBytes) return;
+    if (capturedBytes >= maxCapturedBytes) return;
     const buffer = responseChunkBuffer(chunk, encoding);
     if (!buffer) return;
-    const remaining = maxCapturedBytes - captured.byteLength;
-    captured = Buffer.concat([captured, buffer.subarray(0, remaining)]);
+    const remaining = maxCapturedBytes - capturedBytes;
+    const slice = remaining >= buffer.byteLength ? buffer : buffer.subarray(0, remaining);
+    capturedChunks.push(slice);
+    capturedBytes += slice.byteLength;
   };
   res.write = function (
     this: ServerResponse,
@@ -595,9 +598,9 @@ function trackResponse(res: ServerResponse): ResponseObservation {
     bytes: () => Math.min(100_000_000, count),
     statusCode: () => res.statusCode,
     jsonRpcError: () => {
-      if (captured.byteLength === 0) return null;
+      if (!capturedChunks.length) return null;
       try {
-        const payload = JSON.parse(captured.toString("utf8"));
+        const payload = JSON.parse(Buffer.concat(capturedChunks).toString("utf8"));
         const record = jsonRecord(payload);
         const error = jsonRecord(record?.error);
         if (!error) return null;
@@ -614,7 +617,8 @@ function trackResponse(res: ServerResponse): ResponseObservation {
     restore: () => {
       res.write = originalWrite;
       res.end = originalEnd;
-      captured = Buffer.alloc(0);
+      capturedChunks.length = 0;
+      capturedBytes = 0;
     },
   };
 }
@@ -799,18 +803,24 @@ async function closeMcpSession(sessionId: string): Promise<void> {
 }
 
 async function pruneMcpSessions(now = Date.now()): Promise<void> {
-  const expired = [...mcpSessions.entries()]
-    .filter(([, record]) => now - record.lastSeenAt >= mcpSessionIdleMs)
-    .map(([sessionId]) => sessionId);
-  await Promise.all(expired.map((sessionId) => closeMcpSession(sessionId)));
+  const expired: string[] = [];
+  for (const [sessionId, record] of mcpSessions) {
+    if (now - record.lastSeenAt >= mcpSessionIdleMs) expired.push(sessionId);
+  }
+  if (expired.length) await Promise.all(expired.map((sessionId) => closeMcpSession(sessionId)));
 }
 
 async function evictMcpSessionIfFull(): Promise<void> {
   if (mcpSessions.size < maxMcpSessions) return;
-  const oldest = [...mcpSessions.entries()].sort(
-    (a, b) => a[1].lastSeenAt - b[1].lastSeenAt,
-  )[0]?.[0];
-  if (oldest) await closeMcpSession(oldest);
+  let oldestId: string | undefined;
+  let oldestTime = Infinity;
+  for (const [id, record] of mcpSessions) {
+    if (record.lastSeenAt < oldestTime) {
+      oldestTime = record.lastSeenAt;
+      oldestId = id;
+    }
+  }
+  if (oldestId) await closeMcpSession(oldestId);
 }
 
 const mcpToolSurface = resolveMcpToolSurface(process.env.CPTR_MCP_TOOL_SURFACE);
@@ -1147,7 +1157,10 @@ const httpServer = createServer(async (req, res) => {
     let heartbeatAt = Date.now();
     res.write(`retry: 1000\ndata: ${currentBuildId}\n\n`);
     const timer = setInterval(() => {
-      if (res.destroyed) return;
+      if (res.destroyed) {
+        clearInterval(timer);
+        return;
+      }
       const next = currentWorkbenchHotReload();
       if (!next.enabled) {
         clearInterval(timer);

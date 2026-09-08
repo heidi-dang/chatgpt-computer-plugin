@@ -136,15 +136,17 @@ export class LiveGateway {
       return;
     }
     try {
-      const snapshot = claims.targetType === "command"
-        ? await this.client.getLiveSnapshot(
-            "command",
-            claims.targetId,
-            Number(rawAfter),
-            claims.workspaceId,
-            claims.workerId,
-          )
-        : await this.client.getLiveSnapshot(claims.targetType, claims.targetId, Number(rawAfter));
+      const snapshot = claims.targetType === "workbench"
+        ? await this.client.getWorkbenchLiveSnapshot(claims.targetId, Number(rawAfter))
+        : claims.targetType === "command"
+          ? await this.client.getLiveSnapshot(
+              "command",
+              claims.targetId,
+              Number(rawAfter),
+              claims.workspaceId,
+              claims.workerId,
+            )
+          : await this.client.getLiveSnapshot(claims.targetType, claims.targetId, Number(rawAfter));
       response.writeHead(200, {
         "content-type": "application/json",
         "cache-control": "no-store",
@@ -242,23 +244,25 @@ export class LiveGateway {
 
     let upstream: Response;
     try {
-      upstream = claims.targetType === "command"
-        ? await this.client.streamLive(
-            "command",
-            claims.targetId,
-            afterSequence,
-            claims.workspaceId,
-            claims.workerId,
-            lifecycle.signal,
-          )
-        : await this.client.streamLive(
-            claims.targetType,
-            claims.targetId,
-            afterSequence,
-            undefined,
-            undefined,
-            lifecycle.signal,
-          );
+      upstream = claims.targetType === "workbench"
+        ? await this.client.streamWorkbenchLive(claims.targetId, afterSequence, lifecycle.signal)
+        : claims.targetType === "command"
+          ? await this.client.streamLive(
+              "command",
+              claims.targetId,
+              afterSequence,
+              claims.workspaceId,
+              claims.workerId,
+              lifecycle.signal,
+            )
+          : await this.client.streamLive(
+              claims.targetType,
+              claims.targetId,
+              afterSequence,
+              undefined,
+              undefined,
+              lifecycle.signal,
+            );
     } catch {
       finishLifecycle();
       this.activeStreams -= 1;

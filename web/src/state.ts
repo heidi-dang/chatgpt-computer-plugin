@@ -10,7 +10,7 @@ export type WorkbenchEvent = {
   task_id?: string | null;
   monitor_id?: string | null;
   worker_task_id?: string | null;
-  target?: { type: "task" | "monitor" | "command"; id: string };
+  target?: { type: "workbench" | "task" | "monitor" | "command"; id: string; workspace_id?: string };
   redaction_applied?: boolean;
 };
 
@@ -128,7 +128,7 @@ export function isTerminalWorkbenchStatus(status: string): boolean {
 }
 
 export function workbenchTargetIdentity(
-  targetType?: "task" | "monitor" | "command",
+  targetType?: "workbench" | "task" | "monitor" | "command",
   targetId?: string,
   workspaceId?: string,
 ): string | null {
@@ -143,7 +143,7 @@ export class LiveTargetSession {
   renewalAttempts = 0;
 
   bind(
-    targetType?: "task" | "monitor" | "command",
+    targetType?: "workbench" | "task" | "monitor" | "command",
     targetId?: string,
     workspaceId?: string,
   ): boolean {
@@ -154,6 +154,33 @@ export class LiveTargetSession {
     this.renewalAttempts = 0;
     return true;
   }
+}
+
+export function normalizeWorkbenchEvent(event: WorkbenchEvent): WorkbenchEvent {
+  if (event.target?.type !== "workbench") return event;
+  const envelope = event.payload ?? {};
+  const rawTarget = envelope.target;
+  const rawPayload = envelope.payload;
+  if (!rawTarget || typeof rawTarget !== "object" || !rawPayload || typeof rawPayload !== "object") {
+    return event;
+  }
+  const target = rawTarget as Record<string, unknown>;
+  const targetType = target.type;
+  const targetId = target.id;
+  if (
+    !["task", "monitor", "command"].includes(String(targetType)) ||
+    typeof targetId !== "string" ||
+    !targetId
+  ) return event;
+  return {
+    ...event,
+    target: {
+      type: targetType as "task" | "monitor" | "command",
+      id: targetId,
+      ...(typeof target.workspace_id === "string" ? { workspace_id: target.workspace_id } : {}),
+    },
+    payload: rawPayload as Record<string, unknown>,
+  };
 }
 
 export function authoritativeWorkbenchStatus(event: WorkbenchEvent): string | null {
@@ -188,12 +215,16 @@ export function authoritativeWorkbenchStatus(event: WorkbenchEvent): string | nu
 }
 
 export function eventTerminatesWorkbench(event: WorkbenchEvent): boolean {
-  const status = authoritativeWorkbenchStatus(event);
+  const status = authoritativeWorkbenchStatus(normalizeWorkbenchEvent(event));
   return status !== null && isTerminalWorkbenchStatus(status);
 }
 
 function bounded<T>(items: T[], limit: number): T[] {
-  return items.length > limit ? items.slice(items.length - limit) : items;
+  // Return same reference when already within bounds to avoid GC pressure
+  // on every SSE event. The caller spreads into a new array before calling
+  // bounded, so the identity check is about avoiding slice on the hot path.
+  if (items.length <= limit) return items;
+  return items.slice(items.length - limit);
 }
 
 function stringValue(value: unknown, fallback = ""): string {
@@ -213,7 +244,15 @@ export function appendDirectWorkerActivity(
   const workerId = stringValue(payload.worker_id);
   if (!workerId) return state;
   const existing = state.workers[workerId];
-  if (existing?.activity.some((row) => row.id === event.event_id)) return state;
+  // Check only the last 8 activity rows for dedup. Worker events arrive
+  // in sequence so duplicates cluster at the tail.
+  if (existing) {
+    const a = existing.activity;
+    const start = Math.max(0, a.length - 8);
+    for (let i = start; i < a.length; i++) {
+      if (a[i].id === event.event_id) return state;
+    }
+  }
   const status = stringValue(payload.status, existing?.status ?? "READY").toUpperCase();
   const summary = stringValue(payload.summary, existing?.summary ?? "Worker ready");
   const changedPaths = stringArray(payload.changed_paths) ?? existing?.changedPaths ?? [];
@@ -262,7 +301,14 @@ export function appendDirectWorkerActivity(
 
 export function appendMcpToolActivity(state: WorkbenchState, activity: McpToolActivity): WorkbenchState {
   const rowPrefix = `${activity.event_id}:mcp`;
-  if (state.transcript.some((row) => row.id.startsWith(rowPrefix))) return state;
+  // Check only the last 12 rows for dedup instead of scanning the entire
+  // 2000-row transcript. MCP events arrive in near-real-time order so
+  // duplicates only appear near the tail.
+  const tail = state.transcript;
+  const scanStart = Math.max(0, tail.length - 12);
+  for (let i = scanStart; i < tail.length; i++) {
+    if (tail[i].id.startsWith(rowPrefix)) return state;
+  }
   const payload = activity.payload ?? {};
   const toolName = stringValue(payload.tool_name, "CPTR tool");
   const summary = stringValue(payload.summary, `ChatGPT completed ${toolName}.`);
@@ -410,14 +456,21 @@ export function initialWorkbenchState(): WorkbenchState {
 }
 
 export function reduceWorkbenchEvent(state: WorkbenchState, event: WorkbenchEvent): WorkbenchState {
-  if (!Number.isFinite(event.sequence) || event.sequence <= state.lastSequence) return state;
+  const normalized = normalizeWorkbenchEvent(event);
+  if (!Number.isFinite(normalized.sequence) || normalized.sequence <= state.lastSequence) return state;
+  const authoritativeStatus = authoritativeWorkbenchStatus(normalized);
+  const rows = terminalRows(normalized);
+  // Avoid allocating a new state object when the event only advances the
+  // sequence counter and produces no visible change. This is common for
+  // heartbeats and events the terminal view does not render.
+  if (!authoritativeStatus && !rows.length) {
+    return { ...state, lastSequence: normalized.sequence };
+  }
   const next: WorkbenchState = {
     ...state,
-    lastSequence: event.sequence,
+    lastSequence: normalized.sequence,
   };
-  const authoritativeStatus = authoritativeWorkbenchStatus(event);
   if (authoritativeStatus) next.status = authoritativeStatus;
-  const rows = terminalRows(event);
   if (rows.length) {
     next.transcript = bounded([...state.transcript, ...rows], MAX_TERMINAL_ROWS);
   }
