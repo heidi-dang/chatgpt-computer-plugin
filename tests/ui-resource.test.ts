@@ -19,6 +19,10 @@ test("publishes the configured widget domain and bounded MCP Apps metadata", asy
       prefersBorder?: boolean;
       csp?: { connectDomains?: string[]; resourceDomains?: string[] };
     };
+    "openai/widgetDescription"?: string;
+    "openai/widgetPrefersBorder"?: boolean;
+    "openai/widgetDomain"?: string;
+    "openai/widgetCSP"?: { connect_domains?: string[]; resource_domains?: string[] };
   };
   assert.equal(WORKBENCH_RESOURCE_URI.startsWith("ui://"), true);
   assert.equal(resource.contents[0].uri, "ui://cptr/live-workbench.html");
@@ -27,6 +31,13 @@ test("publishes the configured widget domain and bounded MCP Apps metadata", asy
   assert.equal(metadata.ui?.prefersBorder, false);
   assert.deepEqual(metadata.ui?.csp?.connectDomains, ["https://mcp.example.test"]);
   assert.deepEqual(metadata.ui?.csp?.resourceDomains, []);
+  assert.match(metadata["openai/widgetDescription"] ?? "", /live terminal and browser activity/i);
+  assert.equal(metadata["openai/widgetPrefersBorder"], metadata.ui?.prefersBorder);
+  assert.equal(metadata["openai/widgetDomain"], metadata.ui?.domain);
+  assert.deepEqual(metadata["openai/widgetCSP"], {
+    connect_domains: metadata.ui?.csp?.connectDomains,
+    resource_domains: metadata.ui?.csp?.resourceDomains,
+  });
   assert.match(resource.contents[0].text, /console\.log/);
   assert.match(resource.contents[0].text, /data-terminal-static-shell/);
   assert.match(resource.contents[0].text, /CHATGPT LIVE TERMINAL/);
@@ -34,6 +45,7 @@ test("publishes the configured widget domain and bounded MCP Apps metadata", asy
   assert.match(resource.contents[0].text, /Waiting for terminal session…/);
   assert.match(resource.contents[0].text, /Terminal UI ready\./);
   assert.match(resource.contents[0].text, /viewport-fit=cover/);
+  assert.match(resource.contents[0].text, /name="color-scheme" content="dark light"/);
   assert.doesNotMatch(resource.contents[0].text, /Ready for real CPTR activity/);
   assert.doesNotMatch(resource.contents[0].text, /<div id="root"><\/div>/);
 });
@@ -47,6 +59,7 @@ test("publishes development hot-reload assets and a loop-safe reload channel whe
   );
   const metadata = resource.contents[0]._meta as {
     ui?: { csp?: { connectDomains?: string[]; resourceDomains?: string[] } };
+    "openai/widgetCSP"?: { connect_domains?: string[]; resource_domains?: string[] };
   };
   const html = resource.contents[0].text;
   assert.match(html, /__cptr\/dev\/workbench\.js/);
@@ -62,6 +75,8 @@ test("publishes development hot-reload assets and a loop-safe reload channel whe
   assert.doesNotMatch(html, /SHOULD_NOT_BE_INLINE|INLINE_CSS/);
   assert.deepEqual(metadata.ui?.csp?.connectDomains, ["https://mcp.example.test"]);
   assert.deepEqual(metadata.ui?.csp?.resourceDomains, ["https://mcp.example.test"]);
+  assert.deepEqual(metadata["openai/widgetCSP"]?.connect_domains, ["https://mcp.example.test"]);
+  assert.deepEqual(metadata["openai/widgetCSP"]?.resource_domains, ["https://mcp.example.test"]);
 });
 
 test("rejects a localhost widget domain for production configuration", () => {

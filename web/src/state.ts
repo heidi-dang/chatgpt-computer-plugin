@@ -38,8 +38,8 @@ export function nextPromptActiveToolCount(current: number, status: unknown): num
   return count;
 }
 
-export function promptLifecycleStatus(activeToolCount: number): "WORKING" | "DISCONNECTED" {
-  return activeToolCount > 0 ? "WORKING" : "DISCONNECTED";
+export function promptLifecycleStatus(activeToolCount: number): "WORKING" | "READY" {
+  return activeToolCount > 0 ? "WORKING" : "READY";
 }
 
 export type DirectWorkerActivity = {

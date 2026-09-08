@@ -177,6 +177,7 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.match(MCP_SERVER_INSTRUCTIONS, /cptr_fdx_intelligence/);
   assert.match(MCP_SERVER_INSTRUCTIONS, /allow:delegate/);
   assert.match(MCP_SERVER_INSTRUCTIONS, /Codex or Hermes/);
+  assert.match(MCP_SERVER_INSTRUCTIONS, /brief user-visible progress updates/i);
   assert.notEqual(tools.get("cptr_open_live_workbench")?.inputSchema.properties?.delegation_authorization, undefined);
   assert.equal(tools.get("cptr_ssh_list_hosts")?.annotations?.readOnlyHint, true);
   assert.equal(tools.get("cptr_ssh_run_command")?.annotations?.openWorldHint, true);
@@ -227,8 +228,12 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
     .filter((tool) => (tool._meta as { ui?: { resourceUri?: string } } | undefined)?.ui?.resourceUri)
     .map((tool) => tool.name);
   assert.deepEqual(renderedTools, ["cptr_open_live_workbench"]);
-  const terminalMeta = tools.get("cptr_open_live_workbench")?._meta as { ui?: { resourceUri?: string } } | undefined;
+  const terminalMeta = tools.get("cptr_open_live_workbench")?._meta as {
+    ui?: { resourceUri?: string };
+    "openai/outputTemplate"?: string;
+  } | undefined;
   assert.equal(terminalMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
+  assert.equal(terminalMeta?.["openai/outputTemplate"], terminalMeta?.ui?.resourceUri);
   const bindMeta = tools.get("cptr_render_live_terminal")?._meta as { ui?: { resourceUri?: string } } | undefined;
   assert.equal(bindMeta?.ui, undefined);
   assert.equal(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.action, undefined);
@@ -273,6 +278,8 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.equal(tools.size, MCP_CONTRACT_TOOL_COUNT + 7);
   for (const tool of tools.values()) {
     assert.deepEqual(tool._meta?.securitySchemes, [{ type: "oauth2", scopes: [] }]);
+    assert.equal(tool._meta?.["openai/toolInvocation/invoking"], "CPTR working…");
+    assert.equal(tool._meta?.["openai/toolInvocation/invoked"], "CPTR action complete");
   }
 
   await client.close();

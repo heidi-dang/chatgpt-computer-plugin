@@ -169,14 +169,6 @@ export class LiveGateway {
       return;
     }
     const maxConcurrent = this.limits.maxConcurrent ?? 8;
-    if (this.activeStreams >= maxConcurrent) {
-      response.writeHead(429, {
-        "content-type": "application/json",
-        "cache-control": "no-store",
-      });
-      response.end(JSON.stringify({ error: "live stream capacity reached" }));
-      return;
-    }
 
     const claims = this.tickets.validate(ticket);
     if (!claims) {
@@ -198,7 +190,8 @@ export class LiveGateway {
       void reader?.cancel().catch(() => undefined);
       if (!response.writableEnded) response.end();
     };
-    if (streamScope && this.viewers.claim(streamScope, viewer, closeViewer) === "superseded") {
+    const viewerClaim = streamScope ? this.viewers.claim(streamScope, viewer, closeViewer) : "accepted";
+    if (viewerClaim === "superseded") {
       response.writeHead(409, {
         "content-type": "application/json",
         "cache-control": "no-store",
@@ -210,6 +203,18 @@ export class LiveGateway {
     const releaseViewer = () => {
       if (streamScope) this.viewers.release(streamScope, viewer);
     };
+    // Let a fresh ChatGPT/iOS mount replace the stale stream occupying the
+    // final slot. The replaced reader is cancelled above and releases its slot
+    // as its handler unwinds, so this is only a transient replacement overlap.
+    if (this.activeStreams >= maxConcurrent && viewerClaim !== "replaced") {
+      releaseViewer();
+      response.writeHead(429, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      response.end(JSON.stringify({ error: "live stream capacity reached" }));
+      return;
+    }
 
     this.activeStreams += 1;
     const lastEventId = request.headers["last-event-id"];

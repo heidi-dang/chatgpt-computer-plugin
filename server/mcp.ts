@@ -386,6 +386,8 @@ const workbenchToolMetadata = oauthToolMetadata;
 const openWorkbenchToolMetadata = {
   ...oauthToolMetadata,
   ui: { resourceUri: WORKBENCH_RESOURCE_URI },
+  // ChatGPT compatibility alias for the MCP Apps-standard resource link.
+  "openai/outputTemplate": WORKBENCH_RESOURCE_URI,
 };
 
 const liveEventOutputSchema = z.object({
@@ -559,7 +561,7 @@ export function getMcpToolSurfaceProfile(server: McpServer): McpToolSurfaceProfi
 }
 
 const DIRECT_GROUP_DESCRIPTION =
-  "Tool group: ChatGPT Direct Coding. This is the default execution path. ChatGPT itself must inspect, edit, run, verify, browse, or operate the selected workspace through these bounded CPTR primitives; do not delegate the work to a CPTR model, agent profile, Codex, Hermes, or another autonomous coding agent. For source-code understanding, repository navigation, symbols, dependencies, architecture, change impact, affected tests, or related-file reasoning, prefer cptr_fdx_intelligence first when available; if FDX reports unavailable, degraded, unsupported, or insufficient evidence, fall back to the ordinary CPTR Direct Coding tools. Exact CPTR file reads remain required before mutation.";
+  "Tool group: ChatGPT Direct Coding. This is the default execution path. ChatGPT itself must inspect, edit, run, verify, browse, or operate the selected workspace through these bounded CPTR primitives; do not delegate the work to a CPTR model, agent profile, Codex, Hermes, or another autonomous coding agent. For source-code understanding, repository navigation, symbols, dependencies, architecture, change impact, affected tests, or related-file reasoning, prefer cptr_fdx_intelligence first when available; if FDX reports unavailable, degraded, unsupported, or insufficient evidence, fall back to the ordinary CPTR Direct Coding tools. Exact CPTR file reads remain required before mutation. For multi-step work, give brief user-visible progress updates before the first substantive tool batch and at meaningful checkpoints; summarize actions and evidence without exposing or inventing private chain-of-thought.";
 const DELEGATE_GROUP_DESCRIPTION =
   "Tool group: Delegated Agent. This tool is model/agent-backed CPTR orchestration or lifecycle control. It is blocked unless the current user prompt contains the exact opt-in token `allow:delegate` and the prompt Workbench session was opened with delegation_authorization=`allow:delegate`. The opt-in applies to CPTR native agents/models and other agent profiles such as Codex or Hermes.";
 
@@ -576,7 +578,13 @@ type ModelAwareToolConfig = {
   title?: string;
   description?: string;
   inputSchema?: unknown;
+  _meta?: Record<string, unknown>;
 };
+
+const HOST_TOOL_INVOCATION_META = {
+  "openai/toolInvocation/invoking": "CPTR working…",
+  "openai/toolInvocation/invoked": "CPTR action complete",
+} as const;
 
 function withClientModelInputSchema(inputSchema: unknown): unknown {
   if (inputSchema instanceof z.ZodObject) {
@@ -618,6 +626,10 @@ function groupedToolConfig<T extends ModelAwareToolConfig>(name: string, config:
     title: `[${groupName}] ${config.title?.trim() || name}`,
     description: `${policy}${conditional}${resumeFirst}${config.description ? ` ${config.description}` : ""}`,
     inputSchema: withClientModelInputSchema(config.inputSchema),
+    _meta: {
+      ...(config._meta ?? {}),
+      ...HOST_TOOL_INVOCATION_META,
+    },
   };
 }
 

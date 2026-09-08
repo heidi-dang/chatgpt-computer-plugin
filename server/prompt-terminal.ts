@@ -631,10 +631,6 @@ export class PromptTerminalGateway {
       return;
     }
     const maxConcurrent = this.limits.maxConcurrent ?? 16;
-    if (this.activeStreams >= maxConcurrent) {
-      this.json(response, 429, { error: "prompt terminal stream capacity reached" });
-      return;
-    }
     const initial = this.store.replay(ticket, after);
     if (!initial) {
       this.json(response, 401, { error: "prompt terminal ticket is invalid or expired" }, { "www-authenticate": "Bearer" });
@@ -650,8 +646,17 @@ export class PromptTerminalGateway {
       wake = null;
       if (!response.writableEnded) response.end();
     };
-    if (streamScope && this.viewers.claim(streamScope, viewer, close) === "superseded") {
+    const viewerClaim = streamScope ? this.viewers.claim(streamScope, viewer, close) : "accepted";
+    if (viewerClaim === "superseded") {
       this.json(response, 409, { error: "prompt terminal viewer was superseded by a newer Workbench" }, { "x-cptr-stream-state": "superseded" });
+      return;
+    }
+    // A newer iOS/ChatGPT mount must be able to replace its stale stream even
+    // when that stale stream currently occupies the final concurrency slot.
+    // The replaced handler is closed above and releases its slot in finally.
+    if (this.activeStreams >= maxConcurrent && viewerClaim !== "replaced") {
+      if (streamScope) this.viewers.release(streamScope, viewer);
+      this.json(response, 429, { error: "prompt terminal stream capacity reached" });
       return;
     }
 

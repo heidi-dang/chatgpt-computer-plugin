@@ -45,8 +45,11 @@ type BridgeMessage = {
 
 type HostBridge = DisplayModeBridge & {
   toolResponseMetadata?: unknown;
+  widgetState?: unknown;
+  theme?: "light" | "dark";
   callTool?: (tool: string, input: Record<string, unknown>) => Promise<unknown>;
   notifyIntrinsicHeight?: (height: number) => void;
+  setWidgetState?: (state: Record<string, unknown>) => void;
 };
 
 type PromptMetadata = {
@@ -63,6 +66,11 @@ type PromptMetadata = {
 type ViewerIdentity = {
   id: string;
   startedAt: number;
+};
+
+type WorkbenchUiState = {
+  surfaceMode?: "terminal" | "browser";
+  terminalFollow?: boolean;
 };
 
 type RenewalOutcome = "renewed" | "terminal" | "retry";
@@ -111,6 +119,48 @@ type PromptEvent = {
 
 function hostBridge(): HostBridge | undefined {
   return (window as Window & { openai?: HostBridge }).openai;
+}
+
+function readWorkbenchUiState(value: unknown): WorkbenchUiState {
+  if (!value || typeof value !== "object") return {};
+  const record = value as Record<string, unknown>;
+  const surfaceMode = record.surfaceMode === "terminal" || record.surfaceMode === "browser"
+    ? record.surfaceMode
+    : undefined;
+  const terminalFollow = typeof record.terminalFollow === "boolean" ? record.terminalFollow : undefined;
+  return {
+    ...(surfaceMode ? { surfaceMode } : {}),
+    ...(terminalFollow !== undefined ? { terminalFollow } : {}),
+  };
+}
+
+function persistWorkbenchUiState(
+  current: React.MutableRefObject<WorkbenchUiState>,
+  patch: Partial<WorkbenchUiState>,
+) {
+  const next = { ...current.current, ...patch };
+  if (
+    next.surfaceMode === current.current.surfaceMode &&
+    next.terminalFollow === current.current.terminalFollow
+  ) return;
+  current.current = next;
+  hostBridge()?.setWidgetState?.(next);
+}
+
+function useHostTheme() {
+  useEffect(() => {
+    const applyTheme = (value: unknown) => {
+      if (value !== "light" && value !== "dark") return;
+      document.documentElement.dataset.theme = value;
+    };
+    applyTheme(hostBridge()?.theme);
+    const onGlobals = (event: Event) => {
+      const detail = (event as CustomEvent<{ globals?: { theme?: unknown } }>).detail;
+      applyTheme(detail?.globals?.theme);
+    };
+    window.addEventListener("openai:set_globals", onGlobals);
+    return () => window.removeEventListener("openai:set_globals", onGlobals);
+  }, []);
 }
 
 function useWorkbenchAutoSize() {
@@ -166,15 +216,18 @@ function usePromptActivity(
   setState: React.Dispatch<React.SetStateAction<WorkbenchState>>,
   setBrowserSurface: React.Dispatch<React.SetStateAction<BrowserSurfaceState | null>>,
   setSurfaceMode: React.Dispatch<React.SetStateAction<"terminal" | "browser">>,
+  surfacePreference: React.MutableRefObject<"terminal" | "browser" | undefined>,
   streamingEnabled: boolean,
   viewer: ViewerIdentity,
 ) {
   const cursor = useRef(0);
   const activePromptTools = useRef(0);
+  const visibleBrowserSession = useRef<string | null>(null);
   const [connection, setConnection] = useState("connecting prompt activity");
-  // Prompt SSE health is transport state only. An unbound Workbench has no
-  // active CPTR lifecycle, including after an iOS remount while SSE recovers.
-  const [status, setStatus] = useState("DISCONNECTED");
+  // Prompt SSE transport state remains separate from execution lifecycle.
+  // An unbound Workbench is READY while its prompt stream connects/reconnects;
+  // reserve DISCONNECTED for a genuinely unavailable or expired prompt stream.
+  const [status, setStatus] = useState("READY");
 
   useEffect(() => {
     if (!streamingEnabled) {
@@ -258,6 +311,12 @@ function usePromptActivity(
               .includes(stateValue as BrowserSurfaceState["mode"])
             ? stateValue as BrowserSurfaceState["mode"]
             : "OBSERVING";
+        const shouldAutoOpenBrowser =
+          isLiveEvent &&
+          owner !== "none" &&
+          surfacePreference.current === undefined &&
+          visibleBrowserSession.current !== sessionId;
+        if (owner !== "none") visibleBrowserSession.current = sessionId;
         setBrowserSurface({
           action: typeof payload.action === "string" ? payload.action : "unknown",
           ...(typeof payload.device_id === "string" ? { deviceId: payload.device_id } : {}),
@@ -267,7 +326,7 @@ function usePromptActivity(
           ...(typeof payload.epoch === "number" ? { epoch: payload.epoch } : {}),
           ...(typeof payload.hostname === "string" ? { hostname: payload.hostname } : {}),
         });
-        if (isLiveEvent && owner !== "none") setSurfaceMode("browser");
+        if (shouldAutoOpenBrowser) setSurfaceMode("browser");
       }
     };
 
@@ -443,7 +502,9 @@ function usePromptActivity(
   return { connection, status };
 }
 
-function useMcpBridge() {
+function useMcpBridge(
+  setPromptMetadata: React.Dispatch<React.SetStateAction<PromptMetadata | null>>,
+) {
   const pending = useRef(new Map<string | number, {
     resolve: (value: unknown) => void;
     reject: (reason?: unknown) => void;
@@ -452,7 +513,14 @@ function useMcpBridge() {
     const onMessage = (event: MessageEvent<BridgeMessage>) => {
       if (event.source !== window.parent) return;
       const message = event.data;
-      if (!message || message.id === undefined) return;
+      if (!message) return;
+      if (message.method === "ui/notifications/tool-result") {
+        const next = findPromptMetadata(message.params)
+          ?? findPromptMetadata(hostBridge()?.toolResponseMetadata);
+        if (next) setPromptMetadata(next);
+        return;
+      }
+      if (message.id === undefined) return;
       const request = pending.current.get(message.id);
       if (!request) return;
       pending.current.delete(message.id);
@@ -478,7 +546,7 @@ function useMcpBridge() {
       for (const request of pending.current.values()) request.reject(new Error("MCP bridge closed"));
       pending.current.clear();
     };
-  }, []);
+  }, [setPromptMetadata]);
 
   return useCallback((name: string, args: Record<string, unknown>) => {
     if (hostBridge()?.callTool) return hostBridge()!.callTool!(name, args);
@@ -749,14 +817,31 @@ function OwnedWorkbench() {
   const [state, setState] = useState(initialWorkbenchState);
   const [actionStatus, setActionStatus] = useState("");
   const viewer = useRef<ViewerIdentity>({ id: crypto.randomUUID(), startedAt: Date.now() });
-  useMcpBridge();
+  const restoredUiState = useRef(readWorkbenchUiState(hostBridge()?.widgetState));
+  const persistedUiState = useRef<WorkbenchUiState>(restoredUiState.current);
+  const surfacePreference = useRef<"terminal" | "browser" | undefined>(restoredUiState.current.surfaceMode);
   const [promptMetadata, setPromptMetadata] = useState<PromptMetadata | null>(() => findPromptMetadata(hostBridge()?.toolResponseMetadata));
+  useMcpBridge(setPromptMetadata);
+  useHostTheme();
   const liveStreamingEnabled = promptMetadata?.streamingEnabled === true;
   const [meta, setMeta] = useState<LiveMetadata | null>(null);
-  const [surfaceMode, setSurfaceMode] = useState<"terminal" | "browser">("terminal");
+  const [surfaceMode, setSurfaceMode] = useState<"terminal" | "browser">(restoredUiState.current.surfaceMode ?? "terminal");
   const [browserSurface, setBrowserSurface] = useState<BrowserSurfaceState | null>(null);
-  const [terminalViewState, setTerminalViewState] = useState({ follow: true, scrollTop: 0 });
-  const promptActivity = usePromptActivity(promptMetadata, setPromptMetadata, setMeta, setState, setBrowserSurface, setSurfaceMode, liveStreamingEnabled, viewer.current);
+  const [terminalViewState, setTerminalViewState] = useState({
+    follow: restoredUiState.current.terminalFollow ?? true,
+    scrollTop: 0,
+  });
+  const promptActivity = usePromptActivity(
+    promptMetadata,
+    setPromptMetadata,
+    setMeta,
+    setState,
+    setBrowserSurface,
+    setSurfaceMode,
+    surfacePreference,
+    liveStreamingEnabled,
+    viewer.current,
+  );
   const targetConnection = useLiveSession(meta, setMeta, setState, liveStreamingEnabled, viewer.current);
   const connection = meta?.targetId && !isTerminalWorkbenchStatus(state.status) ? targetConnection : promptActivity.connection;
   const visibleTarget = useRef<string | null>(null);
@@ -771,10 +856,20 @@ function OwnedWorkbench() {
 
   useWorkbenchAutoSize();
 
+  const selectSurfaceMode = (next: "terminal" | "browser") => {
+    surfacePreference.current = next;
+    setSurfaceMode(next);
+    persistWorkbenchUiState(persistedUiState, { surfaceMode: next });
+  };
+  const setTerminalFollow = (follow: boolean) => {
+    setTerminalViewState((current) => ({ ...current, follow }));
+    persistWorkbenchUiState(persistedUiState, { terminalFollow: follow });
+  };
+
   return <main className="terminal-workbench" aria-label="CPTR live computer">
     <div className="surface-switch" role="group" aria-label="Live computer surface">
-      <button type="button" aria-pressed={surfaceMode === "terminal"} onClick={() => setSurfaceMode("terminal")}>Terminal</button>
-      <button type="button" aria-pressed={surfaceMode === "browser"} onClick={() => setSurfaceMode("browser")}>Browser</button>
+      <button type="button" aria-pressed={surfaceMode === "terminal"} onClick={() => selectSurfaceMode("terminal")}>Terminal</button>
+      <button type="button" aria-pressed={surfaceMode === "browser"} onClick={() => selectSurfaceMode("browser")}>Browser</button>
     </div>
     {surfaceMode === "browser"
       ? <BrowserSurface
@@ -798,7 +893,7 @@ function OwnedWorkbench() {
           targetLabel={targetLabel(meta)}
           follow={terminalViewState.follow}
           scrollTop={terminalViewState.scrollTop}
-          onFollowChange={(follow) => setTerminalViewState((current) => ({ ...current, follow }))}
+          onFollowChange={setTerminalFollow}
           onScrollTopChange={(scrollTop) => setTerminalViewState((current) => ({ ...current, scrollTop }))}
         />}
   </main>;

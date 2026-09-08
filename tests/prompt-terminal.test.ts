@@ -137,6 +137,48 @@ test("prompt SSE reconnect resumes strictly after Last-Event-ID without duplicat
   assert.equal((body.match(/id: 2\n/g) ?? []).length, 1, "the first unseen event must be delivered exactly once");
 });
 
+test("newer Workbench replaces a stale prompt stream even when the final capacity slot is occupied", async () => {
+  const store = new PromptTerminalStore({ streamingEnabled: true });
+  const metadata = store.open({ workbenchSessionId: "wbs-capacity" });
+  const gateway = new PromptTerminalGateway(store, { maxConcurrent: 1, heartbeatMs: 60_000 });
+
+  const makeRequest = (viewerId: string, startedAt: number) => Object.assign(new EventEmitter(), {
+    url: "/live/prompt/stream",
+    headers: {
+      authorization: `Bearer ${metadata.ticket}`,
+      "x-cptr-viewer-id": viewerId,
+      "x-cptr-viewer-started-at": String(startedAt),
+    },
+    destroyed: false,
+  });
+  const makeResponse = () => Object.assign(new EventEmitter(), {
+    destroyed: false,
+    writableEnded: false,
+    statusCode: 0,
+    writeHead(status: number) { this.statusCode = status; },
+    flushHeaders() {},
+    write() { return true; },
+    end() { this.writableEnded = true; },
+  });
+
+  const firstRequest = makeRequest("old-card", 100);
+  const firstResponse = makeResponse();
+  const first = gateway.handleStream(firstRequest as never, firstResponse as never);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(firstResponse.statusCode, 200);
+
+  const secondRequest = makeRequest("new-card", 200);
+  const secondResponse = makeResponse();
+  const second = gateway.handleStream(secondRequest as never, secondResponse as never);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(firstResponse.writableEnded, true, "new mount must close the stale prompt stream");
+  assert.equal(secondResponse.statusCode, 200, "replacement stream must bypass stale-slot 429 rejection");
+
+  secondRequest.emit("close");
+  await Promise.all([first, second]);
+});
+
 test("browser surface activity reuses the prompt stream without credential fields", () => {
   const store = new PromptTerminalStore({ streamingEnabled: true });
   const metadata = store.open();

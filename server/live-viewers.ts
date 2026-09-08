@@ -30,11 +30,15 @@ function compare(a: LiveViewerIdentity, b: LiveViewerIdentity): number {
 export class LiveViewerRegistry {
   private readonly active = new Map<string, ActiveViewer>();
 
-  claim(scope: string, viewer: LiveViewerIdentity | null, close: () => void): "accepted" | "superseded" {
+  claim(scope: string, viewer: LiveViewerIdentity | null, close: () => void): "accepted" | "replaced" | "superseded" {
     if (!viewer) return "accepted";
     const current = this.active.get(scope);
     if (current && current.id !== viewer.id && compare(current, viewer) > 0) return "superseded";
-    if (current) current.close();
+    if (current) {
+      current.close();
+      this.active.set(scope, { ...viewer, close });
+      return "replaced";
+    }
     this.active.set(scope, { ...viewer, close });
     return "accepted";
   }

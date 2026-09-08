@@ -86,57 +86,57 @@ test("terminal empty state uses the reference waiting transcript without synthet
   assert.equal(html.includes("terminal-empty"), false);
 });
 
-test("idle prompt lifecycle renders DISCONNECTED while keeping the persistent SSE transport visible", () => {
+test("idle prompt lifecycle renders LIVE when the persistent prompt SSE is healthy", () => {
   const live = renderToStaticMarkup(React.createElement(TerminalView, {
     rows: [],
-    status: "DISCONNECTED",
+    status: "READY",
     connection: "prompt live",
     machineLabel: "CPTR Computer",
     targetLabel: "Waiting for terminal session…",
   }));
-  assert.match(live, />DISCONNECTED</);
+  assert.match(live, />LIVE</);
   assert.match(live, /SSE LIVE/);
-  assert.doesNotMatch(live, /<span>LIVE<\/span>/);
+  assert.doesNotMatch(live, />DISCONNECTED</);
 
   const reconnecting = renderToStaticMarkup(React.createElement(TerminalView, {
     rows: [],
-    status: "DISCONNECTED",
+    status: "READY",
     connection: "reconnecting prompt activity",
     machineLabel: "CPTR Computer",
     targetLabel: "Waiting for terminal session…",
   }));
-  assert.match(reconnecting, />DISCONNECTED</);
+  assert.match(reconnecting, />RECONNECTING</);
   assert.match(reconnecting, /SSE RECONNECTING/);
+  assert.doesNotMatch(reconnecting, />DISCONNECTED</);
 });
 
-test("iOS remount with no target stays DISCONNECTED while prompt SSE reconnects", () => {
+test("iOS remount with no target reports transport recovery instead of a false disconnect", () => {
   const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
   const promptHook = source.slice(source.indexOf("function usePromptActivity("), source.indexOf("function useMcpBridge()"));
 
   assert.match(
     promptHook,
-    /const \[status, setStatus\] = useState\("DISCONNECTED"\);/,
-    "an unbound Workbench must not advertise CONNECTING before any CPTR tool is active",
+    /const \[status, setStatus\] = useState\("READY"\);/,
+    "an unbound Workbench should remain ready while its prompt transport connects or recovers",
   );
   assert.doesNotMatch(
     promptHook,
     /const \[status, setStatus\] = useState\("CONNECTING"\);/,
-    "transport startup must not become the lifecycle header state",
+    "transport startup must still remain separate from the execution lifecycle state",
   );
 
   const html = renderToStaticMarkup(React.createElement(TerminalView, {
     rows: [],
-    status: "DISCONNECTED",
+    status: "READY",
     connection: "reconnecting prompt activity",
     machineLabel: "CPTR Computer",
     targetLabel: "Waiting for terminal session…",
   }));
 
   assert.match(html, /CPTR Computer/);
-  assert.match(html, />DISCONNECTED</);
+  assert.match(html, />RECONNECTING</);
   assert.match(html, /SSE RECONNECTING/);
-  assert.doesNotMatch(html, /Connecting to computer/);
-  assert.doesNotMatch(html, /<span>RECONNECTING<\/span>/);
+  assert.doesNotMatch(html, />DISCONNECTED</);
 });
 
 test("Direct Coding Worker metadata never clears an already-bound live command target", () => {
@@ -248,6 +248,9 @@ test("terminal CSS preserves the reference desktop and mobile geometry", () => {
   assert.match(css, /-webkit-text-size-adjust:\s*100%/);
   assert.match(css, /touch-action:\s*pan-y/);
   assert.match(css, /safe-area-inset-left/);
+  assert.match(css, /:root\[data-theme="light"\][^{]*\{[^}]*color-scheme:\s*light/);
+  assert.match(css, /:root\[data-theme="dark"\][^{]*\{[^}]*color-scheme:\s*dark/);
+  assert.match(css, /@media \(prefers-color-scheme: light\)[\s\S]*:root:not\(\[data-theme\]\)/);
   assert.match(css, /@media \(max-width: 560px\) and \(orientation: landscape\)/);
   assert.equal(css.includes(".terminal-toolbar"), false);
   assert.equal(css.includes(".terminal-seq"), false);
@@ -302,6 +305,16 @@ test("terminal view memoizes stable rows and frame-coalesces follow scrolling", 
   assert.match(source, /window\.cancelAnimationFrame\(/);
 });
 
+test("terminal follow changes are edge-triggered instead of writing ChatGPT widget state on every scroll frame", () => {
+  const source = readFileSync(new URL("../web/src/terminal-view.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /const followRef = useRef\(follow\)/);
+  assert.match(source, /followRef\.current = follow/);
+  assert.match(source, /if \(value === followRef\.current\) return/);
+  assert.match(source, /followRef\.current = value/);
+  assert.match(source, /onFollowChange\?\.\(value\)/);
+});
+
 test("paired Chrome surface publishing preserves authoritative lease and command ownership", () => {
   const mcpSource = readFileSync(new URL("../server/mcp.ts", import.meta.url), "utf8");
   assert.match(mcpSource, /const nestedLease = recordFrom\(commandPayload\.lease\)/);
@@ -317,7 +330,7 @@ test("Workbench switches terminal and browser inside one persistent root", () =>
   const browserSource = readFileSync(new URL("../web/src/browser-surface.tsx", import.meta.url), "utf8");
   const css = readFileSync(new URL("../web/src/workbench.css", import.meta.url), "utf8");
 
-  assert.match(source, /useState<"terminal" \| "browser">\("terminal"\)/);
+  assert.match(source, /useState<"terminal" \| "browser">\(restoredUiState\.current\.surfaceMode \?\? "terminal"\)/);
   assert.match(source, /<BrowserSurface/);
   assert.match(source, /if \(!sessionId\) return/);
   assert.match(source, /owner === "none"[\s\S]*\? "DISCONNECTED"/);
@@ -378,7 +391,8 @@ test("Workbench recovery contract survives iOS suspension, replay, and browser l
   assert.match(source, /addEventListener\("online"/);
   assert.match(source, /visibilitychange/);
   assert.match(source, /renewUrl/);
-  assert.match(source, /isLiveEvent\s*&&\s*owner\s*!==\s*"none"/);
+  assert.match(source, /visibleBrowserSession\.current !== sessionId/);
+  assert.match(source, /if \(shouldAutoOpenBrowser\) setSurfaceMode\("browser"\)/);
   assert.match(browserSource, /keepalive:\s*true/);
   assert.match(browserSource, /if\s*\(!response\.ok\)/);
   assert.match(browserSource, /response\.status\s*===\s*409/);
@@ -386,4 +400,61 @@ test("Workbench recovery contract survives iOS suspension, replay, and browser l
   assert.match(browserSource, /viewer_id/);
   assert.match(source, /terminalViewState/);
   assert.match(readFileSync(new URL("../web/src/terminal-view.tsx", import.meta.url), "utf8"), /onScrollTopChange/);
+});
+
+test("Workbench consumes standard MCP Apps tool-result notifications to refresh prompt metadata", () => {
+  const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+  const bridge = source.slice(source.indexOf("function useMcpBridge("), source.indexOf("function useLiveSession("));
+
+  assert.match(bridge, /message\.method === "ui\/notifications\/tool-result"/);
+  assert.match(bridge, /findPromptMetadata\(message\.params\)/);
+  assert.match(bridge, /findPromptMetadata\(hostBridge\(\)\?\.toolResponseMetadata\)/);
+  assert.match(bridge, /setPromptMetadata\(next\)/);
+  assert.match(source, /useMcpBridge\(setPromptMetadata\)/);
+});
+
+test("Workbench follows the documented ChatGPT theme globals without owning host appearance", () => {
+  const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+  const themeHook = source.slice(source.indexOf("function useHostTheme()"), source.indexOf("function useWorkbenchAutoSize()"));
+
+  assert.match(themeHook, /hostBridge\(\)\?\.theme/);
+  assert.match(themeHook, /openai:set_globals/);
+  assert.match(themeHook, /detail\?\.globals\?\.theme/);
+  assert.match(themeHook, /document\.documentElement\.dataset\.theme = value/);
+  assert.match(source, /useHostTheme\(\)/);
+});
+
+test("browser surface auto-opens once per new session and then preserves the user's selected tab", () => {
+  const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+  const promptHook = source.slice(source.indexOf("function usePromptActivity("), source.indexOf("function useMcpBridge("));
+
+  assert.match(promptHook, /const visibleBrowserSession = useRef<string \| null>\(null\)/);
+  assert.match(promptHook, /surfacePreference\.current === undefined/);
+  assert.match(promptHook, /visibleBrowserSession\.current !== sessionId/);
+  assert.match(promptHook, /visibleBrowserSession\.current = sessionId/);
+  assert.match(promptHook, /if \(shouldAutoOpenBrowser\) setSurfaceMode\("browser"\)/);
+  assert.doesNotMatch(promptHook, /if \(isLiveEvent && owner !== "none"\) setSurfaceMode\("browser"\)/);
+});
+
+test("Workbench persists only ephemeral presentation preferences across ChatGPT remounts", () => {
+  const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+  const stateReader = source.slice(source.indexOf("function readWorkbenchUiState("), source.indexOf("function persistWorkbenchUiState("));
+  const persistence = source.slice(source.indexOf("function persistWorkbenchUiState("), source.indexOf("function useHostTheme()"));
+
+  assert.match(source, /widgetState\?: unknown/);
+  assert.match(source, /setWidgetState\?: \(state: Record<string, unknown>\) => void/);
+  assert.match(source, /readWorkbenchUiState\(hostBridge\(\)\?\.widgetState\)/);
+  assert.match(stateReader, /record\.surfaceMode === "terminal" \|\| record\.surfaceMode === "browser"/);
+  assert.match(stateReader, /typeof record\.terminalFollow === "boolean"/);
+  assert.doesNotMatch(stateReader, /ticket|workspace|target|browserSurface|promptMetadata|meta/);
+  assert.match(persistence, /next\.surfaceMode === current\.current\.surfaceMode/);
+  assert.match(persistence, /next\.terminalFollow === current\.current\.terminalFollow/);
+  assert.match(persistence, /return;/);
+  assert.match(persistence, /hostBridge\(\)\?\.setWidgetState\?\.\(next\)/);
+  assert.match(source, /restoredUiState\.current\.surfaceMode \?\? "terminal"/);
+  assert.match(source, /restoredUiState\.current\.terminalFollow \?\? true/);
+  assert.match(source, /persistWorkbenchUiState\(persistedUiState, \{ surfaceMode: next \}\)/);
+  assert.match(source, /persistWorkbenchUiState\(persistedUiState, \{ terminalFollow: follow \}\)/);
+  assert.match(source, /surfacePreference\.current === undefined/);
+  assert.doesNotMatch(source, /persistWorkbenchUiState\([^\n]*scrollTop/);
 });
