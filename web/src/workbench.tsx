@@ -29,7 +29,7 @@ type LiveMetadata = {
   snapshotUrl?: string;
   renewUrl?: string;
   expiresAt?: number;
-  targetType?: "task" | "monitor" | "command";
+  targetType?: "workbench" | "task" | "monitor" | "command";
   targetId?: string;
   workspaceId?: string;
 };
@@ -195,6 +195,18 @@ function useWorkbenchAutoSize() {
       if (frame !== undefined) window.cancelAnimationFrame(frame);
     };
   }, []);
+}
+
+function findLiveMetadata(value: unknown): LiveMetadata | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  const direct = record["cptr/live"];
+  if (direct && typeof direct === "object" && "ticket" in direct) return direct as LiveMetadata;
+  for (const key of ["_meta", "params", "result", "toolResult"]) {
+    const found = findLiveMetadata(record[key]);
+    if (found) return found;
+  }
+  return null;
 }
 
 function findPromptMetadata(value: unknown): PromptMetadata | null {
@@ -529,6 +541,7 @@ function usePromptActivity(
 
 function useMcpBridge(
   setPromptMetadata: React.Dispatch<React.SetStateAction<PromptMetadata | null>>,
+  setLiveMetadata: React.Dispatch<React.SetStateAction<LiveMetadata | null>>,
 ) {
   const pending = useRef(new Map<string | number, {
     resolve: (value: unknown) => void;
@@ -540,9 +553,13 @@ function useMcpBridge(
       const message = event.data;
       if (!message) return;
       if (message.method === "ui/notifications/tool-result") {
-        const next = findPromptMetadata(message.params)
+        const source = message.params ?? hostBridge()?.toolResponseMetadata;
+        const nextPrompt = findPromptMetadata(source)
           ?? findPromptMetadata(hostBridge()?.toolResponseMetadata);
-        if (next) setPromptMetadata(next);
+        const nextLive = findLiveMetadata(source)
+          ?? findLiveMetadata(hostBridge()?.toolResponseMetadata);
+        if (nextPrompt) setPromptMetadata(nextPrompt);
+        if (nextLive) setLiveMetadata(nextLive);
         return;
       }
       if (message.id === undefined) return;
@@ -571,7 +588,7 @@ function useMcpBridge(
       for (const request of pending.current.values()) request.reject(new Error("MCP bridge closed"));
       pending.current.clear();
     };
-  }, [setPromptMetadata]);
+  }, [setLiveMetadata, setPromptMetadata]);
 
   return useCallback((name: string, args: Record<string, unknown>) => {
     if (hostBridge()?.callTool) return hostBridge()!.callTool!(name, args);
@@ -613,6 +630,7 @@ function useLiveSession(
     let terminalSeen = false;
     let terminalFailure = false;
     let retryAttempts = 0;
+    const persistentWorkbench = meta.targetType === "workbench";
 
     const renewTicket = async (): Promise<RenewalOutcome> => {
       if (!meta.targetType || !meta.targetId || !meta.renewUrl) return "terminal";
@@ -678,13 +696,17 @@ function useLiveSession(
       };
       const status = value.snapshot?.status;
       if (typeof status === "string") {
-        setState((current) => ({ ...current, status: status.toUpperCase() }));
-        terminalSeen = isTerminalWorkbenchStatus(status);
+        const normalizedStatus = status.toUpperCase();
+        setState((current) => ({
+          ...current,
+          status: persistentWorkbench && normalizedStatus === "OPEN" ? "READY" : normalizedStatus,
+        }));
+        terminalSeen = !persistentWorkbench && isTerminalWorkbenchStatus(normalizedStatus);
       }
       const replayEvents = (value.replay?.events ?? []).filter((event) => event.sequence > liveTarget.current.cursor);
       for (const event of replayEvents) {
         liveTarget.current.cursor = event.sequence;
-        if (eventTerminatesWorkbench(event)) terminalSeen = true;
+        if (!persistentWorkbench && eventTerminatesWorkbench(event)) terminalSeen = true;
       }
       if (replayEvents.length) setState((current) => reduceWorkbenchEvents(current, replayEvents));
       const lastSequence = value.replay?.last_sequence;
@@ -706,7 +728,7 @@ function useLiveSession(
       try {
         setConnection("recovering session");
         await applySnapshot();
-        if (terminalSeen || stopped) return;
+        if ((!persistentWorkbench && terminalSeen) || stopped) return;
         const streamUrl = new URL(meta.streamUrl!, window.location.href);
         streamUrl.searchParams.set("after", String(liveTarget.current.cursor));
         setConnection("connecting");
@@ -757,8 +779,12 @@ function useLiveSession(
             if (eventName === "snapshot") {
               const status = (value as { snapshot?: { status?: string } }).snapshot?.status;
               if (typeof status === "string") {
-                setState((current) => ({ ...current, status: status.toUpperCase() }));
-                terminalSeen = isTerminalWorkbenchStatus(status);
+                const normalizedStatus = status.toUpperCase();
+                setState((current) => ({
+                  ...current,
+                  status: persistentWorkbench && normalizedStatus === "OPEN" ? "READY" : normalizedStatus,
+                }));
+                terminalSeen = !persistentWorkbench && isTerminalWorkbenchStatus(normalizedStatus);
               }
             } else {
               const event = value as WorkbenchEvent;
@@ -766,7 +792,7 @@ function useLiveSession(
                 liveTarget.current.cursor = event.sequence;
                 eventBatch.push(event);
               }
-              if (eventTerminatesWorkbench(event)) terminalSeen = true;
+              if (!persistentWorkbench && eventTerminatesWorkbench(event)) terminalSeen = true;
             }
           } catch {
             setConnection("received invalid event");
@@ -797,7 +823,7 @@ function useLiveSession(
         }
         if (!stopped && data.length) dispatch();
         flushBatch();
-        if (!stopped && !terminalSeen && !terminalFailure) scheduleRetry(consume);
+        if (!stopped && (persistentWorkbench || !terminalSeen) && !terminalFailure) scheduleRetry(consume);
       } catch (error) {
         if (stopped || (error instanceof DOMException && error.name === "AbortError")) return;
         const status = error && typeof error === "object" && "status" in error
@@ -815,7 +841,7 @@ function useLiveSession(
     };
 
     const wake = () => {
-      if (stopped || terminalSeen || terminalFailure) return;
+      if (stopped || (!persistentWorkbench && terminalSeen) || terminalFailure) return;
       retryAttempts = 0;
       liveTarget.current.renewalAttempts = 0;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
@@ -860,10 +886,10 @@ function OwnedWorkbench() {
   const persistedUiState = useRef<WorkbenchUiState>(restoredUiState.current);
   const surfacePreference = useRef<"terminal" | "browser" | undefined>(restoredUiState.current.surfaceMode);
   const [promptMetadata, setPromptMetadata] = useState<PromptMetadata | null>(() => findPromptMetadata(hostBridge()?.toolResponseMetadata));
-  useMcpBridge(setPromptMetadata);
+  const [meta, setMeta] = useState<LiveMetadata | null>(() => findLiveMetadata(hostBridge()?.toolResponseMetadata));
+  useMcpBridge(setPromptMetadata, setMeta);
   useHostTheme();
   const liveStreamingEnabled = promptMetadata?.streamingEnabled === true;
-  const [meta, setMeta] = useState<LiveMetadata | null>(null);
   const [surfaceMode, setSurfaceMode] = useState<"terminal" | "browser">(restoredUiState.current.surfaceMode ?? "terminal");
   const [browserSurface, setBrowserSurface] = useState<BrowserSurfaceState | null>(null);
   const [terminalViewState, setTerminalViewState] = useState({
@@ -882,7 +908,11 @@ function OwnedWorkbench() {
     viewer.current,
   );
   const targetConnection = useLiveSession(meta, setMeta, setState, liveStreamingEnabled, viewer.current);
-  const connection = meta?.targetId && !isTerminalWorkbenchStatus(state.status) ? targetConnection : promptActivity.connection;
+  const connection = meta?.targetType === "workbench"
+    ? targetConnection
+    : meta?.targetId && !isTerminalWorkbenchStatus(state.status)
+      ? targetConnection
+      : promptActivity.connection;
   const visibleTarget = useRef<string | null>(null);
   const displayStatus = meta?.targetType && meta.targetId ? state.status : promptActivity.status;
 

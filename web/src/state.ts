@@ -10,7 +10,7 @@ export type WorkbenchEvent = {
   task_id?: string | null;
   monitor_id?: string | null;
   worker_task_id?: string | null;
-  target?: { type: "task" | "monitor" | "command"; id: string };
+  target?: { type: "workbench" | "task" | "monitor" | "command"; id: string; workspace_id?: string };
   redaction_applied?: boolean;
 };
 
@@ -128,7 +128,7 @@ export function isTerminalWorkbenchStatus(status: string): boolean {
 }
 
 export function workbenchTargetIdentity(
-  targetType?: "task" | "monitor" | "command",
+  targetType?: "workbench" | "task" | "monitor" | "command",
   targetId?: string,
   workspaceId?: string,
 ): string | null {
@@ -143,7 +143,7 @@ export class LiveTargetSession {
   renewalAttempts = 0;
 
   bind(
-    targetType?: "task" | "monitor" | "command",
+    targetType?: "workbench" | "task" | "monitor" | "command",
     targetId?: string,
     workspaceId?: string,
   ): boolean {
@@ -154,6 +154,33 @@ export class LiveTargetSession {
     this.renewalAttempts = 0;
     return true;
   }
+}
+
+export function normalizeWorkbenchEvent(event: WorkbenchEvent): WorkbenchEvent {
+  if (event.target?.type !== "workbench") return event;
+  const envelope = event.payload ?? {};
+  const rawTarget = envelope.target;
+  const rawPayload = envelope.payload;
+  if (!rawTarget || typeof rawTarget !== "object" || !rawPayload || typeof rawPayload !== "object") {
+    return event;
+  }
+  const target = rawTarget as Record<string, unknown>;
+  const targetType = target.type;
+  const targetId = target.id;
+  if (
+    !["task", "monitor", "command"].includes(String(targetType)) ||
+    typeof targetId !== "string" ||
+    !targetId
+  ) return event;
+  return {
+    ...event,
+    target: {
+      type: targetType as "task" | "monitor" | "command",
+      id: targetId,
+      ...(typeof target.workspace_id === "string" ? { workspace_id: target.workspace_id } : {}),
+    },
+    payload: rawPayload as Record<string, unknown>,
+  };
 }
 
 export function authoritativeWorkbenchStatus(event: WorkbenchEvent): string | null {
@@ -188,7 +215,7 @@ export function authoritativeWorkbenchStatus(event: WorkbenchEvent): string | nu
 }
 
 export function eventTerminatesWorkbench(event: WorkbenchEvent): boolean {
-  const status = authoritativeWorkbenchStatus(event);
+  const status = authoritativeWorkbenchStatus(normalizeWorkbenchEvent(event));
   return status !== null && isTerminalWorkbenchStatus(status);
 }
 
@@ -429,18 +456,19 @@ export function initialWorkbenchState(): WorkbenchState {
 }
 
 export function reduceWorkbenchEvent(state: WorkbenchState, event: WorkbenchEvent): WorkbenchState {
-  if (!Number.isFinite(event.sequence) || event.sequence <= state.lastSequence) return state;
-  const authoritativeStatus = authoritativeWorkbenchStatus(event);
-  const rows = terminalRows(event);
+  const normalized = normalizeWorkbenchEvent(event);
+  if (!Number.isFinite(normalized.sequence) || normalized.sequence <= state.lastSequence) return state;
+  const authoritativeStatus = authoritativeWorkbenchStatus(normalized);
+  const rows = terminalRows(normalized);
   // Avoid allocating a new state object when the event only advances the
   // sequence counter and produces no visible change. This is common for
   // heartbeats and events the terminal view does not render.
   if (!authoritativeStatus && !rows.length) {
-    return { ...state, lastSequence: event.sequence };
+    return { ...state, lastSequence: normalized.sequence };
   }
   const next: WorkbenchState = {
     ...state,
-    lastSequence: event.sequence,
+    lastSequence: normalized.sequence,
   };
   if (authoritativeStatus) next.status = authoritativeStatus;
   if (rows.length) {

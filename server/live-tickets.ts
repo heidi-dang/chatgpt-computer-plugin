@@ -3,7 +3,7 @@ import { LiveTicketCodec } from "./live-ticket-codec.js";
 import { LiveTicketStateStore } from "./live-ticket-state.js";
 
 export type LiveTarget =
-  | { targetType: "task" | "monitor"; targetId: string }
+  | { targetType: "workbench" | "task" | "monitor"; targetId: string }
   | { targetType: "command"; targetId: string; workspaceId: string; workerId?: string };
 
 export type WidgetStreamMetadata<T extends LiveTarget = LiveTarget> = T & {
@@ -48,7 +48,7 @@ function parseClaims(value: unknown): TicketClaims | null {
     expiresAt: raw.expiresAt,
     renewUntil: raw.renewUntil,
   };
-  if (raw.targetType === "task" || raw.targetType === "monitor") {
+  if (raw.targetType === "workbench" || raw.targetType === "task" || raw.targetType === "monitor") {
     return { targetType: raw.targetType, targetId: raw.targetId, ...common };
   }
   if (raw.targetType !== "command" || typeof raw.workspaceId !== "string" || !raw.workspaceId) return null;

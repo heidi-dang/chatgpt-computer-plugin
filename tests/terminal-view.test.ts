@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { TerminalView, normalizeTerminalText } from "../web/src/terminal-view.js";
+import { TerminalView, isNearTerminalTail, normalizeTerminalText } from "../web/src/terminal-view.js";
 
 test("default widget matches the ChatGPT Terminal live surface", () => {
   const html = renderToStaticMarkup(React.createElement(TerminalView, {
@@ -112,7 +112,7 @@ test("idle prompt lifecycle renders LIVE when the persistent prompt SSE is healt
 
 test("iOS remount with no target reports transport recovery instead of a false disconnect", () => {
   const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
-  const promptHook = source.slice(source.indexOf("function usePromptActivity("), source.indexOf("function useMcpBridge()"));
+  const promptHook = source.slice(source.indexOf("function usePromptActivity("), source.indexOf("function useMcpBridge("));
 
   assert.match(
     promptHook,
@@ -141,7 +141,7 @@ test("iOS remount with no target reports transport recovery instead of a false d
 
 test("Direct Coding Worker metadata never clears an already-bound live command target", () => {
   const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
-  const promptHook = source.slice(source.indexOf("function usePromptActivity("), source.indexOf("function useMcpBridge()"));
+  const promptHook = source.slice(source.indexOf("function usePromptActivity("), source.indexOf("function useMcpBridge("));
   const workerBranch = promptHook.slice(promptHook.indexOf("event.type === \"direct.worker\""), promptHook.indexOf("event.type === \"live.bind\""));
 
   assert.match(workerBranch, /appendDirectWorkerActivity/);
@@ -274,7 +274,9 @@ test("Workbench reports intrinsic height through both ChatGPT host sizing paths 
   assert.doesNotMatch(source, /requestHostDisplayMode\(hostBridge\(\), "pip"\)[\s\S]*autoPinAttempted/);
   assert.doesNotMatch(source, /hasWorkers\s*\?\s*<DirectWorkersView/);
   assert.match(source, /const promptActivity = usePromptActivity\(/);
-  assert.match(source, /const connection = meta\?\.targetId && !isTerminalWorkbenchStatus\(state\.status\) \? targetConnection : promptActivity\.connection/);
+  assert.match(source, /const connection = meta\?\.targetType === "workbench"/);
+  assert.match(source, /meta\?\.targetId && !isTerminalWorkbenchStatus\(state\.status\)/);
+  assert.match(source, /: promptActivity\.connection/);
   assert.match(source, /const displayStatus = meta\?\.targetType && meta\.targetId \? state\.status : promptActivity\.status/);
   assert.doesNotMatch(source, /meta\?\.targetId \? targetConnection : "connecting terminal session"/);
   assert.doesNotMatch(source, /displayStatus = meta\?\.targetType && meta\.targetId \? state\.status : "CONNECTING"/);
@@ -301,8 +303,24 @@ test("terminal view memoizes stable rows and frame-coalesces follow scrolling", 
 
   assert.match(source, /const TerminalLine = React\.memo\(/);
   assert.match(source, /<TerminalLine key=\{row\.id\} row=\{row\} \/>/);
+  assert.match(source, /const tailFrame = useRef<number \| null>\(null\)/);
+  assert.match(source, /if \(tailFrame\.current !== null\) return/);
+  assert.match(source, /element\.scrollTop = element\.scrollHeight/);
   assert.match(source, /window\.requestAnimationFrame\(/);
   assert.match(source, /window\.cancelAnimationFrame\(/);
+});
+
+test("follow-tail stays enabled near the bottom and pauses when the user scrolls away", () => {
+  assert.equal(isNearTerminalTail(1000, 776, 200), true, "24px from tail remains attached");
+  assert.equal(isNearTerminalTail(1000, 775, 200), false, "25px from tail pauses follow mode");
+  assert.equal(isNearTerminalTail(1000, 600, 200), false);
+  assert.equal(isNearTerminalTail(1000, 800, 200), true);
+});
+
+test("terminal follow-tail disables browser scroll anchoring and smooth-scroll lag", () => {
+  const css = readFileSync(new URL("../web/src/workbench.css", import.meta.url), "utf8");
+  assert.match(css, /\.terminal-output\s*\{[\s\S]*overflow-anchor:\s*none/);
+  assert.match(css, /\.terminal-output\s*\{[\s\S]*scroll-behavior:\s*auto/);
 });
 
 test("terminal follow changes are edge-triggered instead of writing ChatGPT widget state on every scroll frame", () => {
@@ -375,7 +393,7 @@ test("Workbench switches terminal and browser inside one persistent root", () =>
 test("Workbench recovery contract survives iOS suspension, replay, and browser lease changes", () => {
   const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
   const browserSource = readFileSync(new URL("../web/src/browser-surface.tsx", import.meta.url), "utf8");
-  const promptHook = source.slice(source.indexOf("function usePromptActivity("), source.indexOf("function useMcpBridge()"));
+  const promptHook = source.slice(source.indexOf("function usePromptActivity("), source.indexOf("function useMcpBridge("));
   const promptConsume = promptHook.slice(promptHook.indexOf("const consume = async () => {"), promptHook.indexOf("const wake = () =>"));
 
   assert.ok(promptConsume.indexOf("const response = await fetch(url") < promptConsume.indexOf("await applySnapshot()"), "prompt SSE must open before snapshot fallback so startup is not delayed by an extra round trip");
@@ -407,10 +425,12 @@ test("Workbench consumes standard MCP Apps tool-result notifications to refresh 
   const bridge = source.slice(source.indexOf("function useMcpBridge("), source.indexOf("function useLiveSession("));
 
   assert.match(bridge, /message\.method === "ui\/notifications\/tool-result"/);
-  assert.match(bridge, /findPromptMetadata\(message\.params\)/);
-  assert.match(bridge, /findPromptMetadata\(hostBridge\(\)\?\.toolResponseMetadata\)/);
-  assert.match(bridge, /setPromptMetadata\(next\)/);
-  assert.match(source, /useMcpBridge\(setPromptMetadata\)/);
+  assert.match(bridge, /const source = message\.params \?\? hostBridge\(\)\?\.toolResponseMetadata/);
+  assert.match(bridge, /findPromptMetadata\(source\)/);
+  assert.match(bridge, /findLiveMetadata\(source\)/);
+  assert.match(bridge, /setPromptMetadata\(nextPrompt\)/);
+  assert.match(bridge, /setLiveMetadata\(nextLive\)/);
+  assert.match(source, /useMcpBridge\(setPromptMetadata, setMeta\)/);
 });
 
 test("Workbench follows the documented ChatGPT theme globals without owning host appearance", () => {

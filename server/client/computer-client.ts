@@ -636,6 +636,7 @@ export class ComputerClient {
     prompt: string;
     model_id?: string;
     idempotency_key?: string;
+    workbench_session_id?: string;
     execution_policy?: {
       allow_file_writes: boolean;
       allow_commands: boolean;
@@ -657,6 +658,7 @@ export class ComputerClient {
     model_id?: string;
     wait_seconds?: number;
     idempotency_key?: string;
+    workbench_session_id?: string;
     execution_policy?: {
       allow_file_writes: boolean;
       allow_commands: boolean;
@@ -670,6 +672,7 @@ export class ComputerClient {
       prompt: input.prompt,
       ...(input.model_id ? { model_id: input.model_id } : {}),
       idempotency_key: input.idempotency_key,
+      workbench_session_id: input.workbench_session_id,
       execution_policy: input.execution_policy,
     });
     const deadline = Date.now() + waitSeconds * 1_000;
@@ -1090,6 +1093,7 @@ export class ComputerClient {
     path?: string;
     test_path?: string;
     wait_seconds?: number;
+    workbench_session_id?: string;
   }): Promise<DirectCommand & { target: string }> {
     const { workspace_id, ...body } = input;
     return this.request(`/workspaces/${encodeURIComponent(workspace_id)}/coding/test-targets`, {
@@ -1261,6 +1265,7 @@ export class ComputerClient {
     alias: string;
     command: string;
     wait_seconds?: number;
+    workbench_session_id?: string;
   }): Promise<DirectSshCommand> {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/ssh/commands`, {
       method: "POST",
@@ -1268,6 +1273,7 @@ export class ComputerClient {
         alias: input.alias,
         command: input.command,
         wait_seconds: input.wait_seconds ?? 0,
+        workbench_session_id: input.workbench_session_id,
       },
     });
   }
@@ -1472,6 +1478,7 @@ export class ComputerClient {
     acceptance_criteria: string[];
     model_id?: string;
     idempotency_key?: string;
+    workbench_session_id?: string;
     execution_policy?: {
       allow_file_writes: boolean;
       allow_commands: boolean;
@@ -1591,6 +1598,43 @@ export class ComputerClient {
     if (request.worker_id) query.set("worker_id", request.worker_id);
     for (const path of request.paths ?? []) query.append("paths", path);
     return this.request(`/workspaces/${encodeURIComponent(request.workspace_id)}/git/diff?${query}`);
+  }
+
+  async getWorkbenchLiveSnapshot(
+    sessionId: string,
+    afterSequence = 0,
+  ): Promise<Record<string, unknown>> {
+    return this.request(
+      `/workbench-sessions/${encodeURIComponent(sessionId)}/stream/snapshot?after=${Math.max(0, afterSequence)}`,
+    );
+  }
+
+  async streamWorkbenchLive(
+    sessionId: string,
+    afterSequence = 0,
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    const controller = new AbortController();
+    const abortFromCaller = () => controller.abort();
+    if (signal?.aborted) abortFromCaller();
+    else signal?.addEventListener("abort", abortFromCaller, { once: true });
+    const timeout = setTimeout(() => controller.abort(), Math.max(this.timeoutMs, 60_000));
+    try {
+      return await this.fetchImpl(
+        `${this.baseUrl}/api/control/v1/workbench-sessions/${encodeURIComponent(sessionId)}/stream?after=${Math.max(0, afterSequence)}`,
+        {
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            Accept: "text/event-stream",
+            ...this.requestTraceHeaders(),
+          },
+          signal: controller.signal,
+        },
+      );
+    } finally {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abortFromCaller);
+    }
   }
 
   async getLiveSnapshot(

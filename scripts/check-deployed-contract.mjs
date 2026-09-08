@@ -120,7 +120,6 @@ const compactExpectedTools = [
   "cptr_memory",
   "cptr_open_live_workbench",
   "cptr_plugin_update",
-  "cptr_render_live_terminal",
   "cptr_ssh",
   "cptr_user_chrome",
   "cptr_workbench",

@@ -140,6 +140,8 @@ button:focus-visible, .terminal-output:focus-visible { outline: 2px solid #7fb8f
   margin: 0;
   overflow: auto;
   overscroll-behavior: contain;
+  overflow-anchor: none;
+  scroll-behavior: auto;
   /* Promote to compositor layer for smoother iOS WKWebView scrolling */
   will-change: scroll-position;
   color: #d7e0ea;

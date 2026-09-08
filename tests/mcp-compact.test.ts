@@ -19,7 +19,6 @@ const COMPACT_TOOL_NAMES = [
   "cptr_memory",
   "cptr_open_live_workbench",
   "cptr_plugin_update",
-  "cptr_render_live_terminal",
   "cptr_ssh",
   "cptr_user_chrome",
   "cptr_workbench",
@@ -42,7 +41,7 @@ async function connectedServer(computer: ComputerClient, toolSurface: "legacy" |
   return { server, client };
 }
 
-test("compact MCP surface exposes 18 domain tools under 100 KB while legacy stays intact", async () => {
+test("compact MCP surface exposes 17 backend-owned Workbench tools under 100 KB while legacy stays intact", async () => {
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "test-token",
@@ -53,7 +52,7 @@ test("compact MCP surface exposes 18 domain tools under 100 KB while legacy stay
   const compactListed = await compact.client.listTools();
   assert.deepEqual(compactListed.tools.map((tool) => tool.name).sort(), COMPACT_TOOL_NAMES);
   assert.ok(Buffer.byteLength(JSON.stringify(compactListed)) < 100_000);
-  assert.equal(getMcpToolSurfaceProfile(compact.server)?.registered_tools, 18);
+  assert.equal(getMcpToolSurfaceProfile(compact.server)?.registered_tools, 17);
   assert.equal(getMcpToolSurfaceProfile(compact.server)?.delegated_tools, 2);
   for (const tool of compactListed.tools) {
     const input = tool.inputSchema as {
@@ -81,15 +80,15 @@ test("compact MCP surface exposes 18 domain tools under 100 KB while legacy stay
     arguments: {
       action: "verify_server",
       expected_contract_version: "2026-07-28",
-      expected_tool_count: 18,
+      expected_tool_count: 17,
     },
   });
   const updateValue = update.structuredContent as Record<string, unknown> | undefined;
   assert.equal(update.isError, undefined);
   assert.equal(updateValue?.tool_surface, "compact");
   assert.equal(updateValue?.contract_version, "2026-07-28");
-  assert.equal(updateValue?.tool_count, 18);
-  assert.equal(updateValue?.registered_tool_count, 18);
+  assert.equal(updateValue?.tool_count, 17);
+  assert.equal(updateValue?.registered_tool_count, 17);
   assert.equal(updateValue?.core_tool_count, 84);
   assert.equal(updateValue?.legacy_registered_tool_count, 91);
   assert.equal(updateValue?.tool_count_matches, true);
@@ -281,7 +280,7 @@ test("compact stale workspace errors stay recoverable without poisoning the MCP 
   await server.close();
 });
 
-test("compact command run preserves durable Workbench command binding", async () => {
+test("compact Workbench opens one backend-owned live stream and command run does not rebind transport", async () => {
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "test-token",
@@ -319,12 +318,22 @@ test("compact command run preserves durable Workbench command binding", async ()
     binding = structuredClone(input);
     return {};
   };
-  const { server, client } = await connectedServer(computer, "compact");
+  const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
+  const tickets = new LiveTicketStore();
+  const server = createMcpServer(computer, { toolSurface: "compact", promptSessions, tickets } as never);
+  const client = new Client({ name: "compact-workbench-live", version: "1" });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   const opened = await client.callTool({
     name: "cptr_open_live_workbench",
     arguments: { session_name: "Compact command", workspace_id: "workspace-1" },
   });
   const sessionId = (opened.structuredContent as { session_id: string }).session_id;
+  const live = (opened._meta as { "cptr/live"?: { targetType?: string; targetId?: string } } | undefined)?.["cptr/live"];
+  const promptTicket = (opened._meta as { "cptr/prompt"?: { ticket?: string } } | undefined)?.["cptr/prompt"]?.ticket;
+  assert.equal(live?.targetType, "workbench");
+  assert.equal(live?.targetId, sessionId);
+  assert.ok(promptTicket);
 
   const result = await client.callTool({
     name: "cptr_command",
@@ -333,8 +342,8 @@ test("compact command run preserves durable Workbench command binding", async ()
       payload: {
         workspace_id: "workspace-1",
         command: "printf compact",
-        workbench_session_id: sessionId,
       },
+      workbench_session_id: sessionId,
     },
   });
   assert.equal(result.isError, undefined);
@@ -343,18 +352,15 @@ test("compact command run preserves durable Workbench command binding", async ()
     command: "printf compact",
     workbench_session_id: "wbs_compact_command_0001",
   });
-  assert.deepEqual(binding, {
-    session_id: "wbs_compact_command_0001",
-    target_type: "command",
-    target_id: "cmd-1",
-    workspace_id: "workspace-1",
-  });
+  assert.equal(binding, null, "backend command creation must own target binding without a second plugin request");
+  const binds = promptSessions.replay(promptTicket!, 0)?.events.filter((event) => event.type === "live.bind") ?? [];
+  assert.equal(binds.length, 0, "normal command execution must not switch the Workbench transport");
 
   await client.close();
   await server.close();
 });
 
-test("compact command run_test preserves legacy Workbench binding, activity, and prompt live.bind", async () => {
+test("compact command run_test forwards Workbench routing to the backend without plugin binding", async () => {
   const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
   const tickets = new LiveTicketStore();
   const appended: Array<Record<string, unknown>> = [];
@@ -378,14 +384,18 @@ test("compact command run_test preserves legacy Workbench binding, activity, and
     last_event_at: null,
     archived_at: null,
   });
-  (computer as any).runWorkspaceTestTarget = async () => ({
-    target: "node_test",
-    command_id: "cmd-test-1",
-    status: "RUNNING",
-    exit_code: null,
-    output: "",
-    next_offset: 0,
-  });
+  let testInput: Record<string, unknown> | null = null;
+  (computer as any).runWorkspaceTestTarget = async (input: Record<string, unknown>) => {
+    testInput = structuredClone(input);
+    return {
+      target: "node_test",
+      command_id: "cmd-test-1",
+      status: "RUNNING",
+      exit_code: null,
+      output: "",
+      next_offset: 0,
+    };
+  };
   let binding: unknown = null;
   (computer as any).bindWorkbenchSession = async (input: unknown) => {
     binding = structuredClone(input);
@@ -417,34 +427,26 @@ test("compact command run_test preserves legacy Workbench binding, activity, and
       payload: {
         workspace_id: "workspace-1",
         target: "node_test",
-        workbench_session_id: sessionId,
       },
+      workbench_session_id: sessionId,
     },
   });
   assert.equal(response.isError, undefined);
-  assert.deepEqual(binding, {
-    session_id: "wbs_compact_test_00000001",
-    target_type: "command",
-    target_id: "cmd-test-1",
+  assert.deepEqual(testInput, {
     workspace_id: "workspace-1",
+    target: "node_test",
+    workbench_session_id: "wbs_compact_test_00000001",
   });
-  assert.equal(appended.at(-1)?.event_type, "test_profile.started");
-  assert.equal(appended.at(-1)?.target_id, "cmd-test-1");
-
-  const replay = promptSessions.replay(promptTicket!, 0);
-  const bind = replay?.events.find((event) => event.type === "live.bind");
-  assert.equal(bind?.type, "live.bind");
-  if (bind?.type === "live.bind") {
-    assert.equal(bind.payload.live.targetType, "command");
-    assert.equal(bind.payload.live.targetId, "cmd-test-1");
-    assert.equal(bind.payload.live.workspaceId, "workspace-1");
-  }
+  assert.equal(binding, null, "backend test execution owns target association");
+  assert.deepEqual(appended, [], "plugin must not synthesize backend lifecycle rows");
+  const binds = promptSessions.replay(promptTicket!, 0)?.events.filter((event) => event.type === "live.bind") ?? [];
+  assert.equal(binds.length, 0, "test execution must stay on the persistent Workbench transport");
 
   await client.close();
   await server.close();
 });
 
-test("compact worker run and run_test preserve real Workbench command live.bind", async () => {
+test("compact worker run and run_test forward the same Workbench route without target switching", async () => {
   const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
   const tickets = new LiveTicketStore();
   const computer = new ComputerClient({
@@ -468,23 +470,31 @@ test("compact worker run and run_test preserve real Workbench command live.bind"
     archived_at: null,
   });
   let nextCommandId = "cmd-worker-run";
-  (computer as any).runCodingCommand = async () => ({
-    command_id: nextCommandId,
-    status: "RUNNING",
-    exit_code: null,
-    output: "",
-    next_offset: 0,
-    output_offset: 0,
-    output_truncated: false,
-  });
-  (computer as any).runWorkspaceTestTarget = async () => ({
-    target: "node_test",
-    command_id: "cmd-worker-test",
-    status: "RUNNING",
-    exit_code: null,
-    output: "",
-    next_offset: 0,
-  });
+  const commandInputs: Array<Record<string, unknown>> = [];
+  const testInputs: Array<Record<string, unknown>> = [];
+  (computer as any).runCodingCommand = async (input: Record<string, unknown>) => {
+    commandInputs.push(structuredClone(input));
+    return {
+      command_id: nextCommandId,
+      status: "RUNNING",
+      exit_code: null,
+      output: "",
+      next_offset: 0,
+      output_offset: 0,
+      output_truncated: false,
+    };
+  };
+  (computer as any).runWorkspaceTestTarget = async (input: Record<string, unknown>) => {
+    testInputs.push(structuredClone(input));
+    return {
+      target: "node_test",
+      command_id: "cmd-worker-test",
+      status: "RUNNING",
+      exit_code: null,
+      output: "",
+      next_offset: 0,
+    };
+  };
   const bindings: Array<Record<string, unknown>> = [];
   (computer as any).bindWorkbenchSession = async (input: Record<string, unknown>) => {
     bindings.push(structuredClone(input));
@@ -510,8 +520,8 @@ test("compact worker run and run_test preserve real Workbench command live.bind"
         workspace_id: "workspace-1",
         worker_id: "dcw-live",
         command: "printf worker",
-        workbench_session_id: sessionId,
       },
+      workbench_session_id: sessionId,
     },
   });
   nextCommandId = "unused";
@@ -523,33 +533,22 @@ test("compact worker run and run_test preserve real Workbench command live.bind"
         workspace_id: "workspace-1",
         worker_id: "dcw-live",
         target: "node_test",
-        workbench_session_id: sessionId,
       },
+      workbench_session_id: sessionId,
     },
   });
 
-  assert.deepEqual(bindings.map((binding) => binding.target_id), ["cmd-worker-run", "cmd-worker-test"]);
+  assert.equal(commandInputs[0]?.workbench_session_id, "wbs_compact_worker_live_01");
+  assert.equal(testInputs[0]?.workbench_session_id, "wbs_compact_worker_live_01");
+  assert.deepEqual(bindings, [], "worker execution must bind only inside CPTR backend execution");
   const binds = promptSessions.replay(promptTicket!, 0)?.events.filter((event) => event.type === "live.bind") ?? [];
-  assert.deepEqual(
-    binds.map((event) => event.type === "live.bind" ? event.payload.live.targetId : null),
-    ["cmd-worker-run", "cmd-worker-test"],
-    "compact worker commands must select the real command SSE targets exactly like the legacy worker tools",
-  );
-  assert.deepEqual(
-    binds.map((event) =>
-      event.type === "live.bind" && event.payload.live.targetType === "command"
-        ? event.payload.live.workerId
-        : null
-    ),
-    ["dcw-live", "dcw-live"],
-    "compact worker live tickets must preserve the isolated Direct Coding Worker identity",
-  );
+  assert.equal(binds.length, 0, "worker commands must not replace the persistent Workbench stream");
 
   await client.close();
   await server.close();
 });
 
-test("compact command follow-ups preserve non-worker prompt live.bind", async () => {
+test("compact command follow-ups do not switch the persistent Workbench transport", async () => {
   const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
   const tickets = new LiveTicketStore();
   const computer = new ComputerClient({
@@ -616,20 +615,14 @@ test("compact command follow-ups preserve non-worker prompt live.bind", async ()
     const afterReplay = promptSessions.replay(promptTicket!, 0);
     assert.ok(afterReplay);
     const binds = afterReplay.events.filter((event) => event.type === "live.bind");
-    assert.equal(binds.length, before + 1, `${action} should append one live.bind`);
-    const bind = binds.at(-1);
-    if (bind?.type === "live.bind") {
-      assert.equal(bind.payload.live.targetType, "command");
-      assert.equal(bind.payload.live.targetId, "cmd-follow-1");
-      assert.equal(bind.payload.live.workspaceId, "workspace-1");
-    }
+    assert.equal(binds.length, before, `${action} must not append live.bind`);
   }
 
   await client.close();
   await server.close();
 });
 
-test("compact SSH actions preserve legacy prompt command binding", async () => {
+test("compact SSH run forwards Workbench routing while SSH follow-ups keep the persistent transport", async () => {
   const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
   const tickets = new LiveTicketStore();
   const computer = new ComputerClient({
@@ -661,7 +654,11 @@ test("compact SSH actions preserve legacy prompt command binding", async () => {
     output: "",
     next_offset: 0,
   };
-  (computer as any).runSshCommand = async () => sshResult;
+  const sshRunInputs: Array<Record<string, unknown>> = [];
+  (computer as any).runSshCommand = async (input: Record<string, unknown>) => {
+    sshRunInputs.push(structuredClone(input));
+    return sshResult;
+  };
   (computer as any).getSshCommand = async () => sshResult;
   (computer as any).cancelSshCommand = async () => sshResult;
 
@@ -673,36 +670,35 @@ test("compact SSH actions preserve legacy prompt command binding", async () => {
   const promptTicket = (opened._meta as { "cptr/prompt"?: { ticket?: string } } | undefined)?.["cptr/prompt"]?.ticket;
   assert.ok(promptTicket);
 
-  const calls: Array<[string, Record<string, unknown>]> = [
-    ["run", { alias: "host-a", command: "true" }],
-    ["status", { command_id: "ssh-cmd-1" }],
-    ["cancel", { command_id: "ssh-cmd-1" }],
+  const calls: Array<[string, Record<string, unknown>, string | undefined]> = [
+    ["run", { alias: "host-a", command: "true" }, "wbs_compact_ssh_00000001"],
+    ["status", { command_id: "ssh-cmd-1" }, undefined],
+    ["cancel", { command_id: "ssh-cmd-1" }, undefined],
   ];
-  for (const [action, extra] of calls) {
+  for (const [action, extra, workbenchSessionId] of calls) {
     const beforeReplay = promptSessions.replay(promptTicket!, 0);
     const before: number = beforeReplay?.events.filter((event) => event.type === "live.bind").length ?? 0;
     const response = await client.callTool({
       name: "cptr_ssh",
-      arguments: { action, payload: { workspace_id: "workspace-1", ...extra } },
+      arguments: {
+        action,
+        payload: { workspace_id: "workspace-1", ...extra },
+        ...(workbenchSessionId ? { workbench_session_id: workbenchSessionId } : {}),
+      },
     });
     assert.equal(response.isError, undefined, `${action} should complete`);
     const afterReplay = promptSessions.replay(promptTicket!, 0);
     assert.ok(afterReplay);
     const binds = afterReplay.events.filter((event) => event.type === "live.bind");
-    assert.equal(binds.length, before + 1, `${action} should append one live.bind`);
-    const bind = binds.at(-1);
-    if (bind?.type === "live.bind") {
-      assert.equal(bind.payload.live.targetType, "command");
-      assert.equal(bind.payload.live.targetId, "ssh-cmd-1");
-      assert.equal(bind.payload.live.workspaceId, "workspace-1");
-    }
+    assert.equal(binds.length, before, `${action} must not append live.bind`);
   }
+  assert.equal(sshRunInputs[0]?.workbench_session_id, "wbs_compact_ssh_00000001");
 
   await client.close();
   await server.close();
 });
 
-test("compact delegated starts preserve legacy Workbench activity and prompt live.bind", async () => {
+test("compact delegated starts forward Workbench routing to backend-owned task and monitor streams", async () => {
   const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
   const tickets = new LiveTicketStore();
   const appended: Array<Record<string, unknown>> = [];
@@ -731,17 +727,29 @@ test("compact delegated starts preserve legacy Workbench activity and prompt liv
     appended.push(structuredClone(input));
     return { sequence: appended.length, ...input };
   };
-  (computer as any).startTask = async () => ({ id: "task-start-1", workspace_id: "workspace-1", status: "RUNNING" });
-  (computer as any).executeTask = async () => ({
-    task_id: "task-exec-1",
-    workspace_id: "workspace-1",
-    status: "RUNNING",
-    output: "",
-    output_truncated: false,
-    completed: false,
-    wait_seconds: 1,
-  });
-  (computer as any).createAutonomous = async () => ({ monitor_id: "monitor-1", workspace_id: "workspace-1", status: "RUNNING" });
+  const taskStarts: Array<Record<string, unknown>> = [];
+  const taskExecutions: Array<Record<string, unknown>> = [];
+  const monitorStarts: Array<Record<string, unknown>> = [];
+  (computer as any).startTask = async (input: Record<string, unknown>) => {
+    taskStarts.push(structuredClone(input));
+    return { id: "task-start-1", workspace_id: "workspace-1", status: "RUNNING" };
+  };
+  (computer as any).executeTask = async (input: Record<string, unknown>) => {
+    taskExecutions.push(structuredClone(input));
+    return {
+      task_id: "task-exec-1",
+      workspace_id: "workspace-1",
+      status: "RUNNING",
+      output: "",
+      output_truncated: false,
+      completed: false,
+      wait_seconds: 1,
+    };
+  };
+  (computer as any).createAutonomous = async (input: Record<string, unknown>) => {
+    monitorStarts.push(structuredClone(input));
+    return { monitor_id: "monitor-1", workspace_id: "workspace-1", status: "RUNNING" };
+  };
 
   const server = createMcpServer(computer, { toolSurface: "compact", promptSessions, tickets } as never);
   const client = new Client({ name: "compact-delegated-live", version: "1" });
@@ -758,11 +766,11 @@ test("compact delegated starts preserve legacy Workbench activity and prompt liv
 
   await client.callTool({
     name: "cptr_agent_task",
-    arguments: { action: "start", payload: { workspace_id: "workspace-1", prompt: "start", workbench_session_id: sessionId } },
+    arguments: { action: "start", payload: { workspace_id: "workspace-1", prompt: "start" }, workbench_session_id: sessionId },
   });
   await client.callTool({
     name: "cptr_agent_task",
-    arguments: { action: "execute", payload: { workspace_id: "workspace-1", prompt: "execute", workbench_session_id: sessionId } },
+    arguments: { action: "execute", payload: { workspace_id: "workspace-1", prompt: "execute" }, workbench_session_id: sessionId },
   });
   await client.callTool({
     name: "cptr_agent_monitor",
@@ -772,20 +780,17 @@ test("compact delegated starts preserve legacy Workbench activity and prompt liv
         workspace_id: "workspace-1",
         goal: "monitor",
         acceptance_criteria: ["done"],
-        workbench_session_id: sessionId,
       },
+      workbench_session_id: sessionId,
     },
   });
 
-  assert.deepEqual(
-    appended.map((event) => event.event_type),
-    ["task.started", "task.executed", "monitor.started"],
-  );
+  assert.equal(taskStarts[0]?.workbench_session_id, "wbs_compact_delegate_0001");
+  assert.equal(taskExecutions[0]?.workbench_session_id, "wbs_compact_delegate_0001");
+  assert.equal(monitorStarts[0]?.workbench_session_id, "wbs_compact_delegate_0001");
+  assert.deepEqual(appended, [], "plugin must not synthesize delegated lifecycle rows");
   const binds = promptSessions.replay(promptTicket!, 0)?.events.filter((event) => event.type === "live.bind") ?? [];
-  assert.deepEqual(
-    binds.map((event) => event.type === "live.bind" ? [event.payload.live.targetType, event.payload.live.targetId] : []),
-    [["task", "task-start-1"], ["task", "task-exec-1"], ["monitor", "monitor-1"]],
-  );
+  assert.equal(binds.length, 0, "delegated execution must stay on the persistent Workbench stream");
 
   await client.close();
   await server.close();

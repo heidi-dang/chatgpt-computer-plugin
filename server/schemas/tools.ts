@@ -540,6 +540,7 @@ export const sshCommandSchema = {
   alias: z.string().min(1).max(128),
   command: z.string().min(1).max(20_000),
   wait_seconds: z.number().int().min(0).max(commandInlineWaitMaxSeconds).default(0),
+  workbench_session_id: workbenchSessionId.optional(),
 };
 
 export const sshCommandStatusSchema = {

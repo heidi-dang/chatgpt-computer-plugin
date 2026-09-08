@@ -21,7 +21,10 @@ const workbenchSession = {
   archived_at: null,
 };
 
-function computerFixture(onAppendWorkbenchEvent?: () => void): ComputerClient {
+function computerFixture(
+  onAppendWorkbenchEvent?: () => void,
+  onRunCodingCommand?: (input: Record<string, unknown>) => void,
+): ComputerClient {
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "test-token",
@@ -31,7 +34,7 @@ function computerFixture(onAppendWorkbenchEvent?: () => void): ComputerClient {
     listWorkspaces: () => Promise<{ workspaces: unknown[] }>;
     createWorkbenchSession: () => Promise<typeof workbenchSession>;
     getWorkbenchSession: () => Promise<typeof workbenchSession>;
-    runCodingCommand: () => Promise<Record<string, unknown>>;
+    runCodingCommand: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
     getCodingCommand: () => Promise<Record<string, unknown>>;
     bindWorkbenchSession: () => Promise<Record<string, unknown>>;
     appendWorkbenchSessionEvent: () => Promise<Record<string, unknown>>;
@@ -39,7 +42,9 @@ function computerFixture(onAppendWorkbenchEvent?: () => void): ComputerClient {
   mutable.listWorkspaces = async () => ({ workspaces: [] });
   mutable.createWorkbenchSession = async () => ({ ...workbenchSession });
   mutable.getWorkbenchSession = async () => ({ ...workbenchSession });
-  mutable.runCodingCommand = async () => ({
+  mutable.runCodingCommand = async (input) => {
+    onRunCodingCommand?.(structuredClone(input));
+    return {
     command_id: "command-stateless-1",
     status: "RUNNING",
     exit_code: null,
@@ -48,7 +53,8 @@ function computerFixture(onAppendWorkbenchEvent?: () => void): ComputerClient {
     duration_ms: 1,
     output_truncated: false,
     timed_out: true,
-  });
+    };
+  };
   mutable.getCodingCommand = async () => ({
     command_id: "command-stateless-1",
     status: "COMPLETE",
@@ -200,10 +206,11 @@ test("routes compact FDX activity without forwarding the Workbench routing hint 
 });
 
 
-test("routes compact command binding and later stateless status through nested payload identity", async () => {
+test("routes compact command execution and later stateless status through the persistent Workbench ID", async () => {
   const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
   const tickets = new LiveTicketStore();
-  const computer = computerFixture();
+  const runInputs: Array<Record<string, unknown>> = [];
+  const computer = computerFixture(undefined, (input) => runInputs.push(input));
 
   const first = await connectedServer(computer, promptSessions, tickets, "compact");
   const opened = await first.client.callTool({ name: "cptr_open_live_workbench", arguments: {} });
@@ -222,23 +229,27 @@ test("routes compact command binding and later stateless status through nested p
       payload: {
         workspace_id: "ws-1",
         command: "printf 'compact live line\\n'",
-        workbench_session_id: sessionId,
       },
+      workbench_session_id: sessionId,
     },
   });
   assert.equal(command.isError, undefined);
   await second.client.close();
   await second.server.close();
 
+  assert.equal(runInputs.length, 1);
+  assert.equal(
+    runInputs[0]?.workbench_session_id,
+    sessionId,
+    "the compact top-level Workbench routing hint must be injected only into backend command creation",
+  );
   const afterRun = promptSessions.replay(promptTicket, 0);
   assert.ok(afterRun);
-  const bind = afterRun.events.find((event) => event.type === "live.bind");
-  assert.equal(bind?.type, "live.bind");
-  if (bind?.type === "live.bind") {
-    assert.equal(bind.payload.live.targetType, "command");
-    assert.equal(bind.payload.live.targetId, "command-stateless-1");
-    assert.equal(bind.payload.live.workspaceId, "ws-1");
-  }
+  assert.equal(
+    afterRun.events.filter((event) => event.type === "live.bind").length,
+    0,
+    "compact execution must not switch away from the persistent Workbench stream",
+  );
 
   const third = await connectedServer(computer, promptSessions, tickets, "compact");
   const followUp = await third.client.callTool({
@@ -246,6 +257,7 @@ test("routes compact command binding and later stateless status through nested p
     arguments: {
       action: "status",
       payload: { workspace_id: "ws-1", command_id: "command-stateless-1" },
+      workbench_session_id: sessionId,
     },
   });
   assert.equal(followUp.isError, undefined);
@@ -258,7 +270,7 @@ test("routes compact command binding and later stateless status through nested p
   assert.deepEqual(
     activity.map((event) => event.type === "mcp.tool" ? event.payload.status : ""),
     ["STARTED", "COMPLETE", "STARTED", "COMPLETE"],
-    "compact run and a later fresh-server status call must stay on the original Live Terminal",
+    "compact run and a later fresh-server status call must stay on the original persistent Workbench",
   );
 
   await third.client.close();
