@@ -528,7 +528,7 @@ export class McpTrafficEmitter {
 
   private async drain(): Promise<void> {
     while (this.queue.length > 0) {
-      const batch = this.queue.splice(0, this.batchSize).map(copyEvent);
+      const batch = this.queue.splice(0, this.batchSize);
       try {
         await this.deliver(batch);
       } catch (error) {

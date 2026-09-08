@@ -64,6 +64,7 @@ function parseClaims(value: unknown): TicketClaims | null {
 
 export class LiveTicketStore {
   private readonly sessions = new Map<string, TicketSession>();
+  private readonly ticketIndex = new Map<string, string>();
   private readonly revokedUntil = new Map<string, number>();
   private readonly now: () => number;
   private readonly ttlMs: number;
@@ -121,7 +122,10 @@ export class LiveTicketStore {
 
   private pruneExpired(now: number): void {
     for (const [sessionId, session] of this.sessions) {
-      if (session.renewUntil <= now) this.sessions.delete(sessionId);
+      if (session.renewUntil <= now) {
+        this.sessions.delete(sessionId);
+        this.ticketIndex.delete(session.ticket);
+      }
     }
     for (const [sessionId, until] of this.revokedUntil) {
       if (until <= now) this.revokedUntil.delete(sessionId);
@@ -132,7 +136,9 @@ export class LiveTicketStore {
     while (this.sessions.size >= this.maxTickets) {
       const oldest = this.sessions.keys().next().value;
       if (typeof oldest !== "string") return;
+      const evicted = this.sessions.get(oldest);
       this.sessions.delete(oldest);
+      if (evicted) this.ticketIndex.delete(evicted.ticket);
     }
   }
 
@@ -174,6 +180,7 @@ export class LiveTicketStore {
     this.evictOldestIfFull();
     const restored: TicketSession = { ...decoded, ticket };
     this.sessions.set(decoded.sessionId, restored);
+    this.ticketIndex.set(ticket, decoded.sessionId);
     return restored;
   }
 
@@ -192,14 +199,17 @@ export class LiveTicketStore {
     const session: TicketSession = { ...claims, ticket };
     this.durableState?.remember(claims.sessionId, ticket, claims.generation, claims.renewUntil, now);
     this.sessions.set(claims.sessionId, session);
+    this.ticketIndex.set(ticket, claims.sessionId);
     return this.metadata(session) as unknown as WidgetStreamMetadata<T>;
   }
 
   validate(ticket: string, target?: LiveTarget): TicketClaims | null {
-    let session = [...this.sessions.values()].find((candidate) => candidate.ticket === ticket) ?? this.restore(ticket, false);
+    const indexedId = this.ticketIndex.get(ticket);
+    let session = (indexedId ? this.sessions.get(indexedId) : undefined) ?? this.restore(ticket, false);
     const now = this.now();
     if (session && !this.isDurablyCurrent(session, ticket, now)) {
       this.sessions.delete(session.sessionId);
+      this.ticketIndex.delete(ticket);
       session = null;
     }
     if (!session || session.expiresAt <= now) return null;
@@ -217,7 +227,8 @@ export class LiveTicketStore {
   }
 
   sessionIdentity(ticket: string): string | null {
-    const session = [...this.sessions.values()].find((candidate) => candidate.ticket === ticket) ?? this.restore(ticket, false);
+    const indexedId = this.ticketIndex.get(ticket);
+    const session = (indexedId ? this.sessions.get(indexedId) : undefined) ?? this.restore(ticket, false);
     if (!session || !this.isDurablyCurrent(session, ticket, this.now())) return null;
     return session.sessionId;
   }
@@ -266,7 +277,9 @@ export class LiveTicketStore {
       )
     ) return null;
     const next: TicketSession = { ...nextClaims, ticket: nextTicket };
+    this.ticketIndex.delete(ticket);
     this.sessions.set(next.sessionId, next);
+    this.ticketIndex.set(nextTicket, next.sessionId);
     return this.metadata(next);
   }
 
@@ -276,6 +289,8 @@ export class LiveTicketStore {
     const now = this.now();
     this.revokedUntil.set(decoded.sessionId, decoded.renewUntil);
     this.durableState?.revoke(decoded.sessionId, decoded.renewUntil, now);
+    const existing = this.sessions.get(decoded.sessionId);
+    if (existing) this.ticketIndex.delete(existing.ticket);
     this.sessions.delete(decoded.sessionId);
   }
 }
