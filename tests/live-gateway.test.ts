@@ -198,6 +198,53 @@ test("enforces the live-stream deadline while waiting on client backpressure", a
   assert.ok(cancelCount >= 1);
 });
 
+test("newer Workbench replaces a stale live target stream at the concurrency limit", async () => {
+  const store = new LiveTicketStore({ ttlMs: 5_000 });
+  const issued = store.issue({ targetType: "task", targetId: "task-remount" });
+  let cancelCount = 0;
+  const client = {
+    streamLive: async () => new Response(new ReadableStream({
+      cancel() { cancelCount += 1; },
+    })),
+  };
+  const gateway = new LiveGateway(client as never, store, { maxConcurrent: 1, maxDurationMs: 5_000 });
+  const makeRequest = (viewerId: string, startedAt: number) => Object.assign(new EventEmitter(), {
+    url: "/live/stream",
+    headers: {
+      authorization: `Bearer ${issued.ticket}`,
+      "x-cptr-viewer-id": viewerId,
+      "x-cptr-viewer-started-at": String(startedAt),
+    },
+    destroyed: false,
+  });
+  const makeResponse = () => Object.assign(new EventEmitter(), {
+    destroyed: false,
+    writableEnded: false,
+    status: 0,
+    writeHead(status: number) { this.status = status; },
+    write() { return true; },
+    end() { this.writableEnded = true; },
+  });
+
+  const oldRequest = makeRequest("old-live-card", 100);
+  const oldResponse = makeResponse();
+  const oldRunning = gateway.handle(oldRequest as never, oldResponse as never);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(oldResponse.status, 200);
+
+  const newRequest = makeRequest("new-live-card", 200);
+  const newResponse = makeResponse();
+  const newRunning = gateway.handle(newRequest as never, newResponse as never);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(oldResponse.writableEnded, true, "new mount must close the stale live stream");
+  assert.equal(newResponse.status, 200, "replacement live stream must not be rejected with 429");
+  assert.ok(cancelCount >= 1, "superseding the stale reader must cancel its upstream stream");
+
+  newRequest.emit("close");
+  await Promise.all([oldRunning, newRunning]);
+});
+
 test("releases capacity when a backpressured client disconnects", async () => {
   const store = new LiveTicketStore({ ttlMs: 5_000 });
   const issued = store.issue({ targetType: "task", targetId: "task-1" });

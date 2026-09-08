@@ -64,6 +64,8 @@ export async function createWorkbenchResource(
   hotReload: WorkbenchHotReload = resolveWorkbenchHotReload({ bundle, styles }),
 ) {
   const widgetDomain = validateWorkbenchDomain(connectDomain);
+  const connectDomains = [widgetDomain];
+  const resourceDomains = hotReload.enabled ? [widgetDomain] : [];
   const reloadScript = hotReload.enabled
     ? `<script>(()=>{const embedded=${JSON.stringify(hotReload.buildId)};const key="cptr-workbench-build:v1";let current=embedded;try{current=sessionStorage.getItem(key)||embedded;sessionStorage.setItem(key,current);}catch{}const css=document.createElement("link");css.rel="stylesheet";css.href=${JSON.stringify(`${widgetDomain}/__cptr/dev/workbench.css`)}+"?build="+encodeURIComponent(current);document.head.appendChild(css);const script=document.createElement("script");script.type="module";script.src=${JSON.stringify(`${widgetDomain}/__cptr/dev/workbench.js`)}+"?build="+encodeURIComponent(current);document.body.appendChild(script);const source=new EventSource(${JSON.stringify(`${widgetDomain}/__cptr/dev/reload`)});source.onmessage=(event)=>{const next=event.data;if(!next||next===current)return;current=next;try{sessionStorage.setItem(key,next);}catch{}source.close();location.reload();};})()</script>`
     : "";
@@ -83,9 +85,19 @@ export async function createWorkbenchResource(
           domain: widgetDomain,
           prefersBorder: false,
           csp: {
-            connectDomains: [widgetDomain],
-            resourceDomains: hotReload.enabled ? [widgetDomain] : [],
+            connectDomains,
+            resourceDomains,
           },
+        },
+        // ChatGPT compatibility metadata mirrors the MCP Apps-standard fields.
+        // Keep both surfaces equivalent so compatibility never widens CSP.
+        "openai/widgetDescription":
+          "Shows CPTR live terminal and browser activity for the current ChatGPT Workbench session.",
+        "openai/widgetPrefersBorder": false,
+        "openai/widgetDomain": widgetDomain,
+        "openai/widgetCSP": {
+          connect_domains: connectDomains,
+          resource_domains: resourceDomains,
         },
       },
     }],

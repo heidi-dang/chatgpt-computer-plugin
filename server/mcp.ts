@@ -386,6 +386,8 @@ const workbenchToolMetadata = oauthToolMetadata;
 const openWorkbenchToolMetadata = {
   ...oauthToolMetadata,
   ui: { resourceUri: WORKBENCH_RESOURCE_URI },
+  // ChatGPT compatibility alias for the MCP Apps-standard resource link.
+  "openai/outputTemplate": WORKBENCH_RESOURCE_URI,
 };
 
 const liveEventOutputSchema = z.object({

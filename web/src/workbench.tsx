@@ -45,6 +45,7 @@ type BridgeMessage = {
 
 type HostBridge = DisplayModeBridge & {
   toolResponseMetadata?: unknown;
+  theme?: "light" | "dark";
   callTool?: (tool: string, input: Record<string, unknown>) => Promise<unknown>;
   notifyIntrinsicHeight?: (height: number) => void;
 };
@@ -113,6 +114,22 @@ function hostBridge(): HostBridge | undefined {
   return (window as Window & { openai?: HostBridge }).openai;
 }
 
+function useHostTheme() {
+  useEffect(() => {
+    const applyTheme = (value: unknown) => {
+      if (value !== "light" && value !== "dark") return;
+      document.documentElement.dataset.theme = value;
+    };
+    applyTheme(hostBridge()?.theme);
+    const onGlobals = (event: Event) => {
+      const detail = (event as CustomEvent<{ globals?: { theme?: unknown } }>).detail;
+      applyTheme(detail?.globals?.theme);
+    };
+    window.addEventListener("openai:set_globals", onGlobals);
+    return () => window.removeEventListener("openai:set_globals", onGlobals);
+  }, []);
+}
+
 function useWorkbenchAutoSize() {
   const lastHeight = useRef(0);
 
@@ -171,6 +188,7 @@ function usePromptActivity(
 ) {
   const cursor = useRef(0);
   const activePromptTools = useRef(0);
+  const visibleBrowserSession = useRef<string | null>(null);
   const [connection, setConnection] = useState("connecting prompt activity");
   // Prompt SSE transport state remains separate from execution lifecycle.
   // An unbound Workbench is READY while its prompt stream connects/reconnects;
@@ -259,6 +277,11 @@ function usePromptActivity(
               .includes(stateValue as BrowserSurfaceState["mode"])
             ? stateValue as BrowserSurfaceState["mode"]
             : "OBSERVING";
+        const shouldAutoOpenBrowser =
+          isLiveEvent &&
+          owner !== "none" &&
+          visibleBrowserSession.current !== sessionId;
+        if (owner !== "none") visibleBrowserSession.current = sessionId;
         setBrowserSurface({
           action: typeof payload.action === "string" ? payload.action : "unknown",
           ...(typeof payload.device_id === "string" ? { deviceId: payload.device_id } : {}),
@@ -268,7 +291,7 @@ function usePromptActivity(
           ...(typeof payload.epoch === "number" ? { epoch: payload.epoch } : {}),
           ...(typeof payload.hostname === "string" ? { hostname: payload.hostname } : {}),
         });
-        if (isLiveEvent && owner !== "none") setSurfaceMode("browser");
+        if (shouldAutoOpenBrowser) setSurfaceMode("browser");
       }
     };
 
@@ -444,7 +467,9 @@ function usePromptActivity(
   return { connection, status };
 }
 
-function useMcpBridge() {
+function useMcpBridge(
+  setPromptMetadata: React.Dispatch<React.SetStateAction<PromptMetadata | null>>,
+) {
   const pending = useRef(new Map<string | number, {
     resolve: (value: unknown) => void;
     reject: (reason?: unknown) => void;
@@ -453,7 +478,14 @@ function useMcpBridge() {
     const onMessage = (event: MessageEvent<BridgeMessage>) => {
       if (event.source !== window.parent) return;
       const message = event.data;
-      if (!message || message.id === undefined) return;
+      if (!message) return;
+      if (message.method === "ui/notifications/tool-result") {
+        const next = findPromptMetadata(message.params)
+          ?? findPromptMetadata(hostBridge()?.toolResponseMetadata);
+        if (next) setPromptMetadata(next);
+        return;
+      }
+      if (message.id === undefined) return;
       const request = pending.current.get(message.id);
       if (!request) return;
       pending.current.delete(message.id);
@@ -479,7 +511,7 @@ function useMcpBridge() {
       for (const request of pending.current.values()) request.reject(new Error("MCP bridge closed"));
       pending.current.clear();
     };
-  }, []);
+  }, [setPromptMetadata]);
 
   return useCallback((name: string, args: Record<string, unknown>) => {
     if (hostBridge()?.callTool) return hostBridge()!.callTool!(name, args);
@@ -750,8 +782,9 @@ function OwnedWorkbench() {
   const [state, setState] = useState(initialWorkbenchState);
   const [actionStatus, setActionStatus] = useState("");
   const viewer = useRef<ViewerIdentity>({ id: crypto.randomUUID(), startedAt: Date.now() });
-  useMcpBridge();
   const [promptMetadata, setPromptMetadata] = useState<PromptMetadata | null>(() => findPromptMetadata(hostBridge()?.toolResponseMetadata));
+  useMcpBridge(setPromptMetadata);
+  useHostTheme();
   const liveStreamingEnabled = promptMetadata?.streamingEnabled === true;
   const [meta, setMeta] = useState<LiveMetadata | null>(null);
   const [surfaceMode, setSurfaceMode] = useState<"terminal" | "browser">("terminal");

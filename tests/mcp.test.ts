@@ -228,8 +228,12 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
     .filter((tool) => (tool._meta as { ui?: { resourceUri?: string } } | undefined)?.ui?.resourceUri)
     .map((tool) => tool.name);
   assert.deepEqual(renderedTools, ["cptr_open_live_workbench"]);
-  const terminalMeta = tools.get("cptr_open_live_workbench")?._meta as { ui?: { resourceUri?: string } } | undefined;
+  const terminalMeta = tools.get("cptr_open_live_workbench")?._meta as {
+    ui?: { resourceUri?: string };
+    "openai/outputTemplate"?: string;
+  } | undefined;
   assert.equal(terminalMeta?.ui?.resourceUri, "ui://cptr/live-workbench.html");
+  assert.equal(terminalMeta?.["openai/outputTemplate"], terminalMeta?.ui?.resourceUri);
   const bindMeta = tools.get("cptr_render_live_terminal")?._meta as { ui?: { resourceUri?: string } } | undefined;
   assert.equal(bindMeta?.ui, undefined);
   assert.equal(tools.get("cptr_monitor_autonomous")?.inputSchema.properties?.action, undefined);

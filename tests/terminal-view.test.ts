@@ -378,7 +378,8 @@ test("Workbench recovery contract survives iOS suspension, replay, and browser l
   assert.match(source, /addEventListener\("online"/);
   assert.match(source, /visibilitychange/);
   assert.match(source, /renewUrl/);
-  assert.match(source, /isLiveEvent\s*&&\s*owner\s*!==\s*"none"/);
+  assert.match(source, /visibleBrowserSession\.current !== sessionId/);
+  assert.match(source, /if \(shouldAutoOpenBrowser\) setSurfaceMode\("browser"\)/);
   assert.match(browserSource, /keepalive:\s*true/);
   assert.match(browserSource, /if\s*\(!response\.ok\)/);
   assert.match(browserSource, /response\.status\s*===\s*409/);
@@ -386,4 +387,37 @@ test("Workbench recovery contract survives iOS suspension, replay, and browser l
   assert.match(browserSource, /viewer_id/);
   assert.match(source, /terminalViewState/);
   assert.match(readFileSync(new URL("../web/src/terminal-view.tsx", import.meta.url), "utf8"), /onScrollTopChange/);
+});
+
+test("Workbench consumes standard MCP Apps tool-result notifications to refresh prompt metadata", () => {
+  const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+  const bridge = source.slice(source.indexOf("function useMcpBridge("), source.indexOf("function useLiveSession("));
+
+  assert.match(bridge, /message\.method === "ui\/notifications\/tool-result"/);
+  assert.match(bridge, /findPromptMetadata\(message\.params\)/);
+  assert.match(bridge, /findPromptMetadata\(hostBridge\(\)\?\.toolResponseMetadata\)/);
+  assert.match(bridge, /setPromptMetadata\(next\)/);
+  assert.match(source, /useMcpBridge\(setPromptMetadata\)/);
+});
+
+test("Workbench follows the documented ChatGPT theme globals without owning host appearance", () => {
+  const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+  const themeHook = source.slice(source.indexOf("function useHostTheme()"), source.indexOf("function useWorkbenchAutoSize()"));
+
+  assert.match(themeHook, /hostBridge\(\)\?\.theme/);
+  assert.match(themeHook, /openai:set_globals/);
+  assert.match(themeHook, /detail\?\.globals\?\.theme/);
+  assert.match(themeHook, /document\.documentElement\.dataset\.theme = value/);
+  assert.match(source, /useHostTheme\(\)/);
+});
+
+test("browser surface auto-opens once per new session and then preserves the user's selected tab", () => {
+  const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+  const promptHook = source.slice(source.indexOf("function usePromptActivity("), source.indexOf("function useMcpBridge("));
+
+  assert.match(promptHook, /const visibleBrowserSession = useRef<string \| null>\(null\)/);
+  assert.match(promptHook, /visibleBrowserSession\.current !== sessionId/);
+  assert.match(promptHook, /visibleBrowserSession\.current = sessionId/);
+  assert.match(promptHook, /if \(shouldAutoOpenBrowser\) setSurfaceMode\("browser"\)/);
+  assert.doesNotMatch(promptHook, /if \(isLiveEvent && owner !== "none"\) setSurfaceMode\("browser"\)/);
 });
