@@ -43,6 +43,13 @@ test("publishes a bounded CPTR update manifest for the current MCP contract", ()
   assert.equal(compactManifest.registered_tool_count, MCP_COMPACT_REGISTERED_TOOL_COUNT);
   assert.equal(compactManifest.core_tool_count, MCP_CONTRACT_TOOL_COUNT);
   assert.equal(manifest.release_sha, "abc123");
+  assert.equal(manifest.released_at, "2026-09-08");
+  assert.match(manifest.summary, /Capability OS/);
+  const datedManifest = currentPluginUpdateManifest({
+    GIT_COMMIT_SHA: "abc123",
+    CPTR_RELEASED_AT: "2026-09-09",
+  });
+  assert.equal(datedManifest.released_at, "2026-09-09");
   assert.equal(manifest.refresh_required, true);
   assert.equal(manifest.verification.tool, "cptr_plugin_update");
   assert.deepEqual(manifest.verification.arguments, { action: "status" });
