@@ -34,6 +34,7 @@ jobs:
       CPTR_EDGE_DCR_CLIENTS_JSON: ${{ vars.CPTR_EDGE_DCR_CLIENTS_JSON }}
       CPTR_EDGE_DCR_REDIRECT_URIS: ${{ vars.CPTR_EDGE_DCR_REDIRECT_URIS }}
       CPTR_EXPECTED_RELEASE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_release_sha || '' }}
+      CPTR_EXPECTED_TOOL_SURFACE: compact
     steps:
       - name: Require production endpoint configuration
         run: |

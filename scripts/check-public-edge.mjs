@@ -17,6 +17,12 @@ const expectedReleaseSha = process.env.CPTR_EXPECTED_RELEASE_SHA?.trim() || "";
 if (expectedReleaseSha && !/^[0-9a-f]{40}$/.test(expectedReleaseSha)) {
   throw new Error("CPTR_EXPECTED_RELEASE_SHA must be a full 40-character Git SHA when provided");
 }
+const expectedToolSurface = process.env.CPTR_EXPECTED_TOOL_SURFACE?.trim().toLowerCase() || "compact";
+const expectedRegisteredToolsBySurface = { compact: 18, legacy: 91 };
+if (!(expectedToolSurface in expectedRegisteredToolsBySurface)) {
+  throw new Error("CPTR_EXPECTED_TOOL_SURFACE must be either compact or legacy");
+}
+const expectedRegisteredToolCount = expectedRegisteredToolsBySurface[expectedToolSurface];
 const supportedAuthModes = new Set(["auto", "native", "cloudflare-managed"]);
 if (!supportedAuthModes.has(configuredAuthMode)) {
   throw new Error(`CPTR_EDGE_AUTH_MODE must be one of ${[...supportedAuthModes].join(", ")}; got ${configuredAuthMode}`);
@@ -77,6 +83,16 @@ if (health?.status !== "ok" || health?.workbench?.ready !== true) {
 }
 if (expectedReleaseSha && health?.release !== expectedReleaseSha) {
   throw new Error(`release SHA drift: expected ${expectedReleaseSha}, got ${health?.release ?? "missing"}`);
+}
+if (health?.mcp_contract?.tool_surface !== expectedToolSurface) {
+  throw new Error(
+    `MCP tool surface drift: expected ${expectedToolSurface}, got ${health?.mcp_contract?.tool_surface ?? "missing"}`,
+  );
+}
+if (health?.mcp_contract?.registered_tool_count !== expectedRegisteredToolCount) {
+  throw new Error(
+    `MCP registered-tool-count drift: expected ${expectedRegisteredToolCount}, got ${health?.mcp_contract?.registered_tool_count ?? "missing"}`,
+  );
 }
 
 const discoverChallenge = await request(endpoint.pathname, {
@@ -251,5 +267,5 @@ for (const profile of connectorProfiles) {
 }
 
 console.log(
-  `CPTR public edge verified at ${origin}: health${expectedReleaseSha ? ` at release ${expectedReleaseSha}` : ""}, MCP 2026 401 challenge, RFC 9728 ${authMode} metadata, OAuth discovery, PKCE S256, refresh-token capability, DCR, and authorization-stage redirect policy.`,
+  `CPTR public edge verified at ${origin}: health${expectedReleaseSha ? ` at release ${expectedReleaseSha}` : ""}, ${expectedToolSurface}/${expectedRegisteredToolCount} MCP surface, MCP 2026 401 challenge, RFC 9728 ${authMode} metadata, OAuth discovery, PKCE S256, refresh-token capability, DCR, and authorization-stage redirect policy.`,
 );
