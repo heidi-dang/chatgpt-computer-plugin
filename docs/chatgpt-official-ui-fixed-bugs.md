@@ -44,6 +44,7 @@ The single UI-producing MCP tool remains `cptr_open_live_workbench`. Data/action
 | Widget height pulses, clips, or grows with document scroll height | `web/src/workbench.tsx` → `useWorkbenchAutoSize`, `web/src/workbench.css` | Measure `.terminal-workbench`, coalesce with RAF, ignore <2 px changes, never size from document/body scroll height. |
 | Long terminal becomes slow/janky | `web/src/terminal-view.tsx`, `web/src/state.ts` | Render window is bounded, rows are memoized, follow scrolling is RAF-coalesced, frame uses CSS containment. |
 | Terminal duplicates output after reconnect/resume | `web/src/state.ts`, `web/src/workbench.tsx`, `server/prompt-terminal.ts`, live gateway tests | Monotonic sequence/cursor and replay-after-cursor semantics are exactly-once at the projection layer. |
+| Terminal says **SSE LIVE** but remains on `Waiting for terminal session…` while ChatGPT is actively using compact CPTR tools | `server/mcp.ts`, `tests/stateless-live-binding.test.ts` | Every fresh stateless compact MCP request must carry or recover the owning Workbench routing identity; nested compact payload target IDs must also resolve the existing prompt stream. |
 | Direct worker status appears but real command stdout disappears | `web/src/workbench.tsx`, `tests/terminal-view.test.ts`, stateless binding tests | `direct.worker` metadata never clears a previously bound `live.bind` command target. |
 | Hidden Browser keeps using CPU/network or Chrome capture rate | `web/src/browser-surface.tsx`, browser input gateway | Intersection + document visibility drive source visibility; hidden state requests `max_fps: 0` and aborts frame polling. |
 | Browser preview turns off immediately after iOS resume | `web/src/browser-surface.tsx` → `streamConfigQueue` | Visibility writes are serialized so stale cleanup `visible:false` cannot overtake a new `visible:true`. |
@@ -217,6 +218,34 @@ The single UI-producing MCP tool remains `cptr_open_live_workbench`. Data/action
 **Regression test:** `tests/terminal-view.test.ts` — `terminal follow changes are edge-triggered...` and `Workbench persists only ephemeral presentation preferences...`.
 
 **Performance implication:** host-state writes now happen only on meaningful presentation-state transitions, not at scroll-frame frequency or repeated selection of the current surface.
+
+---
+
+## UI-010 — Compact stateless calls disappeared from an SSE-LIVE Workbench
+
+**First observed:** 2026-09-08 / ChatGPT Official iOS / CPTR Computer 1.4.6 compact surface.
+
+**Symptom:** The persistent card reported `SSE LIVE`, but remained on `Waiting for terminal session…` / `Waiting for terminal stream…` while ChatGPT was actively running `cptr_workspace`, `cptr_fdx_intelligence`, or other compact actions. Command activity could also disappear after an MCP server recreation.
+
+**Reproduction:** Open `cptr_open_live_workbench`, destroy the MCP server instance, create a fresh compact server against the same shared prompt store, then invoke a compact tool. Before this fix, ordinary compact activity had no prompt ticket and `promptSessions.append(...)` silently had nowhere to publish.
+
+**Root cause:** Compact action arguments are nested under `payload`, but Workbench and live-target routing inspected only top-level arguments. Fresh stateless MCP servers also start with no process-local `activePromptTicket`, so later tool calls could not recover the owning prompt. Passthrough compact tools such as FDX had no explicit routing field at all.
+
+**Owning layer:** prompt transport / MCP stateless routing.
+
+**Fix:** Compact tool schemas now expose a bounded `workbench_session_id` routing field. The registration wrapper maps it back to the shared prompt store and strips route-only metadata before calling backend handlers that do not natively accept it. Routing also recognizes `workbench_session_id`, `command_id`, `workspace_id`, `task_id`, `monitor_id`, and `worker_id` inside compact `payload`, preserving existing compact command/task conventions and enabling live-target recovery after another server recreation.
+
+**Invariant added:** Every compact stateless CPTR call must either carry the opened Workbench session ID or resolve an already-bound live target; route-only Workbench metadata must never be forwarded as backend authority.
+
+**Regression tests:** `tests/stateless-live-binding.test.ts` — compact workspace routing, FDX route-only stripping, compact command nested-payload binding, and fresh-server command status recovery.
+
+**Verification:** focused compact/stateless/UI suite passed 41/41. Full `npm run check:release` passed 266/266 tests, typecheck, production build, bundle gate, and cross-repo browser contract.
+
+**Security/authority impact:** No new authority. The routing field is an opaque owner-scoped UI correlation hint; backend authorization remains unchanged, and route-only metadata is stripped before passthrough backend calls.
+
+**Commit/PR:** finalized on `fix/live-terminal-stateless-routing-20260908` before merge.
+
+**If it returns:** Reproduce with a fresh MCP server between `cptr_open_live_workbench` and the failing action, inspect the tool input for `workbench_session_id`, then inspect `workbenchSessionIdFrom`, `liveTargetFrom`, and `promptSessions.ticketForWorkbenchSession(...)` before touching widget SSE or CSS.
 
 ---
 
@@ -437,11 +466,11 @@ The final code state documented here was checked with:
 
 - `git diff --check`
 - `npm run build` — Workbench bundle **180,398 / 450,000 bytes**
-- `npm test` — **259/259 passed, 0 failed**
+- `npm test` — **266/266 passed, 0 failed**
 - `npm run typecheck`
 - `npm run check:cross-repo-contract` — protocol v1, **52 actions**, **35 mutating actions** across plugin/backend/extension
 
-No MCP tool/action was added, removed, renamed, or schema-changed by the continuation work. No CSP/origin wildcard, `unsafe-eval`, `git:write`, `deploy:write`, `allow_network: true`, or `allow_package_install: true` widening was introduced.
+No MCP tool/action was added, removed, or renamed. The compact schema adds only the bounded `workbench_session_id` Live Workbench routing hint, so ChatGPT must refresh its frozen action snapshot after deployment. No CSP/origin wildcard, `unsafe-eval`, `git:write`, `deploy:write`, `allow_network: true`, or `allow_package_install: true` widening was introduced.
 
 ---
 

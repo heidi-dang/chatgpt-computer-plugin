@@ -569,10 +569,15 @@ export const CLIENT_MODEL_INSTRUCTION =
   "When you are ChatGPT and invoke any CPTR tool, set client_model to the exact current model identity you are running as for this tool call, for example GPT-5.6 Sol. Report the current value on every CPTR tool call; do not reuse or infer it from an earlier call. If the current model identity is unavailable, omit client_model rather than guessing.";
 export const PERSISTENT_MEMORY_INSTRUCTION =
   "When prior user preferences, workspace decisions, procedures, corrections, failure history, or historical state could materially affect a CPTR task, use cptr_memory with action=search before guessing. Treat persistent memory as contextual knowledge rather than live host truth: honor trust/staleness signals and verify mutable operational facts with current evidence before acting.";
-export const MCP_SERVER_INSTRUCTIONS = `${DIRECT_GROUP_DESCRIPTION} ${DELEGATE_GROUP_DESCRIPTION} ${CLIENT_MODEL_INSTRUCTION} ${PERSISTENT_MEMORY_INSTRUCTION}`;
+export const LIVE_WORKBENCH_ROUTING_INSTRUCTION =
+  "After cptr_open_live_workbench returns a session_id, pass that exact value as workbench_session_id on each later CPTR call whose schema exposes the field so stateless MCP requests route activity back to the same Live Terminal. This is a UI routing hint only and grants no authority.";
+export const MCP_SERVER_INSTRUCTIONS = `${DIRECT_GROUP_DESCRIPTION} ${DELEGATE_GROUP_DESCRIPTION} ${CLIENT_MODEL_INSTRUCTION} ${PERSISTENT_MEMORY_INSTRUCTION} ${LIVE_WORKBENCH_ROUTING_INSTRUCTION}`;
 export const CLIENT_MODEL_FIELD_DESCRIPTION =
   "Current ChatGPT model identity for this call, when available.";
 const clientModelSchema = z.string().min(1).max(120).optional().describe(CLIENT_MODEL_FIELD_DESCRIPTION);
+const workbenchRoutingSchema = z.string().regex(/^wbs_[A-Za-z0-9_-]{16,80}$/).optional().describe(
+  "Live Workbench session_id returned by cptr_open_live_workbench. Pass it on later CPTR calls so stateless activity routes to the same terminal; it grants no authority.",
+);
 
 type ModelAwareToolConfig = {
   title?: string;
@@ -586,6 +591,18 @@ const HOST_TOOL_INVOCATION_META = {
   "openai/toolInvocation/invoked": "CPTR action complete",
 } as const;
 
+function inputSchemaHasField(inputSchema: unknown, key: string): boolean {
+  if (inputSchema instanceof z.ZodObject) {
+    return Object.prototype.hasOwnProperty.call(inputSchema.shape, key);
+  }
+  return Boolean(
+    inputSchema &&
+    typeof inputSchema === "object" &&
+    !Array.isArray(inputSchema) &&
+    Object.prototype.hasOwnProperty.call(inputSchema, key),
+  );
+}
+
 function withClientModelInputSchema(inputSchema: unknown): unknown {
   if (inputSchema instanceof z.ZodObject) {
     return inputSchema.extend({ client_model: clientModelSchema });
@@ -594,6 +611,24 @@ function withClientModelInputSchema(inputSchema: unknown): unknown {
     return { ...(inputSchema as Record<string, z.ZodTypeAny>), client_model: clientModelSchema };
   }
   return { client_model: clientModelSchema };
+}
+
+function withCompactWorkbenchRoutingInputSchema(inputSchema: unknown): unknown {
+  if (inputSchemaHasField(inputSchema, "workbench_session_id")) return inputSchema;
+  if (inputSchema instanceof z.ZodObject) {
+    return inputSchema.extend({ workbench_session_id: workbenchRoutingSchema });
+  }
+  if (inputSchema && typeof inputSchema === "object" && !Array.isArray(inputSchema)) {
+    return { ...(inputSchema as Record<string, z.ZodTypeAny>), workbench_session_id: workbenchRoutingSchema };
+  }
+  return { workbench_session_id: workbenchRoutingSchema };
+}
+
+function stripRouteOnlyWorkbenchSessionId(input: unknown): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+  const record = { ...(input as Record<string, unknown>) };
+  delete record.workbench_session_id;
+  return record;
 }
 
 export function extractClientModel(input: unknown): { reported: string | null; handlerInput: unknown } {
@@ -607,7 +642,11 @@ export function extractClientModel(input: unknown): { reported: string | null; h
   return { reported, handlerInput: record };
 }
 
-function groupedToolConfig<T extends ModelAwareToolConfig>(name: string, config: T): T {
+function groupedToolConfig<T extends ModelAwareToolConfig>(
+  name: string,
+  config: T,
+  includeWorkbenchRouting = false,
+): T {
   const delegated = DELEGATED_AGENT_TOOL_NAMES.has(name);
   const groupName = delegated ? "Delegated Agent" : "ChatGPT Direct Coding";
   const policy = delegated
@@ -621,11 +660,17 @@ function groupedToolConfig<T extends ModelAwareToolConfig>(name: string, config:
     : RUN_STATUS_RESUMABLE_TOOL_NAMES.has(name)
       ? " Quiescence is run-ID/status-first: each stop attempt is bounded to 15 seconds; if work is still active, retain run_id and continue with cptr_factory_status before another bounded stop attempt."
       : "";
+  const routing = includeWorkbenchRouting
+    ? " Pass the session_id returned by cptr_open_live_workbench as workbench_session_id so this stateless call remains visible in the same Live Terminal."
+    : "";
+  const modelAwareSchema = withClientModelInputSchema(config.inputSchema);
   return {
     ...config,
     title: `[${groupName}] ${config.title?.trim() || name}`,
-    description: `${policy}${conditional}${resumeFirst}${config.description ? ` ${config.description}` : ""}`,
-    inputSchema: withClientModelInputSchema(config.inputSchema),
+    description: `${policy}${conditional}${resumeFirst}${routing}${config.description ? ` ${config.description}` : ""}`,
+    inputSchema: includeWorkbenchRouting
+      ? withCompactWorkbenchRoutingInputSchema(modelAwareSchema)
+      : modelAwareSchema,
     _meta: {
       ...(config._meta ?? {}),
       ...HOST_TOOL_INVOCATION_META,
@@ -690,21 +735,38 @@ export function createMcpServer(
   const workbenchSessionIdFrom = (value: unknown): string | undefined => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
     const record = value as Record<string, unknown>;
-    const id = record.workbench_session_id ?? record.resume_session_id;
+    const payload = record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
+      ? record.payload as Record<string, unknown>
+      : {};
+    const id = record.workbench_session_id
+      ?? record.resume_session_id
+      ?? payload.workbench_session_id
+      ?? payload.resume_session_id;
     return typeof id === "string" && id ? id : undefined;
   };
 
   const liveTargetFrom = (value: unknown): LiveTarget | undefined => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
     const record = value as Record<string, unknown>;
-    const commandId = typeof record.command_id === "string" ? record.command_id : undefined;
-    const workspaceId = typeof record.workspace_id === "string" ? record.workspace_id : undefined;
+    const payload = record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
+      ? record.payload as Record<string, unknown>
+      : {};
+    const commandId = typeof record.command_id === "string"
+      ? record.command_id
+      : typeof payload.command_id === "string" ? payload.command_id : undefined;
+    const workspaceId = typeof record.workspace_id === "string"
+      ? record.workspace_id
+      : typeof payload.workspace_id === "string" ? payload.workspace_id : undefined;
     if (commandId && workspaceId) {
       return { targetType: "command", targetId: commandId, workspaceId };
     }
-    const taskId = typeof record.task_id === "string" ? record.task_id : undefined;
+    const taskId = typeof record.task_id === "string"
+      ? record.task_id
+      : typeof payload.task_id === "string" ? payload.task_id : undefined;
     if (taskId) return { targetType: "task", targetId: taskId };
-    const monitorId = typeof record.monitor_id === "string" ? record.monitor_id : undefined;
+    const monitorId = typeof record.monitor_id === "string"
+      ? record.monitor_id
+      : typeof payload.monitor_id === "string" ? payload.monitor_id : undefined;
     if (monitorId) return { targetType: "monitor", targetId: monitorId };
     return undefined;
   };
@@ -798,7 +860,11 @@ export function createMcpServer(
 
   const workerIdFrom = (value: unknown): string | undefined => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-    const id = (value as Record<string, unknown>).worker_id;
+    const record = value as Record<string, unknown>;
+    const payload = record.payload && typeof record.payload === "object" && !Array.isArray(record.payload)
+      ? record.payload as Record<string, unknown>
+      : {};
+    const id = record.worker_id ?? payload.worker_id;
     return typeof id === "string" && id ? id : undefined;
   };
 
@@ -904,7 +970,7 @@ export function createMcpServer(
   const rawRegisterTool = server.registerTool.bind(server);
   (server as unknown as { registerTool: typeof server.registerTool }).registerTool = ((
     name: string,
-    config: { title?: string; description?: string },
+    config: { title?: string; description?: string; inputSchema?: unknown },
     handler: (...args: unknown[]) => unknown,
   ) => {
     if (
@@ -914,7 +980,9 @@ export function createMcpServer(
     ) {
       return undefined as never;
     }
-    const groupedConfig = groupedToolConfig(name, config);
+    const handlerSupportsWorkbenchSessionId = inputSchemaHasField(config.inputSchema, "workbench_session_id");
+    const includeWorkbenchRouting = toolSurface === "compact" && name !== "cptr_open_live_workbench";
+    const groupedConfig = groupedToolConfig(name, config, includeWorkbenchRouting);
     registeredToolCount += 1;
     if (DELEGATED_AGENT_TOOL_NAMES.has(name)) delegatedToolCount += 1;
     return rawRegisterTool(
@@ -923,10 +991,14 @@ export function createMcpServer(
       (async (...args: unknown[]) => {
         const label = groupedConfig.title?.trim() || name;
         const originalInput = args.length ? args[0] : {};
-        const { reported: reportedClientModel, handlerInput: input } = extractClientModel(originalInput);
+        const { reported: reportedClientModel, handlerInput: modelInput } = extractClientModel(originalInput);
+        const routedWorkbenchSessionId = workbenchSessionIdFrom(modelInput);
+        const input = includeWorkbenchRouting && routedWorkbenchSessionId && !handlerSupportsWorkbenchSessionId
+          ? stripRouteOnlyWorkbenchSessionId(modelInput)
+          : modelInput;
         const mappedPromptTicket =
-          promptSessions.ticketForWorkbenchSession(workbenchSessionIdFrom(input))
-          ?? promptSessions.ticketForLiveTarget(liveTargetFrom(input));
+          promptSessions.ticketForWorkbenchSession(routedWorkbenchSessionId)
+          ?? promptSessions.ticketForLiveTarget(liveTargetFrom(modelInput));
         promptTicketContext.enterWith(mappedPromptTicket ?? activePromptTicket);
         const normalizedModel = normalizeReportedModel(reportedClientModel);
         const inputWorkerId = workerIdFrom(input);

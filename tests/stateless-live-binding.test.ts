@@ -92,13 +92,179 @@ async function connectedServer(
   computer: ComputerClient,
   promptSessions: PromptTerminalStore,
   tickets: LiveTicketStore,
+  toolSurface: "legacy" | "compact" = "legacy",
 ): Promise<{ client: Client; server: ReturnType<typeof createMcpServer> }> {
-  const server = createMcpServer(computer, { promptSessions, tickets });
+  const server = createMcpServer(computer, { promptSessions, tickets, toolSurface });
   const client = new Client({ name: "stateless-fixture", version: "1.0.0" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   return { client, server };
 }
+
+test("routes compact stateless workspace activity back to the opened Workbench", async () => {
+  const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
+  const tickets = new LiveTicketStore();
+  const computer = computerFixture();
+
+  const first = await connectedServer(computer, promptSessions, tickets, "compact");
+  const opened = await first.client.callTool({ name: "cptr_open_live_workbench", arguments: {} });
+  const promptTicket = (opened._meta as { "cptr/prompt"?: { ticket?: string } } | undefined)?.["cptr/prompt"]?.ticket;
+  const sessionId = (opened.structuredContent as { session_id?: string } | undefined)?.session_id;
+  assert.ok(promptTicket);
+  assert.ok(sessionId);
+  await first.client.close();
+  await first.server.close();
+
+  const second = await connectedServer(computer, promptSessions, tickets, "compact");
+  const listed = await second.client.callTool({
+    name: "cptr_workspace",
+    arguments: {
+      action: "list",
+      workbench_session_id: sessionId,
+      payload: {},
+    },
+  });
+  assert.equal(listed.isError, undefined);
+
+  const replay = promptSessions.replay(promptTicket, 0);
+  assert.ok(replay);
+  const activity = replay.events.filter(
+    (event) => event.type === "mcp.tool" && event.payload.tool_name === "cptr_workspace",
+  );
+  assert.deepEqual(
+    activity.map((event) => event.type === "mcp.tool" ? event.payload.status : ""),
+    ["STARTED", "COMPLETE"],
+    "a compact stateless tool must keep publishing into the Workbench that supplied its routing ID",
+  );
+
+  await second.client.close();
+  await second.server.close();
+});
+
+
+test("routes compact FDX activity without forwarding the Workbench routing hint to CPTR", async () => {
+  const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
+  const tickets = new LiveTicketStore();
+  const computer = computerFixture();
+  let seenInput: Record<string, unknown> | null = null;
+  (computer as any).runFdxIntelligence = async (input: Record<string, unknown>) => {
+    seenInput = { ...input };
+    return {
+      workspace_id: "ws-1",
+      action: "status",
+      provider: "fdx_native",
+      status: "ok",
+      fallback_recommended: false,
+      data: {},
+    };
+  };
+
+  const first = await connectedServer(computer, promptSessions, tickets, "compact");
+  const opened = await first.client.callTool({ name: "cptr_open_live_workbench", arguments: {} });
+  const promptTicket = (opened._meta as { "cptr/prompt"?: { ticket?: string } } | undefined)?.["cptr/prompt"]?.ticket;
+  const sessionId = (opened.structuredContent as { session_id?: string } | undefined)?.session_id;
+  assert.ok(promptTicket);
+  assert.ok(sessionId);
+  await first.client.close();
+  await first.server.close();
+
+  const second = await connectedServer(computer, promptSessions, tickets, "compact");
+  const status = await second.client.callTool({
+    name: "cptr_fdx_intelligence",
+    arguments: {
+      workspace_id: "ws-1",
+      action: "status",
+      workbench_session_id: sessionId,
+    },
+  });
+  assert.equal(status.isError, undefined);
+  assert.ok(seenInput);
+  assert.equal(
+    (seenInput as Record<string, unknown>).workbench_session_id,
+    undefined,
+    "routing metadata must not leak into the backend FDX request",
+  );
+
+  const replay = promptSessions.replay(promptTicket, 0);
+  assert.ok(replay);
+  const activity = replay.events.filter(
+    (event) => event.type === "mcp.tool" && event.payload.tool_name === "cptr_fdx_intelligence",
+  );
+  assert.deepEqual(
+    activity.map((event) => event.type === "mcp.tool" ? event.payload.status : ""),
+    ["STARTED", "COMPLETE"],
+  );
+
+  await second.client.close();
+  await second.server.close();
+});
+
+
+test("routes compact command binding and later stateless status through nested payload identity", async () => {
+  const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
+  const tickets = new LiveTicketStore();
+  const computer = computerFixture();
+
+  const first = await connectedServer(computer, promptSessions, tickets, "compact");
+  const opened = await first.client.callTool({ name: "cptr_open_live_workbench", arguments: {} });
+  const promptTicket = (opened._meta as { "cptr/prompt"?: { ticket?: string } } | undefined)?.["cptr/prompt"]?.ticket;
+  const sessionId = (opened.structuredContent as { session_id?: string } | undefined)?.session_id;
+  assert.ok(promptTicket);
+  assert.ok(sessionId);
+  await first.client.close();
+  await first.server.close();
+
+  const second = await connectedServer(computer, promptSessions, tickets, "compact");
+  const command = await second.client.callTool({
+    name: "cptr_command",
+    arguments: {
+      action: "run",
+      payload: {
+        workspace_id: "ws-1",
+        command: "printf 'compact live line\\n'",
+        workbench_session_id: sessionId,
+      },
+    },
+  });
+  assert.equal(command.isError, undefined);
+  await second.client.close();
+  await second.server.close();
+
+  const afterRun = promptSessions.replay(promptTicket, 0);
+  assert.ok(afterRun);
+  const bind = afterRun.events.find((event) => event.type === "live.bind");
+  assert.equal(bind?.type, "live.bind");
+  if (bind?.type === "live.bind") {
+    assert.equal(bind.payload.live.targetType, "command");
+    assert.equal(bind.payload.live.targetId, "command-stateless-1");
+    assert.equal(bind.payload.live.workspaceId, "ws-1");
+  }
+
+  const third = await connectedServer(computer, promptSessions, tickets, "compact");
+  const followUp = await third.client.callTool({
+    name: "cptr_command",
+    arguments: {
+      action: "status",
+      payload: { workspace_id: "ws-1", command_id: "command-stateless-1" },
+    },
+  });
+  assert.equal(followUp.isError, undefined);
+
+  const replay = promptSessions.replay(promptTicket, 0);
+  assert.ok(replay);
+  const activity = replay.events.filter(
+    (event) => event.type === "mcp.tool" && event.payload.tool_name === "cptr_command",
+  );
+  assert.deepEqual(
+    activity.map((event) => event.type === "mcp.tool" ? event.payload.status : ""),
+    ["STARTED", "COMPLETE", "STARTED", "COMPLETE"],
+    "compact run and a later fresh-server status call must stay on the original Live Terminal",
+  );
+
+  await third.client.close();
+  await third.server.close();
+});
+
 
 test("routes live command binding through the durable workbench session across MCP server recreation", async () => {
   const promptSessions = new PromptTerminalStore({ streamingEnabled: true });
