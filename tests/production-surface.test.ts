@@ -5,6 +5,7 @@ import test from "node:test";
 const serverSource = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
 const deployedContractSource = readFileSync(new URL("../scripts/check-deployed-contract.mjs", import.meta.url), "utf8");
 const publicEdgeSource = readFileSync(new URL("../scripts/check-public-edge.mjs", import.meta.url), "utf8");
+const hostReleaseSource = readFileSync(new URL("../scripts/check-host-release.mjs", import.meta.url), "utf8");
 const productionQualificationSource = readFileSync(new URL("../.github/workflows/production-qualification.yml", import.meta.url), "utf8");
 
 test("production health response does not expose internal workbench filesystem paths", () => {
@@ -40,6 +41,11 @@ test("public edge verifier supports both native and Cloudflare Managed OAuth RFC
   assert.match(publicEdgeSource, /CPTR_EDGE_AUTH_MODE/);
   assert.match(publicEdgeSource, /CPTR_EXPECTED_RELEASE_SHA/);
   assert.match(publicEdgeSource, /release SHA drift/);
+  assert.match(publicEdgeSource, /CPTR_EXPECTED_TOOL_SURFACE/);
+  assert.match(publicEdgeSource, /MCP tool surface drift/);
+  assert.match(publicEdgeSource, /MCP registered-tool-count drift/);
+  assert.match(publicEdgeSource, /mcp_contract\?\.tool_surface/);
+  assert.match(publicEdgeSource, /mcp_contract\?\.registered_tool_count/);
   assert.match(publicEdgeSource, /cloudflare-managed/);
   assert.match(publicEdgeSource, /cloudflare-access-protected-resource/);
   assert.match(publicEdgeSource, /authorization_servers/);
@@ -50,6 +56,16 @@ test("public edge verifier supports both native and Cloudflare Managed OAuth RFC
   assert.match(publicEdgeSource, /application_type: profile\.application_type/);
   assert.doesNotMatch(publicEdgeSource, /application_type: "native"/);
   assert.doesNotMatch(publicEdgeSource, /must be disabled for that route/);
+  assert.match(productionQualificationSource, /public-edge:[\s\S]*?CPTR_EXPECTED_TOOL_SURFACE: compact/);
+});
+
+test("host release gate requires compact mode and an explicit non-wildcard origin allowlist", () => {
+  assert.match(hostReleaseSource, /MCP_ALLOWED_ORIGINS/);
+  assert.match(hostReleaseSource, /must define MCP_ALLOWED_ORIGINS exactly once/);
+  assert.match(hostReleaseSource, /must not contain wildcard origins/);
+  assert.match(hostReleaseSource, /origin\.includes\("\*"\)/);
+  assert.match(hostReleaseSource, /Environment=CPTR_MCP_TOOL_SURFACE=compact/);
+  assert.match(hostReleaseSource, /CPTR_MCP_TOOL_SURFACE/);
 });
 
 test("production qualification does not use an origin bearer to bypass Cloudflare Managed OAuth", () => {

@@ -38,10 +38,27 @@ const expectedReleaseDir = realpathSync(resolve(releaseRoot, expectedSha));
 const expectedDropInPath = realpathSync(releaseDropIn);
 const serviceEnvPath = realpathSync(serviceEnvFile);
 const serviceEnvSource = readFileSync(serviceEnvPath, "utf8");
-const releaseOwnedEnvKeys = ["GIT_COMMIT_SHA", "CPTR_WORKBENCH_BUILD_ID", "NODE_ENV", "CPTR_HOT_RELOAD"];
+const releaseOwnedEnvKeys = ["GIT_COMMIT_SHA", "CPTR_WORKBENCH_BUILD_ID", "NODE_ENV", "CPTR_HOT_RELOAD", "CPTR_MCP_TOOL_SURFACE"];
 const conflictingServiceEnvKeys = releaseOwnedEnvKeys.filter((key) => new RegExp(`^${key}=`, "m").test(serviceEnvSource));
 if (conflictingServiceEnvKeys.length) {
   throw new Error(`service environment file must not define release-owned keys: ${conflictingServiceEnvKeys.join(", ")}`);
+}
+const allowedOriginLines = serviceEnvSource
+  .split(/\r?\n/)
+  .filter((line) => line.startsWith("MCP_ALLOWED_ORIGINS="));
+if (allowedOriginLines.length !== 1) {
+  throw new Error("service environment file must define MCP_ALLOWED_ORIGINS exactly once");
+}
+const allowedOrigins = allowedOriginLines[0]
+  .slice("MCP_ALLOWED_ORIGINS=".length)
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+if (allowedOrigins.length === 0) {
+  throw new Error("MCP_ALLOWED_ORIGINS must contain at least one explicit origin");
+}
+if (allowedOrigins.some((origin) => origin.includes("*"))) {
+  throw new Error("MCP_ALLOWED_ORIGINS must not contain wildcard origins");
 }
 const workingDirectory = realpathSync(systemctl("WorkingDirectory"));
 if (workingDirectory !== expectedReleaseDir) {
@@ -61,7 +78,7 @@ if (!dropInPaths.includes(expectedDropInPath)) {
   throw new Error(`canonical release drop-in is not active: ${expectedDropInPath}`);
 }
 
-const releaseAuthorityPattern = /^(?:WorkingDirectory|ExecStart|Environment=(?:NODE_ENV|CPTR_HOT_RELOAD|CPTR_WORKBENCH_BUILD_ID|GIT_COMMIT_SHA)=)/m;
+const releaseAuthorityPattern = /^(?:WorkingDirectory|ExecStart|Environment=(?:NODE_ENV|CPTR_HOT_RELOAD|CPTR_WORKBENCH_BUILD_ID|GIT_COMMIT_SHA|CPTR_MCP_TOOL_SURFACE)=)/m;
 const conflicting = [];
 for (const path of dropInPaths) {
   const source = readFileSync(path, "utf8");
@@ -79,6 +96,7 @@ for (const invariant of [
   `ExecStart=${nodeBin} ${expectedReleaseDir}/dist/server/index.js`,
   "Environment=NODE_ENV=production",
   "Environment=CPTR_HOT_RELOAD=0",
+  "Environment=CPTR_MCP_TOOL_SURFACE=compact",
   `Environment=CPTR_WORKBENCH_BUILD_ID=${expectedSha}`,
   `Environment=GIT_COMMIT_SHA=${expectedSha}`,
 ]) {
@@ -93,4 +111,4 @@ if (activeState !== "active" || subState !== "running") {
   throw new Error(`service is not active/running: ${activeState}/${subState}`);
 }
 
-console.log(`Host release verified: ${service} is active on immutable release ${expectedSha} with one release-authority drop-in.`);
+console.log(`Host release verified: ${service} is active on immutable release ${expectedSha} with compact MCP surface, explicit origin allowlist, and one release-authority drop-in.`);
