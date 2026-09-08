@@ -90,7 +90,7 @@
 **Interfaces:**
 - Produces: a pushed branch and one canonical PR for the ChatGPT Official UI hardening.
 
-- [ ] **Step 1: Commit only after all required gates pass.**
-- [ ] **Step 2: Push `fix/chatgpt-ui-progress-20260908`.**
-- [ ] **Step 3: Reuse/update PR #34 if it is still open; do not create a duplicate PR for the same branch.**
-- [ ] **Step 4: Verify the PR head SHA and report the exact verification evidence.**
+- [x] **Step 1: Commit only after all required gates pass.**
+- [x] **Step 2: Push `fix/chatgpt-ui-progress-20260908`.**
+- [x] **Step 3: Reuse/update PR #34 if it is still open; do not create a duplicate PR for the same branch.**
+- [x] **Step 4: Verify the PR head SHA and report the exact verification evidence.**
