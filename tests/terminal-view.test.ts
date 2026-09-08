@@ -86,57 +86,57 @@ test("terminal empty state uses the reference waiting transcript without synthet
   assert.equal(html.includes("terminal-empty"), false);
 });
 
-test("idle prompt lifecycle renders DISCONNECTED while keeping the persistent SSE transport visible", () => {
+test("idle prompt lifecycle renders LIVE when the persistent prompt SSE is healthy", () => {
   const live = renderToStaticMarkup(React.createElement(TerminalView, {
     rows: [],
-    status: "DISCONNECTED",
+    status: "READY",
     connection: "prompt live",
     machineLabel: "CPTR Computer",
     targetLabel: "Waiting for terminal session…",
   }));
-  assert.match(live, />DISCONNECTED</);
+  assert.match(live, />LIVE</);
   assert.match(live, /SSE LIVE/);
-  assert.doesNotMatch(live, /<span>LIVE<\/span>/);
+  assert.doesNotMatch(live, />DISCONNECTED</);
 
   const reconnecting = renderToStaticMarkup(React.createElement(TerminalView, {
     rows: [],
-    status: "DISCONNECTED",
+    status: "READY",
     connection: "reconnecting prompt activity",
     machineLabel: "CPTR Computer",
     targetLabel: "Waiting for terminal session…",
   }));
-  assert.match(reconnecting, />DISCONNECTED</);
+  assert.match(reconnecting, />RECONNECTING</);
   assert.match(reconnecting, /SSE RECONNECTING/);
+  assert.doesNotMatch(reconnecting, />DISCONNECTED</);
 });
 
-test("iOS remount with no target stays DISCONNECTED while prompt SSE reconnects", () => {
+test("iOS remount with no target reports transport recovery instead of a false disconnect", () => {
   const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
   const promptHook = source.slice(source.indexOf("function usePromptActivity("), source.indexOf("function useMcpBridge()"));
 
   assert.match(
     promptHook,
-    /const \[status, setStatus\] = useState\("DISCONNECTED"\);/,
-    "an unbound Workbench must not advertise CONNECTING before any CPTR tool is active",
+    /const \[status, setStatus\] = useState\("READY"\);/,
+    "an unbound Workbench should remain ready while its prompt transport connects or recovers",
   );
   assert.doesNotMatch(
     promptHook,
     /const \[status, setStatus\] = useState\("CONNECTING"\);/,
-    "transport startup must not become the lifecycle header state",
+    "transport startup must still remain separate from the execution lifecycle state",
   );
 
   const html = renderToStaticMarkup(React.createElement(TerminalView, {
     rows: [],
-    status: "DISCONNECTED",
+    status: "READY",
     connection: "reconnecting prompt activity",
     machineLabel: "CPTR Computer",
     targetLabel: "Waiting for terminal session…",
   }));
 
   assert.match(html, /CPTR Computer/);
-  assert.match(html, />DISCONNECTED</);
+  assert.match(html, />RECONNECTING</);
   assert.match(html, /SSE RECONNECTING/);
-  assert.doesNotMatch(html, /Connecting to computer/);
-  assert.doesNotMatch(html, /<span>RECONNECTING<\/span>/);
+  assert.doesNotMatch(html, />DISCONNECTED</);
 });
 
 test("Direct Coding Worker metadata never clears an already-bound live command target", () => {

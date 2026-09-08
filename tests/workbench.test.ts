@@ -37,7 +37,7 @@ test("overlapping prompt tools remain WORKING until the final terminal event", (
 
   active = nextPromptActiveToolCount(active, "FAILED");
   assert.equal(active, 0);
-  assert.equal(promptLifecycleStatus(active), "DISCONNECTED");
+  assert.equal(promptLifecycleStatus(active), "READY");
 
   active = nextPromptActiveToolCount(active, "CANCELLED");
   assert.equal(active, 0, "terminal replay must never drive the counter below zero");

@@ -172,9 +172,10 @@ function usePromptActivity(
   const cursor = useRef(0);
   const activePromptTools = useRef(0);
   const [connection, setConnection] = useState("connecting prompt activity");
-  // Prompt SSE health is transport state only. An unbound Workbench has no
-  // active CPTR lifecycle, including after an iOS remount while SSE recovers.
-  const [status, setStatus] = useState("DISCONNECTED");
+  // Prompt SSE transport state remains separate from execution lifecycle.
+  // An unbound Workbench is READY while its prompt stream connects/reconnects;
+  // reserve DISCONNECTED for a genuinely unavailable or expired prompt stream.
+  const [status, setStatus] = useState("READY");
 
   useEffect(() => {
     if (!streamingEnabled) {
