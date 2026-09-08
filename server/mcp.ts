@@ -2394,7 +2394,7 @@ export function createMcpServer(
     {
       title: "Run a bounded validation command in an authorized CPTR workspace",
       description:
-        "Use this only when the user explicitly asks ChatGPT to run a development or validation command in the selected CPTR workspace. This is trusted host-shell execution, not an execution sandbox. CPTR's command classifier rejects known destructive patterns and requires allow_network=true plus command:external for known external-command patterns, but allow_network=false is an authorization/intent gate rather than OS egress confinement. Do not use this endpoint for untrusted or multi-user code; those workloads require a separately qualified isolation boundary.",
+        "Use this only when the user explicitly asks ChatGPT to run a development or validation command. This is trusted host-shell execution, not an execution sandbox. Normal commands keep CPTR's destructive/network/SSH classifiers. If and only if the current user prompt explicitly grants root with words such as `use root` and the CPTR host operator has enabled local root grants, supply the active workbench_session_id and prefix the first command with the exact first line `# cptr-root: use root`; if the user explicitly gives a duration, add `# cptr-root-ttl-seconds: <seconds>` as the next line. The owned Workbench session then carries real local UID-0 filesystem/process authority for later commands and may bypass the local destructive-command classifier until explicitly revoked with first line `# cptr-root: revoke`, explicitly expired, or the Workbench session is archived/deleted. Root does not bypass allow_network, command:external, or the dedicated SSH control path. Never invent or infer a root grant without the user's explicit root instruction.",
       inputSchema: codingCommandSchema,
       outputSchema: directCommandOutputSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
@@ -2402,7 +2402,10 @@ export function createMcpServer(
     },
     async (input) => {
       const { workbench_session_id, ...commandInput } = input;
-      const command = await client.runCodingCommand(commandInput);
+      const command = await client.runCodingCommand({
+        ...commandInput,
+        ...(workbench_session_id ? { workbench_session_id } : {}),
+      });
       if (input.worker_id) {
         if (workbench_session_id) {
           await client.bindWorkbenchSession({
@@ -3360,7 +3363,7 @@ export function createMcpServer(
       cptr_workbench: "list(include_archived?,limit?), get(workbench_session_id), events(workbench_session_id,after_sequence?,limit?), bind(workbench_session_id,target_type,target_id,workspace_id?), rename(workbench_session_id,name), archive(workbench_session_id), request_delete(workbench_session_id), confirm_delete(confirmation_id)",
       cptr_workspace: "create(path,name?,create_directory?,initialize_git?,idempotency_key?), list(include_unavailable?), get(workspace_id), detect_project(workspace_id,worker_id?), tree(workspace_id,path?,depth?,worker_id?), metadata(workspace_id,path,worker_id?), read_many(workspace_id,paths,worker_id?), search_symbols(workspace_id,query,path?,worker_id?), discover_tests(workspace_id,path?,depth?,worker_id?), dependency_summary(workspace_id,worker_id?), package_scripts(workspace_id,worker_id?), release_readiness(workspace_id,worker_id?)",
       cptr_code: "list(workspace_id,path?,recursive?,worker_id?), read(workspace_id,path,lines?,worker_id?), read_many(workspace_id,files,max_chars?,worker_id?), search(workspace_id,query,path?,worker_id?), write(workspace_id,path,content,...), edit(workspace_id,path,target,replacement,...), apply_edits(workspace_id,path,edits,...), mkdir(workspace_id,path,worker_id?), move(workspace_id,source,destination,...), delete(workspace_id,path,worker_id?), git_status(workspace_id,worker_id?), diff(workspace_id,paths?,max_bytes?,worker_id?)",
-      cptr_command: "run(workspace_id,command,cwd?,wait_seconds?,allow_network?,pty?,worker_id?,workbench_session_id?), status(workspace_id,command_id,offset?,wait_seconds?,worker_id?), cancel(workspace_id,command_id,worker_id?), input(workspace_id,command_id,data,worker_id?), resize(workspace_id,command_id,rows,cols,worker_id?), signal(workspace_id,command_id,signal,worker_id?), run_test(workspace_id,target,path?,test_path?,worker_id?,workbench_session_id?)",
+      cptr_command: "run(workspace_id,command,cwd?,wait_seconds?,allow_network?,pty?,worker_id?,workbench_session_id?; explicit root only when user says use root and host operator enabled it: first line '# cptr-root: use root', optional next line '# cptr-root-ttl-seconds: <seconds>', same Workbench session inherits, '# cptr-root: revoke' revokes; root does not bypass allow_network/command:external/dedicated SSH), status(workspace_id,command_id,offset?,wait_seconds?,worker_id?), cancel(workspace_id,command_id,worker_id?), input(workspace_id,command_id,data,worker_id?), resize(workspace_id,command_id,rows,cols,worker_id?), signal(workspace_id,command_id,signal,worker_id?), run_test(workspace_id,target,path?,test_path?,worker_id?,workbench_session_id?)",
       cptr_worker: "create(workspace_id,name,responsibility?,repo_path?), list(workspace_id), get(workspace_id,worker_id), overview(workspace_id), integrate(workspace_id,worker_ids), close(workspace_id,worker_id,discard_changes?)",
       cptr_lsp: "discover(workspace_id,worker_id?), start(workspace_id,server_id,root?,worker_id?), request(workspace_id,lsp_id,method,params?,timeout_seconds?,worker_id?), stop(workspace_id,lsp_id,worker_id?)",
       cptr_ssh: "list_hosts(workspace_id), run(workspace_id,alias,command,wait_seconds?), status(workspace_id,command_id,offset?,wait_seconds?), cancel(workspace_id,command_id)",
@@ -3580,7 +3583,10 @@ export function createMcpServer(
           }
           case "run": {
             const { workbench_session_id, ...commandInput } = payload;
-            value = await c.runCodingCommand(commandInput);
+            value = await c.runCodingCommand({
+              ...commandInput,
+              ...(workbench_session_id ? { workbench_session_id } : {}),
+            });
             const wrapped = { action: input.action, result: { ...value, workspace_id: payload.workspace_id } };
             if (payload.worker_id) {
               if (workbench_session_id) {

@@ -1110,6 +1110,7 @@ export class ComputerClient {
     rows?: number;
     cols?: number;
     stdin?: string;
+    workbench_session_id?: string;
     idempotency_key?: string;
   }): Promise<DirectCommand> {
     return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/commands`, {
@@ -1125,6 +1126,7 @@ export class ComputerClient {
         rows: input.rows ?? 24,
         cols: input.cols ?? 80,
         ...(input.stdin !== undefined ? { stdin: input.stdin } : {}),
+        ...(input.workbench_session_id ? { workbench_session_id: input.workbench_session_id } : {}),
         ...(input.idempotency_key ? { idempotency_key: input.idempotency_key } : {}),
       },
     });

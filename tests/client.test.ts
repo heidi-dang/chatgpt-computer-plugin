@@ -763,7 +763,11 @@ test("routes direct ChatGPT coding operations only through scoped workspace endp
     target: "{}",
     replacement: "{ value: 1 }",
   });
-  await client.runCodingCommand({ workspace_id: "ws-1", command: "npm test" });
+  await client.runCodingCommand({
+    workspace_id: "ws-1",
+    command: "npm test",
+    workbench_session_id: "wbs_1234567890abcdef",
+  });
   await client.getCodingCommand({ workspace_id: "ws-1", command_id: "command-1" });
   await client.cancelCodingCommand({ workspace_id: "ws-1", command_id: "command-1" });
 
@@ -779,6 +783,7 @@ test("routes direct ChatGPT coding operations only through scoped workspace endp
   ]);
   const commandBody = JSON.parse(String(seen[5].init?.body));
   assert.equal(commandBody.model_id, undefined);
+  assert.equal(commandBody.workbench_session_id, "wbs_1234567890abcdef");
   assert.equal((seen[5].init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
 });
 
