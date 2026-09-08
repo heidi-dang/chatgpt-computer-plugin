@@ -249,86 +249,100 @@ function usePromptActivity(
     let retryAttempts = 0;
     let terminalFailure = false;
 
-    const applyEvent = (event: PromptEvent, isLiveEvent = false) => {
-      if (event.sequence <= cursor.current) return;
-      cursor.current = event.sequence;
-      if (event.type === "mcp.tool") {
-        const toolName = typeof event.payload?.tool_name === "string" ? event.payload.tool_name : "";
-        const toolStatus = typeof event.payload?.status === "string" ? event.payload.status.toUpperCase() : "";
-        activePromptTools.current = nextPromptActiveToolCount(activePromptTools.current, toolStatus);
-        setStatus(promptLifecycleStatus(activePromptTools.current));
-        if (toolName === "cptr_open_live_workbench" || toolName === "cptr_render_live_terminal") return;
-        setState((current) => appendMcpToolActivity(current, {
-          event_id: event.event_id,
-          timestamp: event.timestamp,
-          type: "mcp.tool",
-          payload: {
-            tool_name: event.payload?.tool_name,
-            summary: event.payload?.summary,
-            status: event.payload?.status,
-            arguments_json: event.payload?.arguments_json,
-            result_json: event.payload?.result_json,
-            error: event.payload?.error,
-          },
-        }));
-      } else if (event.type === "direct.worker") {
-        const payload = event.payload;
-        if (typeof payload?.worker_id !== "string") return;
-        // Direct worker lifecycle events update compact metadata only. Preserve
-        // any command live.bind target so later WORKING/COMPLETE metadata cannot
-        // detach the unified terminal from the worker's real stdout/stderr SSE.
-        setState((current) => appendDirectWorkerActivity(current, {
-          event_id: event.event_id,
-          timestamp: event.timestamp,
-          type: "direct.worker",
-          payload: {
-            worker_id: payload.worker_id,
-            workspace_id: payload.workspace_id,
-            name: payload.name,
-            responsibility: payload.responsibility,
-            repo_path: payload.repo_path,
-            status: payload.status,
-            summary: payload.summary,
-            changed_file_count: payload.changed_file_count,
-            changed_paths: payload.changed_paths,
-            active_command_ids: payload.active_command_ids,
-            recent_command_ids: payload.recent_command_ids,
-          },
-        } as DirectWorkerActivity));
-      } else if (event.type === "live.bind" && event.payload?.live) {
-        setMeta(event.payload.live);
-      } else if (event.type === "browser.surface") {
-        const payload = event.payload ?? {};
-        const sessionId = typeof payload.session_id === "string" && payload.session_id ? payload.session_id : null;
-        // Discovery/pairing activity is not a renderable browser surface. Keep
-        // the terminal visible until CPTR has bound a real browser session.
-        if (!sessionId) return;
-        const stateValue = typeof payload.state === "string" ? payload.state : "OBSERVING";
-        const owner = typeof payload.owner === "string" ? payload.owner : undefined;
-        const mode = owner === "none"
-          ? "DISCONNECTED"
-          : (["OBSERVING", "AGENT_CONTROL", "HANDOFF_REQUIRED", "HUMAN_CONTROL", "DISCONNECTED"] as const)
-              .includes(stateValue as BrowserSurfaceState["mode"])
-            ? stateValue as BrowserSurfaceState["mode"]
-            : "OBSERVING";
-        const shouldAutoOpenBrowser =
-          isLiveEvent &&
-          owner !== "none" &&
-          surfacePreference.current === undefined &&
-          visibleBrowserSession.current !== sessionId;
-        if (owner !== "none") visibleBrowserSession.current = sessionId;
-        setBrowserSurface({
-          action: typeof payload.action === "string" ? payload.action : "unknown",
-          ...(typeof payload.device_id === "string" ? { deviceId: payload.device_id } : {}),
-          sessionId,
-          mode,
-          ...(owner ? { owner } : {}),
-          ...(typeof payload.epoch === "number" ? { epoch: payload.epoch } : {}),
-          ...(typeof payload.hostname === "string" ? { hostname: payload.hostname } : {}),
+    const applyEvents = (events: readonly PromptEvent[], isLiveEvent = false) => {
+      const stateReducers: Array<(current: WorkbenchState) => WorkbenchState> = [];
+      for (const event of events) {
+        if (event.sequence <= cursor.current) continue;
+        cursor.current = event.sequence;
+        if (event.type === "mcp.tool") {
+          const toolName = typeof event.payload?.tool_name === "string" ? event.payload.tool_name : "";
+          const toolStatus = typeof event.payload?.status === "string" ? event.payload.status.toUpperCase() : "";
+          activePromptTools.current = nextPromptActiveToolCount(activePromptTools.current, toolStatus);
+          setStatus(promptLifecycleStatus(activePromptTools.current));
+          if (toolName === "cptr_open_live_workbench" || toolName === "cptr_render_live_terminal") continue;
+          stateReducers.push((current) => appendMcpToolActivity(current, {
+            event_id: event.event_id,
+            timestamp: event.timestamp,
+            type: "mcp.tool",
+            payload: {
+              tool_name: event.payload?.tool_name,
+              summary: event.payload?.summary,
+              status: event.payload?.status,
+              arguments_json: event.payload?.arguments_json,
+              result_json: event.payload?.result_json,
+              error: event.payload?.error,
+            },
+          }));
+        } else if (event.type === "direct.worker") {
+          const payload = event.payload;
+          if (typeof payload?.worker_id !== "string") continue;
+          // Direct worker lifecycle events update compact metadata only. Preserve
+          // any command live.bind target so later WORKING/COMPLETE metadata cannot
+          // detach the unified terminal from the worker's real stdout/stderr SSE.
+          stateReducers.push((current) => appendDirectWorkerActivity(current, {
+            event_id: event.event_id,
+            timestamp: event.timestamp,
+            type: "direct.worker",
+            payload: {
+              worker_id: payload.worker_id,
+              workspace_id: payload.workspace_id,
+              name: payload.name,
+              responsibility: payload.responsibility,
+              repo_path: payload.repo_path,
+              status: payload.status,
+              summary: payload.summary,
+              changed_file_count: payload.changed_file_count,
+              changed_paths: payload.changed_paths,
+              active_command_ids: payload.active_command_ids,
+              recent_command_ids: payload.recent_command_ids,
+            },
+          } as DirectWorkerActivity));
+        } else if (event.type === "live.bind" && event.payload?.live) {
+          setMeta(event.payload.live);
+        } else if (event.type === "browser.surface") {
+          const payload = event.payload ?? {};
+          const sessionId = typeof payload.session_id === "string" && payload.session_id ? payload.session_id : null;
+          // Discovery/pairing activity is not a renderable browser surface. Keep
+          // the terminal visible until CPTR has bound a real browser session.
+          const handleBrowserSurface = () => {
+            if (!sessionId) return;
+            const stateValue = typeof payload.state === "string" ? payload.state : "OBSERVING";
+            const owner = typeof payload.owner === "string" ? payload.owner : undefined;
+            const mode = owner === "none"
+              ? "DISCONNECTED"
+              : (["OBSERVING", "AGENT_CONTROL", "HANDOFF_REQUIRED", "HUMAN_CONTROL", "DISCONNECTED"] as const)
+                  .includes(stateValue as BrowserSurfaceState["mode"])
+                ? stateValue as BrowserSurfaceState["mode"]
+                : "OBSERVING";
+            const shouldAutoOpenBrowser =
+              isLiveEvent &&
+              owner !== "none" &&
+              surfacePreference.current === undefined &&
+              visibleBrowserSession.current !== sessionId;
+            if (owner !== "none") visibleBrowserSession.current = sessionId;
+            setBrowserSurface({
+              action: typeof payload.action === "string" ? payload.action : "unknown",
+              ...(typeof payload.device_id === "string" ? { deviceId: payload.device_id } : {}),
+              sessionId,
+              mode,
+              ...(owner ? { owner } : {}),
+              ...(typeof payload.epoch === "number" ? { epoch: payload.epoch } : {}),
+              ...(typeof payload.hostname === "string" ? { hostname: payload.hostname } : {}),
+            });
+            if (shouldAutoOpenBrowser) setSurfaceMode("browser");
+          };
+          handleBrowserSurface();
+        }
+      }
+      if (stateReducers.length) {
+        setState((current) => {
+          let next = current;
+          for (const reducer of stateReducers) next = reducer(next);
+          return next;
         });
-        if (shouldAutoOpenBrowser) setSurfaceMode("browser");
       }
     };
+    const applyEvent = (event: PromptEvent, isLiveEvent = false) => applyEvents([event], isLiveEvent);
 
     const applySnapshot = async () => {
       const url = new URL(meta.snapshotUrl!, window.location.href);
@@ -343,7 +357,7 @@ function usePromptActivity(
         throw error;
       }
       const value = await response.json() as { replay?: { events?: PromptEvent[]; last_sequence?: number } };
-      for (const event of value.replay?.events ?? []) applyEvent(event, false);
+      applyEvents(value.replay?.events ?? [], false);
       if (typeof value.replay?.last_sequence === "number") cursor.current = Math.max(cursor.current, value.replay.last_sequence);
     };
 
@@ -425,11 +439,20 @@ function usePromptActivity(
         const decoder = new TextDecoder();
         let buffer = "";
         let data: string[] = [];
+        // Batch prompt events from a single ReadableStream chunk into one
+        // pass to avoid N separate React re-renders during replay bursts
+        // (matches the batching pattern in useLiveSession).
+        const pendingEvents: PromptEvent[] = [];
         const dispatch = () => {
           if (!data.length) return;
-          try { applyEvent(JSON.parse(data.join("\n")) as PromptEvent, true); }
+          try { pendingEvents.push(JSON.parse(data.join("\n")) as PromptEvent); }
           catch { setConnection("received invalid prompt event"); }
           data = [];
+        };
+        const flushPromptBatch = () => {
+          if (!pendingEvents.length) return;
+          const batch = pendingEvents.splice(0);
+          applyEvents(batch, true);
         };
         while (!stopped) {
           const next = await reader.read();
@@ -441,8 +464,10 @@ function usePromptActivity(
             if (line === "") dispatch();
             else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
           }
+          flushPromptBatch();
         }
         if (!stopped && data.length) dispatch();
+        flushPromptBatch();
         if (!stopped) scheduleRetry(consume);
       } catch (error) {
         if (stopped || (error instanceof DOMException && error.name === "AbortError")) return;

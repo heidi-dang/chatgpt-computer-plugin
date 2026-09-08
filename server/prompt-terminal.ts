@@ -713,11 +713,14 @@ export class PromptTerminalGateway {
       let cursor = after;
       while (!closed && Date.now() < deadline) {
         while (queue.length && !closed) {
-          const event = queue.shift()!;
-          if (event.sequence <= cursor) continue;
-          cursor = event.sequence;
-          const frame = `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
-          if (!(await write(frame))) return;
+          const batch = queue.splice(0);
+          for (const event of batch) {
+            if (closed) break;
+            if (event.sequence <= cursor) continue;
+            cursor = event.sequence;
+            const frame = `id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+            if (!(await write(frame))) return;
+          }
         }
         if (closed) return;
         const remaining = Math.min(heartbeatMs, Math.max(0, deadline - Date.now()));

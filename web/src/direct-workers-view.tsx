@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useMemo } from "react";
 import type { DirectWorkerState } from "./state.js";
 
 export type DirectWorkerTab = "activity" | "changes" | "terminal";
@@ -58,6 +58,10 @@ export function DirectWorkersView({
 }: Props) {
   const orderedWorkers = workerOrder.map((id) => workers[id]).filter(Boolean);
   const selected = (selectedWorkerId && workers[selectedWorkerId]) || orderedWorkers[0] || null;
+  const reversedActivity = useMemo(() => {
+    if (!selected?.activity.length) return [];
+    return [...selected.activity].reverse();
+  }, [selected?.activity]);
   const activeCount = orderedWorkers.filter((worker) => activeStatus(worker.status)).length;
   const completeCount = orderedWorkers.filter((worker) => ["COMPLETE", "INTEGRATED"].includes(worker.status)).length;
 
@@ -109,7 +113,7 @@ export function DirectWorkersView({
 
       <div className="worker-detail" role="tabpanel">
         {selectedTab === "activity" ? <div className="worker-activity">
-          {selected.activity.length ? [...selected.activity].reverse().map((item) => <div className="worker-activity-row" key={item.id}>
+          {reversedActivity.length ? reversedActivity.map((item) => <div className="worker-activity-row" key={item.id}>
             <time>{displayTime(item.timestamp)}</time>
             <span className={`worker-dot ${statusClass(item.status)}`} aria-hidden="true" />
             <div><strong>{item.status}</strong><span>{item.summary}</span></div>

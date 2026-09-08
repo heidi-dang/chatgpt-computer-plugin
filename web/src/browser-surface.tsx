@@ -303,6 +303,9 @@ export function BrowserSurface({
               setFrameHealth("waiting");
               setFrameStatus("Browser frames paused — waiting for Chrome…");
             }
+            // Back off 200ms when no new frame is available to avoid busy-spinning
+            // HTTP requests and saturating CPU/network during idle screen states.
+            await new Promise((resolve) => window.setTimeout(resolve, 200));
             continue;
           }
           if (!response.ok) throw new Error(`browser frame unavailable (${response.status})`);
