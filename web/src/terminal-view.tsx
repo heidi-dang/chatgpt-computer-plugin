@@ -226,7 +226,11 @@ export function TerminalView({
   const scrollFrame = useRef<number | null>(null);
   const [localFollow, setLocalFollow] = useState(true);
   const follow = controlledFollow ?? localFollow;
+  const followRef = useRef(follow);
+  followRef.current = follow;
   const setFollow = (value: boolean) => {
+    if (value === followRef.current) return;
+    followRef.current = value;
     setLocalFollow(value);
     onFollowChange?.(value);
   };

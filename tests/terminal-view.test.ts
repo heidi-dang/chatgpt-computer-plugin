@@ -305,6 +305,16 @@ test("terminal view memoizes stable rows and frame-coalesces follow scrolling", 
   assert.match(source, /window\.cancelAnimationFrame\(/);
 });
 
+test("terminal follow changes are edge-triggered instead of writing ChatGPT widget state on every scroll frame", () => {
+  const source = readFileSync(new URL("../web/src/terminal-view.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /const followRef = useRef\(follow\)/);
+  assert.match(source, /followRef\.current = follow/);
+  assert.match(source, /if \(value === followRef\.current\) return/);
+  assert.match(source, /followRef\.current = value/);
+  assert.match(source, /onFollowChange\?\.\(value\)/);
+});
+
 test("paired Chrome surface publishing preserves authoritative lease and command ownership", () => {
   const mcpSource = readFileSync(new URL("../server/mcp.ts", import.meta.url), "utf8");
   assert.match(mcpSource, /const nestedLease = recordFrom\(commandPayload\.lease\)/);
@@ -320,7 +330,7 @@ test("Workbench switches terminal and browser inside one persistent root", () =>
   const browserSource = readFileSync(new URL("../web/src/browser-surface.tsx", import.meta.url), "utf8");
   const css = readFileSync(new URL("../web/src/workbench.css", import.meta.url), "utf8");
 
-  assert.match(source, /useState<"terminal" \| "browser">\("terminal"\)/);
+  assert.match(source, /useState<"terminal" \| "browser">\(restoredUiState\.current\.surfaceMode \?\? "terminal"\)/);
   assert.match(source, /<BrowserSurface/);
   assert.match(source, /if \(!sessionId\) return/);
   assert.match(source, /owner === "none"[\s\S]*\? "DISCONNECTED"/);
@@ -419,8 +429,32 @@ test("browser surface auto-opens once per new session and then preserves the use
   const promptHook = source.slice(source.indexOf("function usePromptActivity("), source.indexOf("function useMcpBridge("));
 
   assert.match(promptHook, /const visibleBrowserSession = useRef<string \| null>\(null\)/);
+  assert.match(promptHook, /surfacePreference\.current === undefined/);
   assert.match(promptHook, /visibleBrowserSession\.current !== sessionId/);
   assert.match(promptHook, /visibleBrowserSession\.current = sessionId/);
   assert.match(promptHook, /if \(shouldAutoOpenBrowser\) setSurfaceMode\("browser"\)/);
   assert.doesNotMatch(promptHook, /if \(isLiveEvent && owner !== "none"\) setSurfaceMode\("browser"\)/);
+});
+
+test("Workbench persists only ephemeral presentation preferences across ChatGPT remounts", () => {
+  const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+  const stateReader = source.slice(source.indexOf("function readWorkbenchUiState("), source.indexOf("function persistWorkbenchUiState("));
+  const persistence = source.slice(source.indexOf("function persistWorkbenchUiState("), source.indexOf("function useHostTheme()"));
+
+  assert.match(source, /widgetState\?: unknown/);
+  assert.match(source, /setWidgetState\?: \(state: Record<string, unknown>\) => void/);
+  assert.match(source, /readWorkbenchUiState\(hostBridge\(\)\?\.widgetState\)/);
+  assert.match(stateReader, /record\.surfaceMode === "terminal" \|\| record\.surfaceMode === "browser"/);
+  assert.match(stateReader, /typeof record\.terminalFollow === "boolean"/);
+  assert.doesNotMatch(stateReader, /ticket|workspace|target|browserSurface|promptMetadata|meta/);
+  assert.match(persistence, /next\.surfaceMode === current\.current\.surfaceMode/);
+  assert.match(persistence, /next\.terminalFollow === current\.current\.terminalFollow/);
+  assert.match(persistence, /return;/);
+  assert.match(persistence, /hostBridge\(\)\?\.setWidgetState\?\.\(next\)/);
+  assert.match(source, /restoredUiState\.current\.surfaceMode \?\? "terminal"/);
+  assert.match(source, /restoredUiState\.current\.terminalFollow \?\? true/);
+  assert.match(source, /persistWorkbenchUiState\(persistedUiState, \{ surfaceMode: next \}\)/);
+  assert.match(source, /persistWorkbenchUiState\(persistedUiState, \{ terminalFollow: follow \}\)/);
+  assert.match(source, /surfacePreference\.current === undefined/);
+  assert.doesNotMatch(source, /persistWorkbenchUiState\([^\n]*scrollTop/);
 });
