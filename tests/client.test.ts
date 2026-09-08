@@ -55,6 +55,40 @@ test("propagates bounded MCP trace metadata to control and browser-device reques
   }
 });
 
+test("routes the six Capability OS kernel operations through the scoped Control API", async () => {
+  const seen: Array<{ url: string; method: string; body: unknown }> = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input, init) => {
+      seen.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+      });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    },
+  });
+
+  await client.capabilityOs("inspect", { task_id: "task-1", artifact_digest: "sha256:abc", limit: 7 });
+  for (const action of ["resolve", "forge", "execute", "acquire", "reflect"] as const) {
+    await client.capabilityOs(action, { task_id: "task-1", marker: action });
+  }
+
+  assert.deepEqual(seen, [
+    {
+      url: "http://cptr.test/api/control/v1/capability-os/inspect?task_id=task-1&artifact_digest=sha256%3Aabc&limit=7",
+      method: "GET",
+      body: undefined,
+    },
+    ...["resolve", "forge", "execute", "acquire", "reflect"].map((action) => ({
+      url: `http://cptr.test/api/control/v1/capability-os/${action}`,
+      method: "POST",
+      body: { task_id: "task-1", marker: action },
+    })),
+  ]);
+});
+
 test("fetches bounded runtime lifecycle metrics through the scoped Control API", async () => {
   let seenUrl = "";
   const client = new ComputerClient({

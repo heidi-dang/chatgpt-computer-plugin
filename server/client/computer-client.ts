@@ -398,6 +398,30 @@ export class ComputerClient {
     }
   }
 
+  async capabilityOs(
+    action: "inspect" | "resolve" | "forge" | "execute" | "acquire" | "reflect",
+    payload: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    switch (action) {
+      case "inspect": {
+        const taskId = typeof payload.task_id === "string" ? payload.task_id.trim() : "";
+        if (!taskId) throw new Error("task_id is required");
+        const query = new URLSearchParams({ task_id: taskId });
+        if (typeof payload.artifact_digest === "string" && payload.artifact_digest.trim()) {
+          query.set("artifact_digest", payload.artifact_digest.trim());
+        }
+        if (payload.limit !== undefined) query.set("limit", String(payload.limit));
+        return this.request(`/capability-os/inspect?${query}`);
+      }
+      case "resolve":
+      case "forge":
+      case "execute":
+      case "acquire":
+      case "reflect":
+        return this.request(`/capability-os/${action}`, { method: "POST", body: payload });
+    }
+  }
+
   async getRuntimeMetrics(): Promise<Record<string, unknown>> {
     return this.request("/runtime/metrics");
   }

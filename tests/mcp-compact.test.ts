@@ -68,6 +68,13 @@ test("compact MCP surface exposes 18 domain tools under 100 KB while legacy stay
   assert.ok(workspaceAction?.enum?.includes("create"));
   assert.match(compactTools.get("cptr_workspace")?.description ?? "", /create\(path/);
   assert.match(compactTools.get("cptr_command")?.description ?? "", /run\(workspace_id,command/);
+  const factoryAction = (compactTools.get("cptr_factory")?.inputSchema as {
+    properties?: { action?: { enum?: string[] } };
+  }).properties?.action;
+  for (const operation of ["inspect", "resolve", "forge", "execute", "acquire", "reflect"]) {
+    assert.ok(factoryAction?.enum?.includes(operation), `cptr_factory must expose Capability OS ${operation}`);
+  }
+  assert.match(compactTools.get("cptr_factory")?.description ?? "", /Capability OS kernel/);
   const update = await compact.client.callTool({
     name: "cptr_plugin_update",
     arguments: {
@@ -93,6 +100,35 @@ test("compact MCP surface exposes 18 domain tools under 100 KB while legacy stay
   assert.equal(getMcpToolSurfaceProfile(legacy.server)?.registered_tools, 91);
   await legacy.client.close();
   await legacy.server.close();
+});
+
+test("compact Capability OS kernel forwards through the thin ComputerClient boundary", async () => {
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async () => new Response(JSON.stringify({}), { status: 200 }),
+  });
+  const calls: Array<{ action: string; payload: Record<string, unknown> }> = [];
+  (computer as any).capabilityOs = async (action: string, payload: Record<string, unknown>) => {
+    calls.push({ action, payload: structuredClone(payload) });
+    return { ok: true, action };
+  };
+  const { server, client } = await connectedServer(computer, "compact");
+
+  for (const action of ["inspect", "resolve", "forge", "execute", "acquire", "reflect"] as const) {
+    const response = await client.callTool({
+      name: "cptr_factory",
+      arguments: { action, payload: { task_id: "task-capability", marker: action } },
+    });
+    assert.equal(response.isError, undefined, `${action} should proxy successfully`);
+  }
+  assert.deepEqual(calls, ["inspect", "resolve", "forge", "execute", "acquire", "reflect"].map((action) => ({
+    action,
+    payload: { task_id: "task-capability", marker: action },
+  })));
+
+  await client.close();
+  await server.close();
 });
 
 test("compact delegated domains remain blocked until prompt-scoped allow:delegate is opened", async () => {
