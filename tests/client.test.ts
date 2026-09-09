@@ -787,6 +787,52 @@ test("routes direct ChatGPT coding operations only through scoped workspace endp
   assert.equal((seen[5].init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
 });
 
+test("materializes an approved opaque value through the dedicated Control API route", async () => {
+  let seenUrl = "";
+  let seenBody: Record<string, unknown> = {};
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async (input, init) => {
+      seenUrl = String(input);
+      seenBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        workspace_id: "ws-1",
+        path: ".env",
+        scope: "workspace",
+        materialized: true,
+        permissions: "0600",
+      }), { status: 200 });
+    },
+  });
+
+  const result = await client.materializeCodingSecret({
+    workspace_id: "ws-1",
+    path: ".env",
+    secret: "opaque-fixture-value",
+    workbench_session_id: "wbs_1234567890abcdef",
+    user_approval: "allow:secret-write",
+    overwrite: true,
+  });
+
+  assert.equal(seenUrl, "http://cptr.test/api/control/v1/workspaces/ws-1/coding/materialize-secret");
+  assert.deepEqual(seenBody, {
+    path: ".env",
+    secret: "opaque-fixture-value",
+    workbench_session_id: "wbs_1234567890abcdef",
+    user_approval: "allow:secret-write",
+    overwrite: true,
+  });
+  assert.deepEqual(result, {
+    workspace_id: "ws-1",
+    path: ".env",
+    scope: "workspace",
+    materialized: true,
+    permissions: "0600",
+  });
+  assert.equal(JSON.stringify(result).includes("opaque-fixture-value"), false);
+});
+
 test("streams CPTR activity with server-side auth and a replay cursor", async () => {
   let seenUrl = "";
   let seenHeaders: Record<string, string> = {};

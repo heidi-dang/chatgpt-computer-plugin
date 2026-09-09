@@ -889,6 +889,34 @@ export class ComputerClient {
     });
   }
 
+  async materializeCodingSecret(input: {
+    workspace_id: string;
+    worker_id?: string;
+    path: string;
+    secret: string;
+    workbench_session_id: string;
+    user_approval?: "allow:secret-write";
+    overwrite?: boolean;
+  }): Promise<{
+    workspace_id: string;
+    path: string;
+    scope: "workspace" | "host-root";
+    materialized: boolean;
+    permissions: string;
+  }> {
+    return this.request(`/workspaces/${encodeURIComponent(input.workspace_id)}/coding/materialize-secret`, {
+      method: "POST",
+      body: {
+        ...(input.worker_id ? { worker_id: input.worker_id } : {}),
+        path: input.path,
+        secret: input.secret,
+        workbench_session_id: input.workbench_session_id,
+        ...(input.user_approval ? { user_approval: input.user_approval } : {}),
+        overwrite: input.overwrite ?? false,
+      },
+    });
+  }
+
   async editCodingFile(input: {
     workspace_id: string;
     worker_id?: string;
