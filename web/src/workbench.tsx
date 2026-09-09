@@ -450,23 +450,37 @@ function usePromptActivity(
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
+        let eventName = "message";
         let data: string[] = [];
         // Batch prompt events from a single ReadableStream chunk into one
         // pass to avoid N separate React re-renders during replay bursts
         // (matches the batching pattern in useLiveSession).
         const pendingEvents: PromptEvent[] = [];
         const dispatch = () => {
-          if (!data.length) return;
+          if (!data.length && eventName === "message") return;
+          if (eventName === "superseded") {
+            stopped = true;
+            terminalFailure = true;
+            stopTerminalFailure("superseded by newer Workbench");
+            data = [];
+            eventName = "message";
+            return;
+          }
+          if (!data.length) {
+            eventName = "message";
+            return;
+          }
           try { pendingEvents.push(JSON.parse(data.join("\n")) as PromptEvent); }
           catch { setConnection("received invalid prompt event"); }
           data = [];
+          eventName = "message";
         };
         const flushPromptBatch = () => {
           if (!pendingEvents.length) return;
           const batch = pendingEvents.splice(0);
           applyEvents(batch, true);
         };
-        while (!stopped) {
+        while (!stopped && !terminalFailure) {
           const next = await reader.read();
           if (next.done) break;
           buffer += decoder.decode(next.value, { stream: true });
@@ -474,13 +488,15 @@ function usePromptActivity(
           buffer = lines.pop() ?? "";
           for (const line of lines) {
             if (line === "") dispatch();
+            else if (line.startsWith("event:")) eventName = line.slice(6).trim();
             else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
           }
           flushPromptBatch();
+          if (terminalFailure) break;
         }
-        if (!stopped && data.length) dispatch();
+        if (!stopped && !terminalFailure && (data.length || eventName === "superseded")) dispatch();
         flushPromptBatch();
-        if (!stopped) scheduleRetry(consume);
+        if (!stopped && !terminalFailure) scheduleRetry(consume);
       } catch (error) {
         if (stopped || (error instanceof DOMException && error.name === "AbortError")) return;
         const status = error && typeof error === "object" && "status" in error
@@ -773,7 +789,19 @@ function useLiveSession(
         const eventBatch: WorkbenchEvent[] = [];
 
         const dispatch = () => {
-          if (!data.length) return;
+          if (!data.length && eventName === "message") return;
+          if (eventName === "superseded") {
+            stopped = true;
+            terminalFailure = true;
+            stopTerminalFailure("superseded by newer Workbench");
+            data = [];
+            eventName = "message";
+            return;
+          }
+          if (!data.length) {
+            eventName = "message";
+            return;
+          }
           try {
             const value = JSON.parse(data.join("\n")) as WorkbenchEvent | { snapshot?: { status?: string } };
             if (eventName === "snapshot") {
@@ -820,8 +848,9 @@ function useLiveSession(
           }
           // Flush accumulated events from this chunk in a single setState
           flushBatch();
+          if (terminalFailure) break;
         }
-        if (!stopped && data.length) dispatch();
+        if (!stopped && !terminalFailure && (data.length || eventName === "superseded")) dispatch();
         flushBatch();
         if (!stopped && (persistentWorkbench || !terminalSeen) && !terminalFailure) scheduleRetry(consume);
       } catch (error) {
@@ -925,6 +954,20 @@ function OwnedWorkbench() {
 
   useWorkbenchAutoSize();
 
+  const isSuperseded = connection === "superseded by newer Workbench"
+    || promptActivity.connection === "superseded by newer Workbench"
+    || targetConnection === "superseded by newer Workbench";
+
+  useEffect(() => {
+    if (!isSuperseded) return;
+    hostBridge()?.notifyIntrinsicHeight?.(0);
+    window.parent.postMessage({
+      jsonrpc: "2.0",
+      method: "ui/notifications/size-changed",
+      params: { height: 0 },
+    }, "*");
+  }, [isSuperseded]);
+
   const selectSurfaceMode = (next: "terminal" | "browser") => {
     surfacePreference.current = next;
     setSurfaceMode(next);
@@ -935,7 +978,7 @@ function OwnedWorkbench() {
     persistWorkbenchUiState(persistedUiState, { terminalFollow: follow });
   };
 
-  return <main className="terminal-workbench" aria-label="CPTR live computer">
+  return <main className={`terminal-workbench${isSuperseded ? " is-superseded" : ""}`} aria-label="CPTR live computer">
     <div className="surface-switch" role="group" aria-label="Live computer surface">
       <button type="button" aria-pressed={surfaceMode === "terminal"} onClick={() => selectSurfaceMode("terminal")}>Terminal</button>
       <button type="button" aria-pressed={surfaceMode === "browser"} onClick={() => selectSurfaceMode("browser")}>Browser</button>

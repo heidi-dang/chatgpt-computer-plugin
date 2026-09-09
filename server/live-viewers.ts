@@ -5,7 +5,9 @@ export type LiveViewerIdentity = {
   startedAt: number;
 };
 
-type ActiveViewer = LiveViewerIdentity & { close: () => void };
+export type CloseViewer = (reason?: "superseded" | "closed") => void;
+
+type ActiveViewer = LiveViewerIdentity & { close: CloseViewer };
 
 function singleHeader(request: IncomingMessage, name: string): string | undefined {
   const value = request.headers[name];
@@ -30,12 +32,12 @@ function compare(a: LiveViewerIdentity, b: LiveViewerIdentity): number {
 export class LiveViewerRegistry {
   private readonly active = new Map<string, ActiveViewer>();
 
-  claim(scope: string, viewer: LiveViewerIdentity | null, close: () => void): "accepted" | "replaced" | "superseded" {
+  claim(scope: string, viewer: LiveViewerIdentity | null, close: CloseViewer): "accepted" | "replaced" | "superseded" {
     if (!viewer) return "accepted";
     const current = this.active.get(scope);
     if (current && current.id !== viewer.id && compare(current, viewer) > 0) return "superseded";
     if (current) {
-      current.close();
+      current.close(current.id !== viewer.id ? "superseded" : "closed");
       this.active.set(scope, { ...viewer, close });
       return "replaced";
     }
