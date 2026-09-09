@@ -16,11 +16,12 @@ test("live terminal streaming is enabled by default with an explicit emergency k
 
 test("disabled streaming keeps prompt authorization but records no live UI events", () => {
   const store = new PromptTerminalStore({ streamingEnabled: false });
-  const metadata = store.open({ allowDelegate: true });
+  const metadata = store.open({ allowDelegate: true, allowSecretWrite: true });
 
   assert.equal(metadata.streamingEnabled, false);
   assert.equal(store.streamingEnabled, false);
   assert.equal(store.allowsDelegation(metadata.ticket), true);
+  assert.equal(store.allowsSecretWrite(metadata.ticket), true);
   assert.equal(store.append(metadata.ticket, {
     type: "mcp.tool",
     payload: {
@@ -209,6 +210,17 @@ test("browser surface activity reuses the prompt stream without credential field
   assert.equal(store.ticketForBrowserSession("brs_1"), null, "revoking a prompt must clear its browser-session routing");
 });
 
+
+test("secret-write authorization is prompt-scoped and resets on the next resumed turn", () => {
+  const store = new PromptTerminalStore({ streamingEnabled: true });
+  const first = store.open({ allowSecretWrite: true, workbenchSessionId: "wbs-secret-scope" });
+  assert.equal(store.allowsSecretWrite(first.ticket), true);
+
+  const resumed = store.resumeWorkbenchSession("wbs-secret-scope", { allowSecretWrite: false });
+  assert.ok(resumed);
+  assert.equal(resumed.ticket, first.ticket);
+  assert.equal(store.allowsSecretWrite(first.ticket), false);
+});
 
 test("reuses and renews a workbench prompt stream while resetting per-turn delegation", () => {
   let now = 1_000;

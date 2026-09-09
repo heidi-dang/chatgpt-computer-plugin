@@ -631,6 +631,7 @@ function stripRouteOnlyWorkbenchSessionId(input: unknown): unknown {
 }
 
 const COMPACT_BACKEND_WORKBENCH_ROUTE_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
+  cptr_code: new Set(["materialize_secret"]),
   cptr_command: new Set(["run", "run_test"]),
   cptr_ssh: new Set(["run"]),
   cptr_agent_task: new Set(["start", "execute"]),
@@ -715,6 +716,11 @@ function requiresDelegationAuthorization(name: string, input: unknown): boolean 
   if (name !== "cptr_render_live_terminal" || !input || typeof input !== "object") return false;
   const targetType = (input as { target_type?: unknown }).target_type;
   return targetType === "task" || targetType === "monitor";
+}
+
+function requiresSecretWriteAuthorization(name: string, input: unknown): boolean {
+  if (name !== "cptr_code" || !input || typeof input !== "object" || Array.isArray(input)) return false;
+  return (input as { action?: unknown }).action === "materialize_secret";
 }
 
 export function createMcpServer(
@@ -1126,6 +1132,18 @@ export function createMcpServer(
               "allow:delegate",
             );
           }
+          if (
+            requiresSecretWriteAuthorization(name, input) &&
+            !promptSessions.allowsSecretWrite(currentPromptTicket())
+          ) {
+            throw new ComputerApiError(
+              403,
+              "secret materialization is disabled for this prompt; the current user prompt must explicitly authorize writing secret material and cptr_open_live_workbench must record that authorization for this prompt session",
+              "secret_write_not_allowed",
+              false,
+              "allow:secret-write",
+            );
+          }
           const value = await clientModelContext.run(
             normalizedModel.reported,
             async () => handler(...(args.length ? [input, ...args.slice(1)] : args)),
@@ -1378,7 +1396,7 @@ export function createMcpServer(
     {
       title: "Prepare CPTR Live Workbench context",
       description:
-        "Call this first whenever the user explicitly invokes CPTR. Set session_name to the exact current ChatGPT conversation title when the host exposes it; otherwise use a concise prompt-derived Workbench session label and never claim it is the host title. When continuing the same task in a later ChatGPT turn, pass resume_session_id so the existing Live Terminal streams are renewed and reused rather than replaced. This is the sole CPTR UI-producing tool: it opens exactly one Workbench. Later Direct Coding, delegated task, monitor, and command operations pass workbench_session_id and CPTR publishes their observable activity into this backend-owned stream automatically; normal execution must not call a separate render/bind tool.",
+        "Call this first whenever the user explicitly invokes CPTR. Set session_name to the exact current ChatGPT conversation title when the host exposes it; otherwise use a concise prompt-derived Workbench session label and never claim it is the host title. When continuing the same task in a later ChatGPT turn, pass resume_session_id so the existing Live Terminal streams are renewed and reused rather than replaced. If the current user prompt explicitly authorizes writing secret material, pass secret_write_authorization='allow:secret-write'; that permission applies only to this prompt session and resets on the next turn. This is the sole CPTR UI-producing tool: it opens exactly one Workbench. Later Direct Coding, delegated task, monitor, and command operations pass workbench_session_id and CPTR publishes their observable activity into this backend-owned stream automatically; normal execution must not call a separate render/bind tool.",
       inputSchema: openWorkbenchSessionSchema,
       outputSchema: z.object({
               session_id: z.string(),
@@ -1388,12 +1406,14 @@ export function createMcpServer(
               title: z.string(),
               initial_summary: z.string(),
               delegation_allowed: z.boolean(),
+              secret_write_allowed: z.boolean(),
             }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: openWorkbenchToolMetadata,
     },
     async (input) => {
       const delegationAllowed = input.delegation_authorization === "allow:delegate";
+      const secretWriteAllowed = input.secret_write_authorization === "allow:secret-write";
       const preloadedWorkspaces = await client
         .listWorkspaces(false)
         .then((value) => Array.isArray(value.workspaces) ? value.workspaces : [])
@@ -1405,9 +1425,20 @@ export function createMcpServer(
             ...(input.workspace_id ? { workspace_id: input.workspace_id } : {}),
           });
       const prompt = input.resume_session_id
-        ? promptSessions.resumeWorkbenchSession(session.session_id, { allowDelegate: delegationAllowed })
-          ?? promptSessions.open({ allowDelegate: delegationAllowed, workbenchSessionId: session.session_id })
-        : promptSessions.open({ allowDelegate: delegationAllowed, workbenchSessionId: session.session_id });
+        ? promptSessions.resumeWorkbenchSession(session.session_id, {
+            allowDelegate: delegationAllowed,
+            allowSecretWrite: secretWriteAllowed,
+          })
+          ?? promptSessions.open({
+            allowDelegate: delegationAllowed,
+            allowSecretWrite: secretWriteAllowed,
+            workbenchSessionId: session.session_id,
+          })
+        : promptSessions.open({
+          allowDelegate: delegationAllowed,
+          allowSecretWrite: secretWriteAllowed,
+          workbenchSessionId: session.session_id,
+        });
       activePromptTicket = prompt.ticket;
       promptTicketContext.enterWith(prompt.ticket);
       promptSessions.bindWorkbenchSession(prompt.ticket, session.session_id);
@@ -1421,6 +1452,7 @@ export function createMcpServer(
           ? `Workbench Session ${session.session_id} is ready. ChatGPT Direct Coding remains available and the user explicitly enabled Delegated Agent tools for this prompt.`
           : `Workbench Session ${session.session_id} is ready. ChatGPT Direct Coding is enabled; Delegated Agent tools are blocked unless the user prompt includes allow:delegate.`,
         delegation_allowed: delegationAllowed,
+        secret_write_allowed: secretWriteAllowed,
       };
       const activity = publishActivity(
         "cptr_open_live_workbench",
@@ -3368,7 +3400,7 @@ export function createMcpServer(
     const compactActionSignatures: Record<string, string> = {
       cptr_workbench: "list(include_archived?,limit?), get(workbench_session_id), events(workbench_session_id,after_sequence?,limit?), bind(workbench_session_id,target_type,target_id,workspace_id?), rename(workbench_session_id,name), archive(workbench_session_id), request_delete(workbench_session_id), confirm_delete(confirmation_id)",
       cptr_workspace: "create(path,name?,create_directory?,initialize_git?,idempotency_key?), list(include_unavailable?), get(workspace_id), detect_project(workspace_id,worker_id?), tree(workspace_id,path?,depth?,worker_id?), metadata(workspace_id,path,worker_id?), read_many(workspace_id,paths,worker_id?), search_symbols(workspace_id,query,path?,worker_id?), discover_tests(workspace_id,path?,depth?,worker_id?), dependency_summary(workspace_id,worker_id?), package_scripts(workspace_id,worker_id?), release_readiness(workspace_id,worker_id?)",
-      cptr_code: "list(workspace_id,path?,recursive?,worker_id?), read(workspace_id,path,lines?,worker_id?), read_many(workspace_id,files,max_chars?,worker_id?), search(workspace_id,query,path?,worker_id?), write(workspace_id,path,content,...), edit(workspace_id,path,target,replacement,...), apply_edits(workspace_id,path,edits,...), mkdir(workspace_id,path,worker_id?), move(workspace_id,source,destination,...), delete(workspace_id,path,worker_id?), git_status(workspace_id,worker_id?), diff(workspace_id,paths?,max_bytes?,worker_id?)",
+      cptr_code: "list(workspace_id,path?,recursive?,worker_id?), read(workspace_id,path,lines?,worker_id?), read_many(workspace_id,files,max_chars?,worker_id?), search(workspace_id,query,path?,worker_id?), write(workspace_id,path,content,...), materialize_secret(workspace_id,path,secret,overwrite?,worker_id?; requires prompt-scoped secret_write_authorization='allow:secret-write' on cptr_open_live_workbench; workspace .env reads stay blocked; absolute host paths also require an active local-root Workbench grant), edit(workspace_id,path,target,replacement,...), apply_edits(workspace_id,path,edits,...), mkdir(workspace_id,path,worker_id?), move(workspace_id,source,destination,...), delete(workspace_id,path,worker_id?), git_status(workspace_id,worker_id?), diff(workspace_id,paths?,max_bytes?,worker_id?)",
       cptr_command: "run(workspace_id,command,cwd?,wait_seconds?,allow_network?,pty?,worker_id?; explicit root only when user says use root and host operator enabled it: first line '# cptr-root: use root', optional next line '# cptr-root-ttl-seconds: <seconds>', same Workbench session inherits, '# cptr-root: revoke' revokes; root does not bypass allow_network/command:external/dedicated SSH), status(workspace_id,command_id,offset?,wait_seconds?,worker_id?), cancel(workspace_id,command_id,worker_id?), input(workspace_id,command_id,data,worker_id?), resize(workspace_id,command_id,rows,cols,worker_id?), signal(workspace_id,command_id,signal,worker_id?), run_test(workspace_id,target,path?,test_path?,worker_id?)",
       cptr_worker: "create(workspace_id,name,responsibility?,repo_path?), list(workspace_id), get(workspace_id,worker_id), overview(workspace_id), integrate(workspace_id,worker_ids), close(workspace_id,worker_id,discard_changes?)",
       cptr_lsp: "discover(workspace_id,worker_id?), start(workspace_id,server_id,root?,worker_id?), request(workspace_id,lsp_id,method,params?,timeout_seconds?,worker_id?), stop(workspace_id,lsp_id,worker_id?)",
@@ -3499,7 +3531,7 @@ export function createMcpServer(
     registerCompactDomain(
       "cptr_code",
       "Operate on CPTR workspace code",
-      ["list", "read", "read_many", "search", "write", "edit", "apply_edits", "mkdir", "move", "delete", "git_status", "diff"],
+      ["list", "read", "read_many", "search", "write", "materialize_secret", "edit", "apply_edits", "mkdir", "move", "delete", "git_status", "diff"],
       { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
       async (action, payload) => {
         switch (action) {
@@ -3508,6 +3540,10 @@ export function createMcpServer(
           case "read_many": return c.readManyFiles(payload);
           case "search": return c.searchCodingFiles(payload);
           case "write": return c.writeCodingFile(payload);
+          case "materialize_secret": return c.materializeCodingSecret({
+            ...payload,
+            user_approval: "allow:secret-write",
+          });
           case "edit": return c.editCodingFile(payload);
           case "apply_edits": return c.applyEdits(payload);
           case "mkdir": return c.createCodingDirectory(payload);
