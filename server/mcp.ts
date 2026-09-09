@@ -630,10 +630,20 @@ function stripRouteOnlyWorkbenchSessionId(input: unknown): unknown {
   return record;
 }
 
+const COMPACT_CAPABILITY_OS_ACTIONS = new Set([
+  "inspect",
+  "resolve",
+  "forge",
+  "execute",
+  "acquire",
+  "reflect",
+]);
+
 const COMPACT_BACKEND_WORKBENCH_ROUTE_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
   cptr_code: new Set(["materialize_secret"]),
   cptr_command: new Set(["run", "run_test"]),
   cptr_ssh: new Set(["run"]),
+  cptr_factory: COMPACT_CAPABILITY_OS_ACTIONS,
   cptr_agent_task: new Set(["start", "execute"]),
   cptr_agent_monitor: new Set(["start"]),
 };
@@ -656,10 +666,21 @@ function withCompactBackendWorkbenchRoute(
     ...record,
     payload: {
       ...payload,
-      // The top-level compact routing hint is authoritative for this MCP call.
-      // Mirror it into only the backend operations that natively own execution
-      // routing so ChatGPT never has to duplicate UI plumbing inside payload.
-      workbench_session_id: workbenchSessionId,
+      ...(toolName === "cptr_factory"
+        ? {
+            // Capability OS tasks use the authoritative Workbench session ID as
+            // their task identity. Preserve an explicitly supplied task_id for
+            // advanced callers that intentionally address another owned task.
+            task_id: typeof payload.task_id === "string" && payload.task_id.trim()
+              ? payload.task_id
+              : workbenchSessionId,
+          }
+        : {
+            // The top-level compact routing hint is authoritative for this MCP call.
+            // Mirror it into only backend operations that natively own execution
+            // routing so ChatGPT never has to duplicate UI plumbing inside payload.
+            workbench_session_id: workbenchSessionId,
+          }),
     },
   };
 }
@@ -3405,7 +3426,7 @@ export function createMcpServer(
       cptr_worker: "create(workspace_id,name,responsibility?,repo_path?), list(workspace_id), get(workspace_id,worker_id), overview(workspace_id), integrate(workspace_id,worker_ids), close(workspace_id,worker_id,discard_changes?)",
       cptr_lsp: "discover(workspace_id,worker_id?), start(workspace_id,server_id,root?,worker_id?), request(workspace_id,lsp_id,method,params?,timeout_seconds?,worker_id?), stop(workspace_id,lsp_id,worker_id?)",
       cptr_ssh: "list_hosts(workspace_id), run(workspace_id,alias,command,wait_seconds?), status(workspace_id,command_id,offset?,wait_seconds?), cancel(workspace_id,command_id)",
-      cptr_factory: "Capability OS kernel: inspect(task_id,artifact_digest?,limit?), resolve(task_id,required,optional?,forbidden?), forge(task_id,operation,payload), execute(task_id,capability_digest,lease_id?,spec?,inputs?,approval_id?), acquire(task_id,operation,payload), reflect(task_id,kind,claims,artifact_digest?,lease_id?,comparison?,change_class?,promotion_target_state?,owner_approval_id?). Dark Factory compatibility: start(workspace_id,mission,acceptance_criteria,policy,budget?,model_id?,idempotency_key?), status(run_id), events(run_id,cursor?,limit?), evidence(run_id,cursor?,limit?), message(run_id,content,idempotency_key?), pause(run_id,idempotency_key), resume(run_id,idempotency_key), approve(run_id,approval_id,approved,note?,idempotency_key?), stop(run_id,idempotency_key,timeout_ms?)",
+      cptr_factory: "Capability OS kernel: inspect(task_id?,artifact_digest?,limit?), resolve(task_id?,required,optional?,forbidden?), forge(task_id?,operation,payload), execute(task_id?,capability_digest,lease_id?,spec?,inputs?,approval_id?), acquire(task_id?,operation,payload), reflect(task_id?,kind,claims,artifact_digest?,lease_id?,comparison?,change_class?,promotion_target_state?,owner_approval_id?). For Capability OS operations, omitted task_id defaults to the current authoritative Workbench session; an explicit owned task_id is preserved. Dark Factory compatibility: start(workspace_id,mission,acceptance_criteria,policy,budget?,model_id?,idempotency_key?), status(run_id), events(run_id,cursor?,limit?), evidence(run_id,cursor?,limit?), message(run_id,content,idempotency_key?), pause(run_id,idempotency_key), resume(run_id,idempotency_key), approve(run_id,approval_id,approved,note?,idempotency_key?), stop(run_id,idempotency_key,timeout_ms?)",
       cptr_benchmark: "start(suite_id?), submit(run_id), get(run_id), leaderboard(suite_id?)",
       cptr_agent_task: "models(), list(workspace_id?,status?,limit?), start(workspace_id,prompt,model_id?,execution_policy?), execute(workspace_id,prompt,model_id?,wait_seconds?,execution_policy?), events(task_id,after_sequence?,max_events?), get(task_id), output(task_id,offset?,max_chars?), review(task_id,max_diff_bytes?), review_decision(task_id,decision,note?,idempotency_key?), message(task_id,content,idempotency_key?), cancel(task_id)",
       cptr_agent_monitor: "list(workspace_id?,status?,limit?), start(workspace_id,goal,acceptance_criteria,model_id?,execution_policy?), get(monitor_id), events(monitor_id,after_sequence?,max_events?), evidence(monitor_id,scope_id?), steer(monitor_id,content,idempotency_key?), approve(monitor_id,approval_id,approved,note?), cancel(monitor_id)",

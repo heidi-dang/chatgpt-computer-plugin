@@ -80,6 +80,7 @@ test("compact MCP surface exposes 17 backend-owned Workbench tools under 100 KB 
     assert.ok(factoryAction?.enum?.includes(operation), `cptr_factory must expose Capability OS ${operation}`);
   }
   assert.match(compactTools.get("cptr_factory")?.description ?? "", /Capability OS kernel/);
+  assert.match(compactTools.get("cptr_factory")?.description ?? "", /omitted task_id defaults to the current authoritative Workbench session/);
   const update = await compact.client.callTool({
     name: "cptr_plugin_update",
     arguments: {
@@ -107,7 +108,7 @@ test("compact MCP surface exposes 17 backend-owned Workbench tools under 100 KB 
   await legacy.server.close();
 });
 
-test("compact Capability OS kernel forwards through the thin ComputerClient boundary", async () => {
+test("compact Capability OS kernel defaults omitted task identity to the current Workbench and preserves explicit task IDs", async () => {
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "test-token",
@@ -119,18 +120,38 @@ test("compact Capability OS kernel forwards through the thin ComputerClient boun
     return { ok: true, action };
   };
   const { server, client } = await connectedServer(computer, "compact");
+  const workbenchTaskId = "wbs_capability_00000001";
+  const actions = ["inspect", "resolve", "forge", "execute", "acquire", "reflect"] as const;
 
-  for (const action of ["inspect", "resolve", "forge", "execute", "acquire", "reflect"] as const) {
+  for (const action of actions) {
     const response = await client.callTool({
       name: "cptr_factory",
-      arguments: { action, payload: { task_id: "task-capability", marker: action } },
+      arguments: {
+        action,
+        payload: { marker: action },
+        workbench_session_id: workbenchTaskId,
+      },
     });
-    assert.equal(response.isError, undefined, `${action} should proxy successfully`);
+    assert.equal(response.isError, undefined, `${action} should inherit the Workbench task identity`);
   }
-  assert.deepEqual(calls, ["inspect", "resolve", "forge", "execute", "acquire", "reflect"].map((action) => ({
+  assert.deepEqual(calls, actions.map((action) => ({
     action,
-    payload: { task_id: "task-capability", marker: action },
+    payload: { marker: action, task_id: workbenchTaskId },
   })));
+
+  const explicit = await client.callTool({
+    name: "cptr_factory",
+    arguments: {
+      action: "inspect",
+      payload: { task_id: "task-capability", marker: "explicit" },
+      workbench_session_id: workbenchTaskId,
+    },
+  });
+  assert.equal(explicit.isError, undefined);
+  assert.deepEqual(calls.at(-1), {
+    action: "inspect",
+    payload: { task_id: "task-capability", marker: "explicit" },
+  });
 
   await client.close();
   await server.close();
