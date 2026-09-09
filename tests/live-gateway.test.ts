@@ -217,14 +217,18 @@ test("newer Workbench replaces a stale live target stream at the concurrency lim
     },
     destroyed: false,
   });
-  const makeResponse = () => Object.assign(new EventEmitter(), {
-    destroyed: false,
-    writableEnded: false,
-    status: 0,
-    writeHead(status: number) { this.status = status; },
-    write() { return true; },
-    end() { this.writableEnded = true; },
-  });
+  const makeResponse = () => {
+    const chunks: string[] = [];
+    return Object.assign(new EventEmitter(), {
+      destroyed: false,
+      writableEnded: false,
+      status: 0,
+      writeHead(status: number) { this.status = status; },
+      write(chunk: string) { chunks.push(String(chunk)); return true; },
+      end() { this.writableEnded = true; },
+      get chunks() { return chunks; },
+    });
+  };
 
   const oldRequest = makeRequest("old-live-card", 100);
   const oldResponse = makeResponse();
@@ -238,6 +242,7 @@ test("newer Workbench replaces a stale live target stream at the concurrency lim
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(oldResponse.writableEnded, true, "new mount must close the stale live stream");
+  assert.match(oldResponse.chunks.join(""), /event: superseded/, "closed live stream must notify the client with event: superseded frame");
   assert.equal(newResponse.status, 200, "replacement live stream must not be rejected with 429");
   assert.ok(cancelCount >= 1, "superseding the stale reader must cancel its upstream stream");
 

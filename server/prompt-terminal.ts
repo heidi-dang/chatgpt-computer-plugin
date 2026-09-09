@@ -781,11 +781,25 @@ export class PromptTerminalGateway {
     const viewer = liveViewerIdentity(request);
     let wake: (() => void) | null = null;
     let closed = false;
-    const close = () => {
+    const close = (reason?: "superseded" | "closed") => {
       closed = true;
       wake?.();
       wake = null;
-      if (!response.writableEnded) response.end();
+      if (!response.writableEnded) {
+        if (reason === "superseded") {
+          if (!response.headersSent) {
+            response.writeHead(200, {
+              "content-type": "text/event-stream",
+              "cache-control": "no-cache, no-store",
+              "referrer-policy": "no-referrer",
+              connection: "keep-alive",
+              "x-accel-buffering": "no",
+            });
+          }
+          response.write("event: superseded\ndata: {}\n\n");
+        }
+        response.end();
+      }
     };
     const viewerClaim = streamScope ? this.viewers.claim(streamScope, viewer, close) : "accepted";
     if (viewerClaim === "superseded") {

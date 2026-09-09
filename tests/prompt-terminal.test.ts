@@ -152,15 +152,19 @@ test("newer Workbench replaces a stale prompt stream even when the final capacit
     },
     destroyed: false,
   });
-  const makeResponse = () => Object.assign(new EventEmitter(), {
-    destroyed: false,
-    writableEnded: false,
-    statusCode: 0,
-    writeHead(status: number) { this.statusCode = status; },
-    flushHeaders() {},
-    write() { return true; },
-    end() { this.writableEnded = true; },
-  });
+  const makeResponse = () => {
+    const chunks: string[] = [];
+    return Object.assign(new EventEmitter(), {
+      destroyed: false,
+      writableEnded: false,
+      statusCode: 0,
+      writeHead(status: number) { this.statusCode = status; },
+      flushHeaders() {},
+      write(chunk: string) { chunks.push(String(chunk)); return true; },
+      end() { this.writableEnded = true; },
+      get chunks() { return chunks; },
+    });
+  };
 
   const firstRequest = makeRequest("old-card", 100);
   const firstResponse = makeResponse();
@@ -174,6 +178,7 @@ test("newer Workbench replaces a stale prompt stream even when the final capacit
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(firstResponse.writableEnded, true, "new mount must close the stale prompt stream");
+  assert.match(firstResponse.chunks.join(""), /event: superseded/, "closed prompt stream must notify the client with event: superseded frame");
   assert.equal(secondResponse.statusCode, 200, "replacement stream must bypass stale-slot 429 rejection");
 
   secondRequest.emit("close");

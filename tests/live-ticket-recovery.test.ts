@@ -59,9 +59,11 @@ test("newest Workbench viewer supersedes older persistent cards and older cards 
   const oldViewer = { id: "old-card", startedAt: 100 };
   const newViewer = { id: "new-card", startedAt: 200 };
 
-  assert.equal(registry.claim("prompt-session", oldViewer, () => { oldClosed += 1; }), "accepted");
+  let oldReason: string | undefined;
+  assert.equal(registry.claim("prompt-session", oldViewer, (reason) => { oldClosed += 1; oldReason = reason; }), "accepted");
   assert.equal(registry.claim("prompt-session", newViewer, () => { newClosed += 1; }), "replaced");
   assert.equal(oldClosed, 1, "mounting a newer Workbench must close the older stream");
+  assert.equal(oldReason, "superseded", "evicted older viewer receives superseded reason");
   assert.equal(registry.claim("prompt-session", oldViewer, () => { oldClosed += 1; }), "superseded");
   assert.equal(newClosed, 0, "the old card must not evict the newer viewer when it wakes again");
 });

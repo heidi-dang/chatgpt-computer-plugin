@@ -478,3 +478,14 @@ test("Workbench persists only ephemeral presentation preferences across ChatGPT 
   assert.match(source, /surfacePreference\.current === undefined/);
   assert.doesNotMatch(source, /persistWorkbenchUiState\([^\n]*scrollTop/);
 });
+
+test("Workbench collapses to zero height and inhibits retry when superseded by newer Workbench", () => {
+  const source = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../web/src/workbench.css", import.meta.url), "utf8");
+
+  assert.match(source, /eventName === "superseded"/);
+  assert.match(source, /stopTerminalFailure\("superseded by newer Workbench"\)/);
+  assert.match(source, /isSuperseded/);
+  assert.match(source, /is-superseded/);
+  assert.match(css, /\.terminal-workbench\.is-superseded/);
+});

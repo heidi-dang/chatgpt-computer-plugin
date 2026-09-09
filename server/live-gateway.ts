@@ -187,10 +187,24 @@ export class LiveGateway {
     const viewer = liveViewerIdentity(request);
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let superseded = false;
-    const closeViewer = () => {
-      superseded = true;
+    const closeViewer = (reason?: "superseded" | "closed") => {
+      if (reason === "superseded") superseded = true;
       void reader?.cancel().catch(() => undefined);
-      if (!response.writableEnded) response.end();
+      if (!response.writableEnded) {
+        if (reason === "superseded") {
+          if (!response.headersSent) {
+            response.writeHead(200, {
+              "content-type": "text/event-stream",
+              "cache-control": "no-cache, no-store",
+              "referrer-policy": "no-referrer",
+              connection: "keep-alive",
+              "x-accel-buffering": "no",
+            });
+          }
+          response.write("event: superseded\ndata: {}\n\n");
+        }
+        response.end();
+      }
     };
     const viewerClaim = streamScope ? this.viewers.claim(streamScope, viewer, closeViewer) : "accepted";
     if (viewerClaim === "superseded") {
@@ -306,6 +320,19 @@ export class LiveGateway {
       finishLifecycle();
       this.activeStreams -= 1;
       releaseViewer();
+      if (!response.writableEnded) {
+        if (!response.headersSent) {
+          response.writeHead(200, {
+            "content-type": "text/event-stream",
+            "cache-control": "no-cache, no-store",
+            "referrer-policy": "no-referrer",
+            connection: "keep-alive",
+            "x-accel-buffering": "no",
+          });
+        }
+        response.write("event: superseded\ndata: {}\n\n");
+        response.end();
+      }
       return;
     }
     const maxBytes = this.limits.maxBytes ?? 1_048_576;
