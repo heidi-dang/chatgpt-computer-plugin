@@ -179,6 +179,9 @@ export const openWorkbenchSessionSchema = {
   delegation_authorization: z.literal("allow:delegate").optional().describe(
     "Pass this literal only when the current user prompt contains allow:delegate. It enables Delegated Agent tools for this prompt session only.",
   ),
+  secret_write_authorization: z.literal("allow:secret-write").optional().describe(
+    "Pass this literal only when the current user prompt explicitly authorizes writing secret material. It enables cptr_code.materialize_secret for this prompt session only and resets on the next turn.",
+  ),
 };
 
 export const workbenchSessionIdSchema = { workbench_session_id: workbenchSessionId };

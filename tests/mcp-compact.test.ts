@@ -67,6 +67,11 @@ test("compact MCP surface exposes 17 backend-owned Workbench tools under 100 KB 
   assert.ok(workspaceAction?.enum?.includes("create"));
   assert.match(compactTools.get("cptr_workspace")?.description ?? "", /create\(path/);
   assert.match(compactTools.get("cptr_command")?.description ?? "", /run\(workspace_id,command/);
+  const codeAction = (compactTools.get("cptr_code")?.inputSchema as {
+    properties?: { action?: { enum?: string[] } };
+  }).properties?.action;
+  assert.ok(codeAction?.enum?.includes("materialize_secret"));
+  assert.match(compactTools.get("cptr_code")?.description ?? "", /allow:secret-write/);
   assert.match(compactTools.get("cptr_command")?.description ?? "", /# cptr-root: use root/);
   const factoryAction = (compactTools.get("cptr_factory")?.inputSchema as {
     properties?: { action?: { enum?: string[] } };
@@ -126,6 +131,92 @@ test("compact Capability OS kernel forwards through the thin ComputerClient boun
     action,
     payload: { task_id: "task-capability", marker: action },
   })));
+
+  await client.close();
+  await server.close();
+});
+
+test("compact secret materialization requires current prompt authorization and injects backend approval", async () => {
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async () => new Response(JSON.stringify({}), { status: 200 }),
+  });
+  (computer as any).listWorkspaces = async () => ({ workspaces: [] });
+  (computer as any).createWorkbenchSession = async () => ({
+    session_id: "wbs_secret_prompt_000001",
+    name: "Secret prompt",
+    status: "OPEN",
+    workspace_id: "workspace-1",
+    active_target_type: null,
+    active_target_id: null,
+    active_workspace_id: null,
+    event_count: 0,
+    created_at: 1,
+    updated_at: 1,
+    last_event_at: null,
+    archived_at: null,
+  });
+  let captured: unknown = null;
+  (computer as any).materializeCodingSecret = async (input: unknown) => {
+    captured = structuredClone(input);
+    return {
+      workspace_id: "workspace-1",
+      path: ".env",
+      scope: "workspace",
+      materialized: true,
+      permissions: "0600",
+    };
+  };
+  const { server, client } = await connectedServer(computer, "compact");
+
+  const blocked = await client.callTool({
+    name: "cptr_code",
+    arguments: {
+      action: "materialize_secret",
+      payload: {
+        workspace_id: "workspace-1",
+        path: ".env",
+        secret: "PASSWORD=synthetic-test-secret",
+        overwrite: true,
+      },
+    },
+  });
+  assert.equal(blocked.isError, true);
+  assert.match(JSON.stringify(blocked.content), /secret-write/);
+  assert.equal(captured, null);
+
+  const opened = await client.callTool({
+    name: "cptr_open_live_workbench",
+    arguments: {
+      workspace_id: "workspace-1",
+      secret_write_authorization: "allow:secret-write",
+    },
+  });
+  const sessionId = (opened.structuredContent as { session_id: string }).session_id;
+  const response = await client.callTool({
+    name: "cptr_code",
+    arguments: {
+      action: "materialize_secret",
+      payload: {
+        workspace_id: "workspace-1",
+        path: ".env",
+        secret: "PASSWORD=synthetic-test-secret",
+        overwrite: true,
+      },
+      workbench_session_id: sessionId,
+    },
+  });
+
+  assert.equal(response.isError, undefined);
+  assert.deepEqual(captured, {
+    workspace_id: "workspace-1",
+    path: ".env",
+    secret: "PASSWORD=synthetic-test-secret",
+    workbench_session_id: "wbs_secret_prompt_000001",
+    user_approval: "allow:secret-write",
+    overwrite: true,
+  });
 
   await client.close();
   await server.close();

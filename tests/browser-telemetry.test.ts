@@ -29,7 +29,26 @@ test("redacts sensitive paired user Chrome inputs before activity telemetry", ()
   assert.equal(json.includes("selected-secret"), false);
 });
 
-test("leaves non-user-Chrome tool telemetry unchanged", () => {
+test("redacts approved secret materialization payloads before activity telemetry", () => {
+  const sanitized = telemetryInputForTool("cptr_code", {
+    action: "materialize_secret",
+    payload: {
+      workspace_id: "ws-1",
+      path: ".env",
+      secret: "PASSWORD=synthetic-test-secret",
+      workbench_session_id: "wbs_1234567890abcdef",
+      user_approval: "allow:secret-write",
+    },
+  });
+  const json = JSON.stringify(sanitized);
+  assert.match(json, /materialize_secret/);
+  assert.match(json, /ws-1/);
+  assert.match(json, /\.env/);
+  assert.match(json, /REDACTED_SECRET_INPUT/);
+  assert.equal(json.includes("synthetic-test-secret"), false);
+});
+
+test("leaves non-sensitive non-user-Chrome tool telemetry unchanged", () => {
   const input = { workspace_id: "ws-1", path: "README.md" };
   assert.equal(telemetryInputForTool("cptr_code_read_file", input), input);
 });
