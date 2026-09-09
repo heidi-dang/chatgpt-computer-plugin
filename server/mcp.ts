@@ -3417,6 +3417,121 @@ export function createMcpServer(
 
   if (toolSurface === "compact") {
     const compactPayloadSchema = z.record(z.string(), z.unknown()).default({});
+    const capabilityDigestSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/).describe(
+      "Content-addressed Capability OS SHA-256 artifact digest.",
+    );
+    const capabilityEffectSchema = z.object({
+      action: z.string().min(1),
+      resource: z.string().min(1),
+      constraints: z.record(z.string(), z.unknown()).optional(),
+    });
+    const capabilityAcquisitionGoalSchema = z.object({
+      goal: z.string().min(1),
+      required: z.array(z.string()).min(1),
+      optional: z.array(z.string()).optional(),
+      forbidden: z.array(z.string()).optional(),
+      dataClassification: z.string().optional(),
+    });
+    const capabilityOperationPayloadSchema = z.object({
+      contentDigest: capabilityDigestSchema.optional().describe(
+        "Forge Tool content digest used by inspect/modify/fork/build/run/persist/destroy/supply-chain and related lifecycle operations.",
+      ),
+      documentDigest: capabilityDigestSchema.optional(),
+      toolId: z.string().min(1).optional(),
+      version: z.string().min(1).optional(),
+      runtimeClass: z.enum(["wasm", "gvisor", "microvm", "namespace-dev"]).optional().describe(
+        "Generated Tool runtime. namespace-dev is development-only and is rejected by the production broker.",
+      ),
+      entrypoint: z.string().min(1).optional(),
+      files: z.record(z.string(), z.string()).optional(),
+      requestedCapabilities: z.array(capabilityEffectSchema).optional(),
+      inputSchema: z.record(z.string(), z.unknown()).optional(),
+      outputSchema: z.record(z.string(), z.unknown()).optional(),
+      resources: z.record(z.string(), z.unknown()).optional(),
+      deterministic: z.boolean().nullable().optional(),
+      idempotent: z.boolean().nullable().optional(),
+      reversibility: z.string().optional(),
+      inputs: z.record(z.string(), z.unknown()).optional(),
+      timeoutMs: z.number().int().positive().max(120_000).optional(),
+      targetState: z.string().optional(),
+      evidenceIds: z.array(z.string()).optional(),
+      goal: capabilityAcquisitionGoalSchema.optional(),
+      query: z.string().min(1).optional(),
+      artifactDigest: capabilityDigestSchema.optional().describe(
+        "Acquire MCP adapter content digest used by mount/OAuth lifecycle operations.",
+      ),
+      mountId: z.string().min(1).optional(),
+      tool: z.string().min(1).optional(),
+      leaseId: z.string().min(1).optional(),
+      approvalId: z.string().min(1).optional(),
+      requiredEffects: z.array(z.string()).optional(),
+      forbiddenEffects: z.array(z.string()).optional(),
+      refreshQuery: z.string().optional(),
+      limit: z.number().int().positive().optional(),
+      flowId: z.string().min(1).optional(),
+      skillDigest: capabilityDigestSchema.optional(),
+      skillId: z.string().min(1).optional(),
+      genome: z.record(z.string(), z.unknown()).optional(),
+      changes: z.record(z.string(), z.unknown()).optional(),
+      operator: z.string().optional(),
+      baseline: z.record(z.string(), z.unknown()).optional(),
+      candidate: z.record(z.string(), z.unknown()).optional(),
+      bundle: z.record(z.string(), z.unknown()).optional(),
+    }).passthrough().describe(
+      "Forge/Acquire sub-operation payload. Core lifecycle fields are published explicitly; backend operation validation remains authoritative.",
+    );
+    const compactFactoryPayloadSchema = z.object({
+      task_id: z.string().min(1).optional().describe(
+        "Capability OS task identity. Omit after cptr_open_live_workbench; CPTR injects the current authoritative Workbench session ID.",
+      ),
+      artifact_digest: capabilityDigestSchema.optional().describe(
+        "Inspect/Reflect artifact content digest.",
+      ),
+      limit: z.number().int().positive().max(1000).optional(),
+      required: z.array(capabilityEffectSchema).optional(),
+      optional: z.array(capabilityEffectSchema).optional(),
+      forbidden: z.array(capabilityEffectSchema).optional(),
+      operation: z.string().min(1).optional().describe(
+        "Forge or Acquire sub-operation. Forge lifecycle includes create/inspect/modify/fork/build/run/persist/destroy/supply-chain; Acquire includes discover/qualify/mount/invoke/release/discover-effects/OAuth operations.",
+      ),
+      payload: capabilityOperationPayloadSchema.optional().describe(
+        "Operation-specific Forge or Acquire arguments.",
+      ),
+      capability_digest: capabilityDigestSchema.optional().describe(
+        "Execute target: the stored Capability artifact content digest, never a human-readable artifact ID or version.",
+      ),
+      lease_id: z.string().min(1).nullable().optional(),
+      spec: z.record(z.string(), z.unknown()).optional().describe(
+        "Compatibility input only; Execute uses the server-stored content-addressed Capability recipe as authoritative.",
+      ),
+      inputs: z.record(z.string(), z.unknown()).optional(),
+      approval_id: z.string().min(1).optional(),
+      kind: z.string().min(1).optional(),
+      claims: z.record(z.string(), z.unknown()).optional(),
+      comparison: z.record(z.string(), z.unknown()).optional(),
+      change_class: z.string().optional(),
+      promotion_target_state: z.string().optional(),
+      owner_approval_id: z.string().optional(),
+      experiment: z.record(z.string(), z.unknown()).optional(),
+      workspace_id: z.string().min(1).optional(),
+      mission: z.string().min(1).optional(),
+      acceptance_criteria: z.array(z.string()).optional(),
+      policy: z.record(z.string(), z.unknown()).optional(),
+      budget: z.record(z.string(), z.unknown()).optional(),
+      model_id: z.string().optional(),
+      idempotency_key: z.string().optional(),
+      run_id: z.string().min(1).optional(),
+      cursor: z.string().optional(),
+      content: z.string().optional(),
+      approval_id_factory: z.string().optional().describe(
+        "Reserved compatibility alias; Dark Factory approve uses approval_id.",
+      ),
+      approved: z.boolean().optional(),
+      note: z.string().optional(),
+      timeout_ms: z.number().int().positive().optional(),
+    }).passthrough().default({}).describe(
+      "Capability OS six-operation payload plus Dark Factory compatibility fields. Capability OS task bootstrap is owned by cptr_open_live_workbench.",
+    );
     const compactOutputSchema = z.object({ action: z.string(), result: z.unknown() });
     const compactActionSignatures: Record<string, string> = {
       cptr_workbench: "list(include_archived?,limit?), get(workbench_session_id), events(workbench_session_id,after_sequence?,limit?), bind(workbench_session_id,target_type,target_id,workspace_id?), rename(workbench_session_id,name), archive(workbench_session_id), request_delete(workbench_session_id), confirm_delete(confirmation_id)",
@@ -3426,7 +3541,7 @@ export function createMcpServer(
       cptr_worker: "create(workspace_id,name,responsibility?,repo_path?), list(workspace_id), get(workspace_id,worker_id), overview(workspace_id), integrate(workspace_id,worker_ids), close(workspace_id,worker_id,discard_changes?)",
       cptr_lsp: "discover(workspace_id,worker_id?), start(workspace_id,server_id,root?,worker_id?), request(workspace_id,lsp_id,method,params?,timeout_seconds?,worker_id?), stop(workspace_id,lsp_id,worker_id?)",
       cptr_ssh: "list_hosts(workspace_id), run(workspace_id,alias,command,wait_seconds?), status(workspace_id,command_id,offset?,wait_seconds?), cancel(workspace_id,command_id)",
-      cptr_factory: "Capability OS kernel: inspect(task_id?,artifact_digest?,limit?), resolve(task_id?,required,optional?,forbidden?), forge(task_id?,operation,payload), execute(task_id?,capability_digest,lease_id?,spec?,inputs?,approval_id?), acquire(task_id?,operation,payload), reflect(task_id?,kind,claims,artifact_digest?,lease_id?,comparison?,change_class?,promotion_target_state?,owner_approval_id?). For Capability OS operations, omitted task_id defaults to the current authoritative Workbench session; an explicit owned task_id is preserved. Dark Factory compatibility: start(workspace_id,mission,acceptance_criteria,policy,budget?,model_id?,idempotency_key?), status(run_id), events(run_id,cursor?,limit?), evidence(run_id,cursor?,limit?), message(run_id,content,idempotency_key?), pause(run_id,idempotency_key), resume(run_id,idempotency_key), approve(run_id,approval_id,approved,note?,idempotency_key?), stop(run_id,idempotency_key,timeout_ms?)",
+      cptr_factory: "Capability OS kernel: cptr_open_live_workbench is the task bootstrap; omitted task_id defaults to the current authoritative Workbench session and an explicit owned task_id is preserved. inspect(task_id?,artifact_digest?,limit?), resolve(task_id?,required,optional?,forbidden?), forge(task_id?,operation,payload) where payload.contentDigest is the content-addressed Tool identity for lifecycle operations, execute(task_id?,capability_digest,lease_id?,spec?,inputs?,approval_id?) where capability_digest is the Capability artifact content digest, acquire(task_id?,operation,payload) including invoke with payload.mountId, payload.tool, payload.inputs?, payload.timeoutMs?, payload.leaseId?, payload.approvalId?, reflect(task_id?,kind,claims,artifact_digest?,lease_id?,comparison?,change_class?,promotion_target_state?,owner_approval_id?). Dark Factory compatibility: start(workspace_id,mission,acceptance_criteria,policy,budget?,model_id?,idempotency_key?), status(run_id), events(run_id,cursor?,limit?), evidence(run_id,cursor?,limit?), message(run_id,content,idempotency_key?), pause(run_id,idempotency_key), resume(run_id,idempotency_key), approve(run_id,approval_id,approved,note?,idempotency_key?), stop(run_id,idempotency_key,timeout_ms?)",
       cptr_benchmark: "start(suite_id?), submit(run_id), get(run_id), leaderboard(suite_id?)",
       cptr_agent_task: "models(), list(workspace_id?,status?,limit?), start(workspace_id,prompt,model_id?,execution_policy?), execute(workspace_id,prompt,model_id?,wait_seconds?,execution_policy?), events(task_id,after_sequence?,max_events?), get(task_id), output(task_id,offset?,max_chars?), review(task_id,max_diff_bytes?), review_decision(task_id,decision,note?,idempotency_key?), message(task_id,content,idempotency_key?), cancel(task_id)",
       cptr_agent_monitor: "list(workspace_id?,status?,limit?), start(workspace_id,goal,acceptance_criteria,model_id?,execution_policy?), get(monitor_id), events(monitor_id,after_sequence?,max_events?), evidence(monitor_id,scope_id?), steer(monitor_id,content,idempotency_key?), approve(monitor_id,approval_id,approved,note?), cancel(monitor_id)",
@@ -3454,7 +3569,9 @@ export function createMcpServer(
       description: `Actions: ${compactActionSignatures[name] ?? actions.join(", ")}. Put the selected action's arguments in payload. CPTR backend authorization and validation remain authoritative.`,
       inputSchema: z.object({
         action: z.enum(actions as [string, ...string[]]),
-        payload: compactPayloadSchema.describe("Action-specific arguments; follow the signatures in the tool description."),
+        payload: name === "cptr_factory"
+          ? compactFactoryPayloadSchema
+          : compactPayloadSchema.describe("Action-specific arguments; follow the signatures in the tool description."),
       }),
       outputSchema: compactOutputSchema,
       annotations,
