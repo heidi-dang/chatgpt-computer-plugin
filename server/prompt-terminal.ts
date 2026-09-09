@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { LiveTicketCodec } from "./live-ticket-codec.js";
+import { PromptTicketStateStore } from "./prompt-ticket-state.js";
 import { LiveViewerRegistry, liveViewerIdentity } from "./live-viewers.js";
 import type { LiveTarget, WidgetStreamMetadata } from "./live-tickets.js";
 
@@ -134,6 +135,7 @@ type PromptStoreOptions = {
   browserInputUrl?: string;
   streamingEnabled?: boolean;
   ticketSecret?: string | Buffer;
+  stateDbPath?: string;
 };
 
 export class PromptTerminalStore {
@@ -155,6 +157,7 @@ export class PromptTerminalStore {
   private readonly browserInputUrl: string;
   private readonly streamingEnabledValue: boolean;
   private readonly codec: LiveTicketCodec;
+  private readonly durableState: PromptTicketStateStore | null;
 
   constructor(options: PromptStoreOptions = {}) {
     this.now = options.now ?? (() => Date.now());
@@ -169,6 +172,11 @@ export class PromptTerminalStore {
     this.browserInputUrl = options.browserInputUrl ?? "/live/prompt/browser-input";
     this.streamingEnabledValue = options.streamingEnabled ?? true;
     this.codec = new LiveTicketCodec(options.ticketSecret);
+    this.durableState = options.stateDbPath ? new PromptTicketStateStore(options.stateDbPath) : null;
+  }
+
+  close(): void {
+    this.durableState?.close();
   }
 
   get streamingEnabled(): boolean {
@@ -187,9 +195,11 @@ export class PromptTerminalStore {
       : undefined;
     const existing = existingTicket ? this.sessions.get(existingTicket) : undefined;
     if (existing && existing.renewUntil > this.now()) {
-      this.touch(existing);
-      existing.allowDelegate = options.allowDelegate === true;
-      return this.metadata(existing);
+      if (this.touch(existing)) {
+        existing.allowDelegate = options.allowDelegate === true;
+        return this.metadata(existing);
+      }
+      this.remove(existing.ticket);
     }
     while (this.sessions.size >= this.maxSessions) {
       const oldest = this.sessions.keys().next().value;
@@ -215,6 +225,14 @@ export class PromptTerminalStore {
       browserSessionIds: new Set(),
       liveTargetKeys: new Set(),
     };
+    this.durableState?.remember(
+      session.sessionId,
+      ticket,
+      session.generation,
+      session.expiresAt,
+      session.renewUntil,
+      this.now(),
+    );
     this.sessions.set(ticket, session);
     this.sessionsById.set(session.sessionId, ticket);
     if (options.workbenchSessionId) this.workbenchTickets.set(options.workbenchSessionId, ticket);
@@ -229,7 +247,7 @@ export class PromptTerminalStore {
     if (!ticket) return null;
     const session = this.sessions.get(ticket);
     if (!session || session.renewUntil <= this.now()) return null;
-    this.touch(session);
+    if (!this.touch(session)) return null;
     session.allowDelegate = options.allowDelegate === true;
     return this.metadata(session);
   }
@@ -242,8 +260,7 @@ export class PromptTerminalStore {
   allowsBrowserSession(ticket: string | null | undefined, sessionId: string): boolean {
     if (!ticket || !sessionId) return false;
     const session = this.getSession(ticket);
-    if (!session) return false;
-    this.touch(session);
+    if (!session || !this.touch(session)) return false;
     return session.browserSessionIds.has(sessionId);
   }
 
@@ -346,9 +363,8 @@ export class PromptTerminalStore {
 
   replay(ticket: string, after = 0): { events: PromptTerminalEvent[]; last_sequence: number; expires_at: number } | null {
     const session = this.getSession(ticket, after);
-    if (!session) return null;
+    if (!session || !this.touch(session)) return null;
     session.lastSequence = Math.max(session.lastSequence, after);
-    this.touch(session);
     return {
       events: session.events.filter((event) => event.sequence > after),
       last_sequence: session.lastSequence,
@@ -359,8 +375,7 @@ export class PromptTerminalStore {
   subscribe(ticket: string, listener: (event: PromptTerminalEvent) => void): (() => void) | null {
     if (!this.streamingEnabledValue) return null;
     const session = this.getSession(ticket);
-    if (!session) return null;
-    this.touch(session);
+    if (!session || !this.touch(session)) return null;
     session.listeners.add(listener);
     return () => session.listeners.delete(listener);
   }
@@ -368,35 +383,65 @@ export class PromptTerminalStore {
   renew(ticket: string): PromptTerminalMetadata | null {
     const decoded = this.decodeTicket(ticket);
     const now = this.now();
-    if (!decoded || decoded.renewUntil <= now || (this.revokedUntil.get(decoded.sessionId) ?? 0) > now) return null;
+    if (
+      !decoded
+      || (this.revokedUntil.get(decoded.sessionId) ?? 0) > now
+      || (!this.durableState && decoded.renewUntil <= now)
+    ) return null;
     const currentTicket = this.sessionsById.get(decoded.sessionId);
     let session = currentTicket ? this.sessions.get(currentTicket) : undefined;
     if (session && session.ticket !== ticket) {
-      if (decoded.generation <= session.generation && session.renewUntil > now) return this.metadata(session);
+      if (
+        decoded.generation <= session.generation
+        && this.syncDurableLease(session)
+        && session.renewUntil > now
+      ) return this.metadata(session);
       return null;
     }
     if (!session && decoded.workbenchSessionId) {
       const workbenchTicket = this.workbenchTickets.get(decoded.workbenchSessionId);
       const workbenchSession = workbenchTicket ? this.sessions.get(workbenchTicket) : undefined;
-      if (workbenchSession && workbenchSession.ticket !== ticket && workbenchSession.renewUntil > now) {
-        return this.metadata(workbenchSession);
-      }
+      if (
+        workbenchSession
+        && workbenchSession.ticket !== ticket
+        && this.syncDurableLease(workbenchSession)
+        && workbenchSession.renewUntil > now
+      ) return this.metadata(workbenchSession);
     }
     if (!session) session = this.restoreTicket(ticket, true, 0) ?? undefined;
-    if (!session) return null;
+    if (!session || session.renewUntil <= now) return null;
 
     const previousTicket = session.ticket;
-    this.sessions.delete(previousTicket);
-    this.touch(session);
-    session.generation += 1;
+    const nextGeneration = session.generation + 1;
+    const nextExpiresAt = Math.max(session.expiresAt, now + this.ttlMs);
+    const nextRenewUntil = Math.max(session.renewUntil, nextExpiresAt + this.renewGraceMs);
     const claims: PromptTicketClaims = {
       sessionId: session.sessionId,
       ...(session.workbenchSessionId ? { workbenchSessionId: session.workbenchSessionId } : {}),
-      generation: session.generation,
-      expiresAt: session.expiresAt,
-      renewUntil: session.renewUntil,
+      generation: nextGeneration,
+      expiresAt: nextExpiresAt,
+      renewUntil: nextRenewUntil,
     };
-    session.ticket = this.codec.seal("prompt", claims);
+    const nextTicket = this.codec.seal("prompt", claims);
+    if (
+      this.durableState
+      && !this.durableState.advance(
+        session.sessionId,
+        previousTicket,
+        session.generation,
+        nextTicket,
+        nextGeneration,
+        nextExpiresAt,
+        nextRenewUntil,
+        now,
+      )
+    ) return null;
+
+    this.sessions.delete(previousTicket);
+    session.generation = nextGeneration;
+    session.expiresAt = nextExpiresAt;
+    session.renewUntil = nextRenewUntil;
+    session.ticket = nextTicket;
     this.sessions.set(session.ticket, session);
     this.sessionsById.set(session.sessionId, session.ticket);
     // Remap via stored identity sets instead of scanning all maps O(1) vs O(n).
@@ -430,7 +475,14 @@ export class PromptTerminalStore {
 
   revoke(ticket: string): void {
     const decoded = this.decodeTicket(ticket);
-    if (decoded) this.revokedUntil.set(decoded.sessionId, decoded.renewUntil);
+    if (decoded) {
+      const now = this.now();
+      const session = this.sessions.get(ticket);
+      const durable = this.durableState?.get(decoded.sessionId, now);
+      const renewUntil = Math.max(decoded.renewUntil, session?.renewUntil ?? 0, durable?.renewUntil ?? 0);
+      this.revokedUntil.set(decoded.sessionId, renewUntil);
+      this.durableState?.revoke(decoded.sessionId, renewUntil, now);
+    }
     this.remove(ticket);
   }
 
@@ -447,9 +499,42 @@ export class PromptTerminalStore {
     };
   }
 
-  private touch(session: PromptSession): void {
-    session.expiresAt = this.now() + this.ttlMs;
-    session.renewUntil = session.expiresAt + this.renewGraceMs;
+  private touch(session: PromptSession): boolean {
+    const now = this.now();
+    const nextExpiresAt = now + this.ttlMs;
+    const nextRenewUntil = nextExpiresAt + this.renewGraceMs;
+    if (this.durableState) {
+      const refreshed = this.durableState.refresh(
+        session.sessionId,
+        session.ticket,
+        session.generation,
+        nextExpiresAt,
+        nextRenewUntil,
+        now,
+      );
+      if (!refreshed) return false;
+      session.expiresAt = refreshed.expiresAt;
+      session.renewUntil = refreshed.renewUntil;
+      return true;
+    }
+    session.expiresAt = nextExpiresAt;
+    session.renewUntil = nextRenewUntil;
+    return true;
+  }
+
+  private syncDurableLease(session: PromptSession): boolean {
+    if (!this.durableState) return true;
+    const state = this.durableState.current(
+      session.sessionId,
+      session.ticket,
+      session.generation,
+      this.now(),
+      true,
+    );
+    if (!state) return false;
+    session.expiresAt = state.expiresAt;
+    session.renewUntil = state.renewUntil;
+    return true;
   }
 
   private decodeTicket(ticket: string): PromptTicketClaims | null {
@@ -472,7 +557,39 @@ export class PromptTerminalStore {
     if (!claims) return null;
     const now = this.now();
     if ((this.revokedUntil.get(claims.sessionId) ?? 0) > now) return null;
-    if ((allowExpired ? claims.renewUntil : claims.expiresAt) <= now) return null;
+
+    let expiresAt = claims.expiresAt;
+    let renewUntil = claims.renewUntil;
+    if (this.durableState) {
+      const existing = this.durableState.get(claims.sessionId, now);
+      if (!existing) {
+        // Migration path for a valid sealed prompt ticket issued before prompt
+        // lease state was persisted. Authentication still comes from the ticket;
+        // the first post-upgrade use records only its hash and bounded lease.
+        if ((allowExpired ? claims.renewUntil : claims.expiresAt) <= now) return null;
+        this.durableState.remember(
+          claims.sessionId,
+          ticket,
+          claims.generation,
+          claims.expiresAt,
+          claims.renewUntil,
+          now,
+        );
+      }
+      const durable = this.durableState.current(
+        claims.sessionId,
+        ticket,
+        claims.generation,
+        now,
+        allowExpired,
+      );
+      if (!durable) return null;
+      expiresAt = durable.expiresAt;
+      renewUntil = durable.renewUntil;
+    } else if ((allowExpired ? claims.renewUntil : claims.expiresAt) <= now) {
+      return null;
+    }
+
     const currentTicket = this.sessionsById.get(claims.sessionId);
     if (currentTicket) return currentTicket === ticket ? this.sessions.get(currentTicket) ?? null : null;
     if (claims.workbenchSessionId) {
@@ -486,6 +603,8 @@ export class PromptTerminalStore {
     }
     const session: PromptSession = {
       ...claims,
+      expiresAt,
+      renewUntil,
       ticket,
       lastSequence: Math.max(0, after),
       events: [],
@@ -503,6 +622,10 @@ export class PromptTerminalStore {
   private getSession(ticket: string, after = 0): PromptSession | null {
     const session = this.sessions.get(ticket) ?? this.restoreTicket(ticket, false, after);
     if (!session) return null;
+    if (!this.syncDurableLease(session)) {
+      this.remove(ticket);
+      return null;
+    }
     if (session.expiresAt <= this.now()) {
       if (session.renewUntil <= this.now()) this.remove(ticket);
       return null;
@@ -512,6 +635,7 @@ export class PromptTerminalStore {
 
   private prune(): void {
     const now = this.now();
+    this.durableState?.prune(now);
     for (const [ticket, session] of this.sessions) {
       if (session.renewUntil <= now) this.remove(ticket);
     }
