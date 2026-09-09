@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import test from "node:test";
 import { PromptTerminalGateway, PromptTerminalStore } from "../server/prompt-terminal.js";
 
@@ -22,6 +24,92 @@ test("prompt capability restores after restart and resumes from the browser curs
   assert.deepEqual(replay?.events, []);
   assert.equal(after.ticketForWorkbenchSession("wbs-restart-safe"), issued.ticket);
   assert.equal(after.allowsDelegation(issued.ticket), false, "restart recovery must fail closed for per-turn delegation authority");
+});
+
+test("prompt capability remains restart-safe after activity extends its advertised lease", () => {
+  let now = 1_000;
+  const stateDbPath = join(tmpdir(), `cptr-prompt-ticket-${process.pid}-${Date.now()}-${Math.random()}.sqlite`);
+  const before = new PromptTerminalStore({
+    ticketSecret: SECRET,
+    stateDbPath,
+    ttlMs: 60_000,
+    renewGraceMs: 60_000,
+    now: () => now,
+  });
+  const issued = before.open({ workbenchSessionId: "wbs-extended-restart" });
+
+  now = 50_000;
+  assert.ok(before.replay(issued.ticket, 0), "activity before the original expiry must refresh the in-memory lease");
+  now = 100_000;
+  const resumed = before.resumeWorkbenchSession("wbs-extended-restart");
+  assert.ok(resumed);
+  assert.ok(resumed.expiresAt > 130_000, "the browser is told that the prompt capability remains valid after restart time");
+  before.close();
+
+  now = 130_000;
+  const restarted = new PromptTerminalStore({
+    ticketSecret: SECRET,
+    stateDbPath,
+    ttlMs: 60_000,
+    renewGraceMs: 60_000,
+    now: () => now,
+  });
+
+  assert.ok(restarted.replay(resumed.ticket, 0), "restart must honor the advertised refreshed expiry");
+  assert.ok(restarted.renew(resumed.ticket), "restart must preserve renewal authority through the refreshed grace window");
+  restarted.close();
+});
+
+test("durable prompt revocation survives restart", () => {
+  let now = 1_000;
+  const stateDbPath = join(tmpdir(), `cptr-prompt-revoke-${process.pid}-${Date.now()}-${Math.random()}.sqlite`);
+  const before = new PromptTerminalStore({ ticketSecret: SECRET, stateDbPath, now: () => now });
+  const issued = before.open({ workbenchSessionId: "wbs-revoked-restart" });
+  before.revoke(issued.ticket);
+  before.close();
+
+  now = 2_000;
+  const restarted = new PromptTerminalStore({ ticketSecret: SECRET, stateDbPath, now: () => now });
+  assert.equal(restarted.replay(issued.ticket, 0), null);
+  assert.equal(restarted.renew(issued.ticket), null);
+  restarted.close();
+});
+
+test("durable prompt generation rejects stale tickets across instances", () => {
+  let now = 1_000;
+  const stateDbPath = join(tmpdir(), `cptr-prompt-generation-${process.pid}-${Date.now()}-${Math.random()}.sqlite`);
+  const before = new PromptTerminalStore({ ticketSecret: SECRET, stateDbPath, now: () => now });
+  const issued = before.open({ workbenchSessionId: "wbs-generation-restart" });
+
+  now = 2_000;
+  const renewed = before.renew(issued.ticket);
+  assert.ok(renewed);
+  assert.notEqual(renewed.ticket, issued.ticket);
+  before.close();
+
+  now = 3_000;
+  const restarted = new PromptTerminalStore({ ticketSecret: SECRET, stateDbPath, now: () => now });
+  assert.equal(restarted.replay(issued.ticket, 0), null, "rotated prompt ticket must fail closed after restart");
+  assert.ok(restarted.replay(renewed.ticket, 0), "current generation remains restart-safe");
+  restarted.close();
+});
+
+test("pre-persistence sealed prompt ticket migrates into durable state on first valid use", () => {
+  let now = 1_000;
+  const stateDbPath = join(tmpdir(), `cptr-prompt-migration-${process.pid}-${Date.now()}-${Math.random()}.sqlite`);
+  const legacy = new PromptTerminalStore({ ticketSecret: SECRET, now: () => now });
+  const issued = legacy.open({ workbenchSessionId: "wbs-pre-persistence" });
+  legacy.close();
+
+  now = 2_000;
+  const upgraded = new PromptTerminalStore({ ticketSecret: SECRET, stateDbPath, now: () => now });
+  assert.ok(upgraded.replay(issued.ticket, 0), "valid pre-upgrade ticket must bootstrap bounded durable state");
+  upgraded.close();
+
+  now = 3_000;
+  const restarted = new PromptTerminalStore({ ticketSecret: SECRET, stateDbPath, now: () => now });
+  assert.ok(restarted.replay(issued.ticket, 0), "migrated prompt ticket remains restart-safe");
+  restarted.close();
 });
 
 test("old prompt card converges on a newly issued generation after restart", () => {

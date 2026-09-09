@@ -299,6 +299,7 @@ const promptSessions = new PromptTerminalStore({
   // when raw live-terminal streaming is disabled for chat/UI performance.
   streamingEnabled: true,
   ticketSecret: liveTicketSecret,
+  stateDbPath: liveTicketStateDb,
 });
 const promptGateway = new PromptTerminalGateway(promptSessions);
 const browserFrameGateway = new PromptBrowserFrameGateway(
@@ -1635,6 +1636,7 @@ async function shutdown(signal: string) {
   );
   await modernMcpHandler.close().catch(() => undefined);
   liveTickets.close();
+  promptSessions.close();
   nativeOAuthServer?.close();
   const telemetryDeadline = new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, 1_000);
