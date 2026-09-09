@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
-import { ComputerClient } from "../server/client/computer-client.js";
+import { ComputerApiError, ComputerClient } from "../server/client/computer-client.js";
 import { LiveTicketStore } from "../server/live-tickets.js";
 import { createMcpServer, getMcpToolSurfaceProfile, resolveMcpToolSurface } from "../server/mcp.js";
 import { PromptTerminalStore } from "../server/prompt-terminal.js";
@@ -106,6 +106,117 @@ test("compact MCP surface exposes 17 backend-owned Workbench tools under 100 KB 
   assert.equal(getMcpToolSurfaceProfile(legacy.server)?.registered_tools, 91);
   await legacy.client.close();
   await legacy.server.close();
+});
+
+test("compact Capability OS schema publishes bootstrap, digest, Forge, and Acquire invoke semantics", async () => {
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async () => new Response(JSON.stringify({}), { status: 200 }),
+  });
+  const { server, client } = await connectedServer(computer, "compact");
+  const listed = await client.listTools();
+  const factory = listed.tools.find((tool) => tool.name === "cptr_factory");
+  assert.ok(factory);
+  const description = factory.description ?? "";
+  assert.match(description, /cptr_open_live_workbench.*bootstrap/i);
+  assert.match(description, /contentDigest.*content-addressed Tool/i);
+  assert.match(description, /capability_digest.*Capability artifact content digest/i);
+  assert.match(description, /acquire.*invoke.*mountId.*tool.*inputs.*timeoutMs/i);
+
+  const input = factory.inputSchema as {
+    properties?: {
+      payload?: {
+        properties?: Record<string, unknown>;
+      };
+    };
+  };
+  const payloadProperties = input.properties?.payload?.properties ?? {};
+  for (const field of [
+    "task_id",
+    "artifact_digest",
+    "required",
+    "forbidden",
+    "operation",
+    "payload",
+    "capability_digest",
+    "lease_id",
+    "spec",
+    "inputs",
+    "approval_id",
+    "kind",
+    "claims",
+  ]) {
+    assert.ok(field in payloadProperties, `cptr_factory payload schema must publish ${field}`);
+  }
+
+  const nestedPayload = payloadProperties.payload as {
+    properties?: Record<string, unknown>;
+  } | undefined;
+  const nestedProperties = nestedPayload?.properties ?? {};
+  for (const field of [
+    "contentDigest",
+    "toolId",
+    "runtimeClass",
+    "entrypoint",
+    "files",
+    "requestedCapabilities",
+    "artifactDigest",
+    "goal",
+    "query",
+    "mountId",
+    "tool",
+    "inputs",
+    "timeoutMs",
+  ]) {
+    assert.ok(field in nestedProperties, `Capability OS nested operation schema must publish ${field}`);
+  }
+  assert.ok(Buffer.byteLength(JSON.stringify(listed)) < 100_000);
+  await client.close();
+  await server.close();
+});
+
+test("compact Capability OS errors use one canonical envelope", async () => {
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async () => new Response(JSON.stringify({}), { status: 200 }),
+  });
+  const { server, client } = await connectedServer(computer, "compact");
+
+  (computer as any).capabilityOs = async () => {
+    throw new ComputerApiError(409, "qualification rejected", "capability_conflict", false, "forbidden");
+  };
+  const backendFailure = await client.callTool({
+    name: "cptr_factory",
+    arguments: { action: "resolve", payload: { task_id: "task-1", required: [] } },
+  });
+  assert.equal(backendFailure.isError, true);
+  const backendEnvelope = JSON.parse((backendFailure.content?.[0] as { text?: string })?.text ?? "{}");
+  assert.deepEqual(backendEnvelope, {
+    code: "capability_conflict",
+    message: "qualification rejected",
+    retriable: false,
+    field: "forbidden",
+  });
+
+  (computer as any).capabilityOs = async () => {
+    throw new Error("unexpected adapter failure");
+  };
+  const adapterFailure = await client.callTool({
+    name: "cptr_factory",
+    arguments: { action: "inspect", payload: { task_id: "task-1" } },
+  });
+  assert.equal(adapterFailure.isError, true);
+  const adapterEnvelope = JSON.parse((adapterFailure.content?.[0] as { text?: string })?.text ?? "{}");
+  assert.deepEqual(adapterEnvelope, {
+    code: "mcp_tool_error",
+    message: "unexpected adapter failure",
+    retriable: false,
+  });
+
+  await client.close();
+  await server.close();
 });
 
 test("compact Capability OS kernel defaults omitted task identity to the current Workbench and preserves explicit task IDs", async () => {
