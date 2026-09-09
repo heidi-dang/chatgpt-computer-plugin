@@ -43,9 +43,14 @@ test("public edge verifier supports both native and Cloudflare Managed OAuth RFC
   assert.match(publicEdgeSource, /release SHA drift/);
   assert.match(publicEdgeSource, /CPTR_EXPECTED_TOOL_SURFACE/);
   assert.match(publicEdgeSource, /MCP tool surface drift/);
-  assert.match(publicEdgeSource, /MCP registered-tool-count drift/);
+  assert.match(publicEdgeSource, /releaseManifest/);
+  assert.match(publicEdgeSource, /\/plugin\/update/);
+  assert.match(publicEdgeSource, /release manifest tool surface drift/);
+  assert.match(publicEdgeSource, /release manifest registered-tool-count drift/);
+  assert.match(publicEdgeSource, /release manifest SHA drift/);
   assert.match(publicEdgeSource, /mcp_contract\?\.tool_surface/);
   assert.match(publicEdgeSource, /mcp_contract\?\.registered_tool_count/);
+  assert.doesNotMatch(publicEdgeSource, /expectedRegisteredToolsBySurface/);
   assert.match(publicEdgeSource, /cloudflare-managed/);
   assert.match(publicEdgeSource, /cloudflare-access-protected-resource/);
   assert.match(publicEdgeSource, /authorization_servers/);

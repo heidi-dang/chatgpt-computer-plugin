@@ -18,11 +18,9 @@ if (expectedReleaseSha && !/^[0-9a-f]{40}$/.test(expectedReleaseSha)) {
   throw new Error("CPTR_EXPECTED_RELEASE_SHA must be a full 40-character Git SHA when provided");
 }
 const expectedToolSurface = process.env.CPTR_EXPECTED_TOOL_SURFACE?.trim().toLowerCase() || "compact";
-const expectedRegisteredToolsBySurface = { compact: 18, legacy: 91 };
-if (!(expectedToolSurface in expectedRegisteredToolsBySurface)) {
+if (!new Set(["compact", "legacy"]).has(expectedToolSurface)) {
   throw new Error("CPTR_EXPECTED_TOOL_SURFACE must be either compact or legacy");
 }
-const expectedRegisteredToolCount = expectedRegisteredToolsBySurface[expectedToolSurface];
 const supportedAuthModes = new Set(["auto", "native", "cloudflare-managed"]);
 if (!supportedAuthModes.has(configuredAuthMode)) {
   throw new Error(`CPTR_EDGE_AUTH_MODE must be one of ${[...supportedAuthModes].join(", ")}; got ${configuredAuthMode}`);
@@ -84,14 +82,29 @@ if (health?.status !== "ok" || health?.workbench?.ready !== true) {
 if (expectedReleaseSha && health?.release !== expectedReleaseSha) {
   throw new Error(`release SHA drift: expected ${expectedReleaseSha}, got ${health?.release ?? "missing"}`);
 }
-if (health?.mcp_contract?.tool_surface !== expectedToolSurface) {
+
+const releaseManifest = await jsonResponse(await request("/plugin/update"), "release manifest", 200);
+if (expectedReleaseSha && releaseManifest?.release_sha !== expectedReleaseSha) {
   throw new Error(
-    `MCP tool surface drift: expected ${expectedToolSurface}, got ${health?.mcp_contract?.tool_surface ?? "missing"}`,
+    `release manifest SHA drift: expected ${expectedReleaseSha}, got ${releaseManifest?.release_sha ?? "missing"}`,
   );
 }
-if (health?.mcp_contract?.registered_tool_count !== expectedRegisteredToolCount) {
+if (releaseManifest?.tool_surface !== expectedToolSurface) {
   throw new Error(
-    `MCP registered-tool-count drift: expected ${expectedRegisteredToolCount}, got ${health?.mcp_contract?.registered_tool_count ?? "missing"}`,
+    `release manifest tool surface drift: expected ${expectedToolSurface}, got ${releaseManifest?.tool_surface ?? "missing"}`,
+  );
+}
+if (!Number.isInteger(releaseManifest?.registered_tool_count) || releaseManifest.registered_tool_count < 1) {
+  throw new Error("release manifest registered_tool_count must be a positive integer");
+}
+if (health?.mcp_contract?.tool_surface !== releaseManifest.tool_surface) {
+  throw new Error(
+    `MCP tool surface drift: release manifest reports ${releaseManifest.tool_surface}, health reports ${health?.mcp_contract?.tool_surface ?? "missing"}`,
+  );
+}
+if (health?.mcp_contract?.registered_tool_count !== releaseManifest.registered_tool_count) {
+  throw new Error(
+    `release manifest registered-tool-count drift: manifest reports ${releaseManifest.registered_tool_count}, health reports ${health?.mcp_contract?.registered_tool_count ?? "missing"}`,
   );
 }
 
@@ -267,5 +280,5 @@ for (const profile of connectorProfiles) {
 }
 
 console.log(
-  `CPTR public edge verified at ${origin}: health${expectedReleaseSha ? ` at release ${expectedReleaseSha}` : ""}, ${expectedToolSurface}/${expectedRegisteredToolCount} MCP surface, MCP 2026 401 challenge, RFC 9728 ${authMode} metadata, OAuth discovery, PKCE S256, refresh-token capability, DCR, and authorization-stage redirect policy.`,
+  `CPTR public edge verified at ${origin}: health${expectedReleaseSha ? ` at release ${expectedReleaseSha}` : ""}, ${expectedToolSurface}/${releaseManifest.registered_tool_count} MCP surface, MCP 2026 401 challenge, RFC 9728 ${authMode} metadata, OAuth discovery, PKCE S256, refresh-token capability, DCR, and authorization-stage redirect policy.`,
 );
