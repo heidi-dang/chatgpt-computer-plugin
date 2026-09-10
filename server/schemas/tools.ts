@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { BROWSER_ACTIONS } from "../browser-contract.js";
+import { PUBLIC_BROWSER_ACTIONS } from "../browser-contract.js";
 
 const configuredCommandInlineWaitMax = Number.parseInt(
   process.env.CPTR_COMMAND_INLINE_WAIT_MAX_SECONDS ?? "60",
@@ -590,7 +590,7 @@ export const userChromeSchema = {
   workbench_session_id: workbenchSessionId.optional(),
   surface_id: z.string().min(1).max(200).optional(),
   command_id: z.string().min(1).max(160).optional(),
-  browser_action: z.enum(BROWSER_ACTIONS).optional(),
+  browser_action: z.enum(PUBLIC_BROWSER_ACTIONS).optional(),
   expression: z.string().min(1).max(20_000).optional(),
   expected_epoch: z.number().int().min(0).optional(),
   expected_owner: z.enum(["none", "agent", "human"]).optional(),

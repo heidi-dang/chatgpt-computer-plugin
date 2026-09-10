@@ -3,6 +3,8 @@ export const BROWSER_ACTIONS = [
   "attach",
   "detach",
   "list_tabs",
+  "open_dedicated",
+  "batch",
   "get_tab",
   "activate_tab",
   "open_tab",
@@ -55,9 +57,17 @@ export const BROWSER_ACTIONS = [
 
 export type BrowserAction = (typeof BROWSER_ACTIONS)[number];
 
+// Device bootstrap uses open_dedicated internally when open_session has no
+// explicit tab_id. Keep it in the wire manifest for cross-repo convergence,
+// but do not expose it as a direct ChatGPT browser command.
+export const PUBLIC_BROWSER_ACTIONS = BROWSER_ACTIONS.filter(
+  (action): action is Exclude<BrowserAction, "open_dedicated"> => action !== "open_dedicated",
+);
+
 const MUTATING_BROWSER_ACTIONS = new Set<BrowserAction>([
   "attach",
   "detach",
+  "batch",
   "activate_tab",
   "open_tab",
   "close_tab",
