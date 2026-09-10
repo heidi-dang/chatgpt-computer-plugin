@@ -416,6 +416,124 @@ test("compact delegated domains remain blocked until prompt-scoped allow:delegat
   await server.close();
 });
 
+test("disabled backend prompt guards are snapshotted once and remove only plugin approval friction", async () => {
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async () => new Response(JSON.stringify({}), { status: 200 }),
+  });
+  let modelRequests = 0;
+  let secretInput: Record<string, unknown> | null = null;
+  let commandInput: Record<string, unknown> | null = null;
+  (computer as any).getGuardControls = async () => ({
+    guards: [
+      { id: "delegation_prompt_approval", enabled: false },
+      { id: "secret_write_prompt_approval", enabled: false },
+      { id: "root_prompt_approval", enabled: false },
+    ],
+    mutable_count: 3,
+    enabled_mutable_count: 0,
+    locked_count: 12,
+  });
+  (computer as any).listWorkspaces = async () => ({ workspaces: [] });
+  (computer as any).createWorkbenchSession = async () => ({
+    session_id: "wbs_policy_disabled_0001",
+    name: "Policy disabled fixture",
+    status: "OPEN",
+    workspace_id: "workspace-1",
+    active_target_type: null,
+    active_target_id: null,
+    active_workspace_id: null,
+    event_count: 0,
+    created_at: 1,
+    updated_at: 1,
+    last_event_at: null,
+    archived_at: null,
+  });
+  (computer as any).listModels = async () => {
+    modelRequests += 1;
+    return { models: [] };
+  };
+  (computer as any).materializeCodingSecret = async (input: Record<string, unknown>) => {
+    secretInput = structuredClone(input);
+    return {
+      workspace_id: "workspace-1",
+      path: ".env",
+      scope: "workspace",
+      materialized: true,
+      permissions: "0600",
+    };
+  };
+  (computer as any).runCodingCommand = async (input: Record<string, unknown>) => {
+    commandInput = structuredClone(input);
+    return {
+      command_id: "cmd-policy-1",
+      status: "COMPLETE",
+      exit_code: 0,
+      output: "ok",
+      next_offset: 2,
+      duration_ms: 1,
+      output_truncated: false,
+      timed_out: false,
+    };
+  };
+
+  const { server, client } = await connectedServer(computer, "compact");
+  const opened = await client.callTool({ name: "cptr_open_live_workbench", arguments: {} });
+  const openedValue = opened.structuredContent as {
+    session_id: string;
+    delegation_allowed: boolean;
+    secret_write_allowed: boolean;
+    root_allowed: boolean;
+  };
+  assert.equal(openedValue.delegation_allowed, true);
+  assert.equal(openedValue.secret_write_allowed, true);
+  assert.equal(openedValue.root_allowed, true);
+
+  const delegated = await client.callTool({
+    name: "cptr_agent_task",
+    arguments: { action: "models", payload: {} },
+  });
+  assert.equal(delegated.isError, undefined);
+  assert.equal(modelRequests, 1);
+
+  const secret = await client.callTool({
+    name: "cptr_code",
+    arguments: {
+      action: "materialize_secret",
+      payload: {
+        workspace_id: "workspace-1",
+        path: ".env",
+        secret: "SYNTHETIC=value",
+      },
+      workbench_session_id: openedValue.session_id,
+    },
+  });
+  assert.equal(secret.isError, undefined);
+  const capturedSecret = secretInput as Record<string, unknown> | null;
+  assert.equal(capturedSecret?.user_approval, "allow:secret-write");
+
+  const command = await client.callTool({
+    name: "cptr_command",
+    arguments: {
+      action: "run",
+      payload: {
+        workspace_id: "workspace-1",
+        command: "# cptr-root: use root\nprintf ok",
+        allow_package_install: false,
+      },
+      workbench_session_id: openedValue.session_id,
+    },
+  });
+  assert.equal(command.isError, undefined);
+  const capturedCommand = commandInput as Record<string, unknown> | null;
+  assert.equal(capturedCommand?.root_prompt_approved, true);
+  assert.equal(capturedCommand?.allow_package_install, false);
+
+  await client.close();
+  await server.close();
+});
+
 test("compact workspace inspection maps actions onto the existing inspect endpoint semantics", async () => {
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
@@ -572,6 +690,7 @@ test("compact Workbench opens one backend-owned live stream and command run does
   assert.deepEqual(commandInput, {
     workspace_id: "workspace-1",
     command: "printf compact",
+    root_prompt_approved: false,
     workbench_session_id: "wbs_compact_command_0001",
   });
   assert.equal(binding, null, "backend command creation must own target binding without a second plugin request");

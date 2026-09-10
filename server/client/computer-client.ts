@@ -22,6 +22,25 @@ import type { McpTrafficEvent } from "../mcp-traffic.js";
 import { actionMutatesBrowser, type BrowserAction } from "../browser-contract.js";
 import { TERMINAL_TASK_STATUSES } from "../../shared/task-status.js";
 
+export type GuardControl = {
+  id: string;
+  label: string;
+  description: string;
+  category: "approval" | "invariant";
+  risk: "medium" | "high" | "critical";
+  mutable: boolean;
+  default_enabled: boolean;
+  enabled: boolean;
+  version: number;
+};
+
+export type GuardControlsResponse = {
+  guards: GuardControl[];
+  mutable_count: number;
+  enabled_mutable_count: number;
+  locked_count: number;
+};
+
 const COMPLETE_WITH_TOOL_ERRORS = "COMPLETE_WITH_TOOL_ERRORS";
 const DEFAULT_DIRECT_EXECUTION_WAIT_SECONDS = 5;
 const MAX_DIRECT_EXECUTION_OUTPUT_CHARACTERS = 20_000;
@@ -424,6 +443,10 @@ export class ComputerClient {
 
   async getRuntimeMetrics(): Promise<Record<string, unknown>> {
     return this.request("/runtime/metrics");
+  }
+
+  async getGuardControls(): Promise<GuardControlsResponse> {
+    return this.request<GuardControlsResponse>("/guards");
   }
 
   async listWorkspaces(includeUnavailable = false): Promise<{ workspaces: Workspace[] }> {
@@ -1137,6 +1160,8 @@ export class ComputerClient {
     cwd?: string;
     wait_seconds?: number;
     allow_network?: boolean;
+    allow_package_install?: boolean;
+    root_prompt_approved?: boolean;
     measure_lifecycle?: boolean;
     pty?: boolean;
     rows?: number;
@@ -1153,6 +1178,8 @@ export class ComputerClient {
         cwd: input.cwd ?? ".",
         wait_seconds: input.wait_seconds ?? 0,
         allow_network: input.allow_network ?? false,
+        allow_package_install: input.allow_package_install ?? false,
+        root_prompt_approved: input.root_prompt_approved ?? false,
         ...(input.measure_lifecycle ? { measure_lifecycle: true } : {}),
         pty: input.pty ?? false,
         rows: input.rows ?? 24,

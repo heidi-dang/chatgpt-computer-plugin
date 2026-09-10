@@ -113,6 +113,7 @@ type PromptSession = {
   listeners: Set<(event: PromptTerminalEvent) => void>;
   allowDelegate: boolean;
   allowSecretWrite: boolean;
+  allowRoot: boolean;
   browserSessionIds: Set<string>;
   liveTargetKeys: Set<string>;
 };
@@ -189,7 +190,7 @@ export class PromptTerminalStore {
     return this.sessions.size;
   }
 
-  open(options: { allowDelegate?: boolean; allowSecretWrite?: boolean; workbenchSessionId?: string } = {}): PromptTerminalMetadata {
+  open(options: { allowDelegate?: boolean; allowSecretWrite?: boolean; allowRoot?: boolean; workbenchSessionId?: string } = {}): PromptTerminalMetadata {
     this.prune();
     const existingTicket = options.workbenchSessionId
       ? this.workbenchTickets.get(options.workbenchSessionId)
@@ -199,6 +200,7 @@ export class PromptTerminalStore {
       if (this.touch(existing)) {
         existing.allowDelegate = options.allowDelegate === true;
         existing.allowSecretWrite = options.allowSecretWrite === true;
+        existing.allowRoot = options.allowRoot === true;
         return this.metadata(existing);
       }
       this.remove(existing.ticket);
@@ -225,6 +227,7 @@ export class PromptTerminalStore {
       listeners: new Set(),
       allowDelegate: options.allowDelegate === true,
       allowSecretWrite: options.allowSecretWrite === true,
+      allowRoot: options.allowRoot === true,
       browserSessionIds: new Set(),
       liveTargetKeys: new Set(),
     };
@@ -244,7 +247,7 @@ export class PromptTerminalStore {
 
   resumeWorkbenchSession(
     workbenchSessionId: string | null | undefined,
-    options: { allowDelegate?: boolean; allowSecretWrite?: boolean } = {},
+    options: { allowDelegate?: boolean; allowSecretWrite?: boolean; allowRoot?: boolean } = {},
   ): PromptTerminalMetadata | null {
     const ticket = this.ticketForWorkbenchSession(workbenchSessionId);
     if (!ticket) return null;
@@ -253,6 +256,7 @@ export class PromptTerminalStore {
     if (!this.touch(session)) return null;
     session.allowDelegate = options.allowDelegate === true;
     session.allowSecretWrite = options.allowSecretWrite === true;
+    session.allowRoot = options.allowRoot === true;
     return this.metadata(session);
   }
 
@@ -264,6 +268,11 @@ export class PromptTerminalStore {
   allowsSecretWrite(ticket: string | null | undefined): boolean {
     if (!ticket) return false;
     return this.getSession(ticket)?.allowSecretWrite === true;
+  }
+
+  allowsRoot(ticket: string | null | undefined): boolean {
+    if (!ticket) return false;
+    return this.getSession(ticket)?.allowRoot === true;
   }
 
   allowsBrowserSession(ticket: string | null | undefined, sessionId: string): boolean {
@@ -620,6 +629,7 @@ export class PromptTerminalStore {
       listeners: new Set(),
       allowDelegate: false,
       allowSecretWrite: false,
+      allowRoot: false,
       browserSessionIds: new Set(),
       liveTargetKeys: new Set(),
     };

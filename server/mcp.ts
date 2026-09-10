@@ -1412,7 +1412,7 @@ export function createMcpServer(
     {
       title: "Prepare CPTR Live Workbench context",
       description:
-        "Call this first whenever the user explicitly invokes CPTR. Set session_name to the exact current ChatGPT conversation title when the host exposes it; otherwise use a concise prompt-derived Workbench session label and never claim it is the host title. When continuing the same task in a later ChatGPT turn, pass resume_session_id so the existing Live Terminal streams are renewed and reused rather than replaced. If the current user prompt explicitly authorizes writing secret material, pass secret_write_authorization='allow:secret-write'; that permission applies only to this prompt session and resets on the next turn. This is the sole CPTR UI-producing tool: it opens exactly one Workbench. Later Direct Coding, delegated task, monitor, and command operations pass workbench_session_id and CPTR publishes their observable activity into this backend-owned stream automatically; normal execution must not call a separate render/bind tool.",
+        "Call this first whenever the user explicitly invokes CPTR. Set session_name to the exact current ChatGPT conversation title when the host exposes it; otherwise use a concise prompt-derived Workbench session label and never claim it is the host title. When continuing the same task in a later ChatGPT turn, pass resume_session_id so the existing Live Terminal streams are renewed and reused rather than replaced. Prompt-scoped approval inputs are required only when the corresponding backend Guard Control is enabled: delegation_authorization='allow:delegate', secret_write_authorization='allow:secret-write', and root_authorization='use root'. These permissions reset on the next prompt turn. This is the sole CPTR UI-producing tool: it opens exactly one Workbench. Later Direct Coding, delegated task, monitor, and command operations pass workbench_session_id and CPTR publishes their observable activity into this backend-owned stream automatically; normal execution must not call a separate render/bind tool.",
       inputSchema: openWorkbenchSessionSchema,
       outputSchema: z.object({
               session_id: z.string(),
@@ -1423,13 +1423,26 @@ export function createMcpServer(
               initial_summary: z.string(),
               delegation_allowed: z.boolean(),
               secret_write_allowed: z.boolean(),
+              root_allowed: z.boolean(),
             }),
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       _meta: openWorkbenchToolMetadata,
     },
     async (input) => {
-      const delegationAllowed = input.delegation_authorization === "allow:delegate";
-      const secretWriteAllowed = input.secret_write_authorization === "allow:secret-write";
+      const guardControls = typeof (client as { getGuardControls?: unknown }).getGuardControls === "function"
+        ? await client.getGuardControls().catch(() => null)
+        : null;
+      const guardEnabled = (guardId: string): boolean =>
+        guardControls?.guards?.find((guard) => guard.id === guardId)?.enabled ?? true;
+      const delegationAllowed =
+        !guardEnabled("delegation_prompt_approval") ||
+        input.delegation_authorization === "allow:delegate";
+      const secretWriteAllowed =
+        !guardEnabled("secret_write_prompt_approval") ||
+        input.secret_write_authorization === "allow:secret-write";
+      const rootAllowed =
+        !guardEnabled("root_prompt_approval") ||
+        input.root_authorization === "use root";
       const preloadedWorkspaces = await client
         .listWorkspaces(false)
         .then((value) => Array.isArray(value.workspaces) ? value.workspaces : [])
@@ -1444,15 +1457,18 @@ export function createMcpServer(
         ? promptSessions.resumeWorkbenchSession(session.session_id, {
             allowDelegate: delegationAllowed,
             allowSecretWrite: secretWriteAllowed,
+            allowRoot: rootAllowed,
           })
           ?? promptSessions.open({
             allowDelegate: delegationAllowed,
             allowSecretWrite: secretWriteAllowed,
+            allowRoot: rootAllowed,
             workbenchSessionId: session.session_id,
           })
         : promptSessions.open({
           allowDelegate: delegationAllowed,
           allowSecretWrite: secretWriteAllowed,
+          allowRoot: rootAllowed,
           workbenchSessionId: session.session_id,
         });
       activePromptTicket = prompt.ticket;
@@ -1465,10 +1481,11 @@ export function createMcpServer(
         workspace_id: session.workspace_id,
         title: "CPTR computer activity",
         initial_summary: delegationAllowed
-          ? `Workbench Session ${session.session_id} is ready. ChatGPT Direct Coding remains available and the user explicitly enabled Delegated Agent tools for this prompt.`
-          : `Workbench Session ${session.session_id} is ready. ChatGPT Direct Coding is enabled; Delegated Agent tools are blocked unless the user prompt includes allow:delegate.`,
+          ? `Workbench Session ${session.session_id} is ready. ChatGPT Direct Coding and Delegated Agent tools are available under the current Guard Controls.`
+          : `Workbench Session ${session.session_id} is ready. ChatGPT Direct Coding is enabled; Delegated Agent tools still require prompt approval under the current Guard Controls.`,
         delegation_allowed: delegationAllowed,
         secret_write_allowed: secretWriteAllowed,
+        root_allowed: rootAllowed,
       };
       const activity = publishActivity(
         "cptr_open_live_workbench",
@@ -2534,6 +2551,7 @@ export function createMcpServer(
       const { workbench_session_id, ...commandInput } = input;
       const command = await client.runCodingCommand({
         ...commandInput,
+        root_prompt_approved: promptSessions.allowsRoot(currentPromptTicket()),
         ...(workbench_session_id ? { workbench_session_id } : {}),
       });
       if (input.worker_id) {
@@ -3452,7 +3470,7 @@ export function createMcpServer(
       cptr_workbench: "list(include_archived?,limit?), get(workbench_session_id), events(workbench_session_id,after_sequence?,limit?), bind(workbench_session_id,target_type,target_id,workspace_id?), rename(workbench_session_id,name), archive(workbench_session_id), request_delete(workbench_session_id), confirm_delete(confirmation_id)",
       cptr_workspace: "create(path,name?,create_directory?,initialize_git?,idempotency_key?), list(include_unavailable?), get(workspace_id), detect_project(workspace_id,worker_id?), tree(workspace_id,path?,depth?,worker_id?), metadata(workspace_id,path,worker_id?), read_many(workspace_id,paths,worker_id?), search_symbols(workspace_id,query,path?,worker_id?), discover_tests(workspace_id,path?,depth?,worker_id?), dependency_summary(workspace_id,worker_id?), package_scripts(workspace_id,worker_id?), release_readiness(workspace_id,worker_id?)",
       cptr_code: "list(workspace_id,path?,recursive?,worker_id?), read(workspace_id,path,lines?,worker_id?), read_many(workspace_id,files,max_chars?,worker_id?), search(workspace_id,query,path?,worker_id?), write(workspace_id,path,content,...), materialize_secret(workspace_id,path,secret,overwrite?,worker_id?; requires prompt-scoped secret_write_authorization='allow:secret-write' on cptr_open_live_workbench; workspace .env reads stay blocked; absolute host paths also require an active local-root Workbench grant), edit(workspace_id,path,target,replacement,...), apply_edits(workspace_id,path,edits,...), mkdir(workspace_id,path,worker_id?), move(workspace_id,source,destination,...), delete(workspace_id,path,worker_id?), git_status(workspace_id,worker_id?), diff(workspace_id,paths?,max_bytes?,worker_id?)",
-      cptr_command: "run(workspace_id,command,cwd?,wait_seconds?,allow_network?,pty?,worker_id?; explicit root only when user says use root and host operator enabled it: first line '# cptr-root: use root', optional next line '# cptr-root-ttl-seconds: <seconds>', same Workbench session inherits, '# cptr-root: revoke' revokes; root does not bypass allow_network/command:external/dedicated SSH), status(workspace_id,command_id,offset?,wait_seconds?,worker_id?), cancel(workspace_id,command_id,worker_id?), input(workspace_id,command_id,data,worker_id?), resize(workspace_id,command_id,rows,cols,worker_id?), signal(workspace_id,command_id,signal,worker_id?), run_test(workspace_id,target,path?,test_path?,worker_id?)",
+      cptr_command: "run(workspace_id,command,cwd?,wait_seconds?,allow_network?,allow_package_install?,pty?,worker_id?; when the root prompt guard is enabled, explicit root requires current-prompt root_authorization='use root' on cptr_open_live_workbench; first command line '# cptr-root: use root', optional next line '# cptr-root-ttl-seconds: <seconds>', same Workbench session inherits, '# cptr-root: revoke' revokes; host root enablement, command:external, allow_network and dedicated SSH remain independent), status(workspace_id,command_id,offset?,wait_seconds?,worker_id?), cancel(workspace_id,command_id,worker_id?), input(workspace_id,command_id,data,worker_id?), resize(workspace_id,command_id,rows,cols,worker_id?), signal(workspace_id,command_id,signal,worker_id?), run_test(workspace_id,target,path?,test_path?,worker_id?)",
       cptr_worker: "create(workspace_id,name,responsibility?,repo_path?), list(workspace_id), get(workspace_id,worker_id), overview(workspace_id), integrate(workspace_id,worker_ids), close(workspace_id,worker_id,discard_changes?)",
       cptr_ssh: "list_hosts(workspace_id), run(workspace_id,alias,command,wait_seconds?), status(workspace_id,command_id,offset?,wait_seconds?), cancel(workspace_id,command_id)",
       cptr_factory: "Capability OS kernel: cptr_open_live_workbench is the task bootstrap; omitted task_id defaults to the current authoritative Workbench session and an explicit owned task_id is preserved. inspect(task_id?,artifact_digest?,limit?), resolve(task_id?,required,optional?,forbidden?), forge(task_id?,operation,payload) where payload.contentDigest is the content-addressed Tool identity for lifecycle operations, execute(task_id?,capability_digest,lease_id?,spec?,inputs?,approval_id?) where capability_digest is the Capability artifact content digest, acquire(task_id?,operation,payload) including invoke with payload.mountId, payload.tool, payload.inputs?, payload.timeoutMs?, payload.leaseId?, payload.approvalId?, reflect(task_id?,kind,claims,artifact_digest?,lease_id?,comparison?,change_class?,promotion_target_state?,owner_approval_id?). Dark Factory compatibility: start(workspace_id,mission,acceptance_criteria,policy,budget?,model_id?,idempotency_key?), status(run_id), events(run_id,cursor?,limit?), evidence(run_id,cursor?,limit?), message(run_id,content,idempotency_key?), pause(run_id,idempotency_key), resume(run_id,idempotency_key), approve(run_id,approval_id,approved,note?,idempotency_key?), stop(run_id,idempotency_key,timeout_ms?)",
@@ -3646,6 +3664,7 @@ export function createMcpServer(
             const { workbench_session_id, ...commandInput } = payload;
             value = await c.runCodingCommand({
               ...commandInput,
+              root_prompt_approved: promptSessions.allowsRoot(currentPromptTicket()),
               ...(workbench_session_id ? { workbench_session_id } : {}),
             });
             const wrapped = { action: input.action, result: { ...value, workspace_id: payload.workspace_id } };

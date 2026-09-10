@@ -182,6 +182,9 @@ export const openWorkbenchSessionSchema = {
   secret_write_authorization: z.literal("allow:secret-write").optional().describe(
     "Pass this literal only when the current user prompt explicitly authorizes writing secret material. It enables cptr_code.materialize_secret for this prompt session only and resets on the next turn.",
   ),
+  root_authorization: z.literal("use root").optional().describe(
+    "Pass this literal only when the current user prompt explicitly authorizes local root execution. It authorizes a new Workbench root grant for this prompt session only; host-operator root enablement remains mandatory.",
+  ),
 };
 
 export const workbenchSessionIdSchema = { workbench_session_id: workbenchSessionId };
@@ -450,6 +453,7 @@ export const codingCommandSchema = {
   cwd: z.string().min(1).max(1_000).default("."),
   wait_seconds: z.number().int().min(0).max(commandInlineWaitMaxSeconds).default(0),
   allow_network: z.boolean().default(false),
+  allow_package_install: z.boolean().default(false).describe("Explicit per-command package-install approval when the backend package-install guard is enabled."),
   pty: z.boolean().default(false).describe("Run the command in a real PTY so stdin, resize, and terminal control signals are available."),
   rows: z.number().int().min(5).max(300).default(24),
   cols: z.number().int().min(20).max(500).default(80),
