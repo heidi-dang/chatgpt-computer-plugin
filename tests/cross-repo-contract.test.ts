@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { BROWSER_ACTIONS, actionMutatesBrowser } from "../server/browser-contract.js";
+import { BROWSER_ACTIONS, PUBLIC_BROWSER_ACTIONS, actionMutatesBrowser } from "../server/browser-contract.js";
 import { ComputerApiError, ComputerClient } from "../server/client/computer-client.js";
 
 const toolsSource = readFileSync(new URL("../server/schemas/tools.ts", import.meta.url), "utf8");
@@ -30,11 +30,14 @@ test("plugin browser implementation matches the checked-in cross-repo protocol m
   );
 });
 
-test("paired Chrome contract removes pairing codes and uses an explicit browser action enum", () => {
+test("paired Chrome contract removes pairing codes and exposes only public browser actions", () => {
   assert.doesNotMatch(toolsSource, /pairing_code/);
   assert.doesNotMatch(clientSource, /pairing_code/);
-  assert.match(toolsSource, /import \{ BROWSER_ACTIONS \} from "\.\.\/browser-contract\.js"/);
-  assert.match(toolsSource, /browser_action:\s*z\.enum\(BROWSER_ACTIONS\)\.optional\(\)/);
+  assert.match(toolsSource, /import \{ PUBLIC_BROWSER_ACTIONS \} from "\.\.\/browser-contract\.js"/);
+  assert.match(toolsSource, /browser_action:\s*z\.enum\(PUBLIC_BROWSER_ACTIONS\)\.optional\(\)/);
+  assert.equal(PUBLIC_BROWSER_ACTIONS.includes("batch"), true);
+  assert.equal(PUBLIC_BROWSER_ACTIONS.includes("open_dedicated" as never), false);
+  assert.equal(BROWSER_ACTIONS.includes("open_dedicated"), true);
 });
 
 test("mutating paired Chrome commands are rejected before dispatch when expected_epoch is absent", async () => {
