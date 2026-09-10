@@ -218,15 +218,17 @@ test("terminal keeps ChatGPT lifecycle separate from transient SSE reconnect sta
   assert.doesNotMatch(completed, />EXITED</);
 });
 
-test("terminal CSS preserves the reference desktop and mobile geometry", () => {
+test("terminal and browser CSS share the responsive workbench geometry", () => {
   const css = readFileSync(new URL("../web/src/workbench.css", import.meta.url), "utf8");
 
   assert.match(css, /\.terminal-workbench\s*\{[^}]*width:\s*100%[^}]*margin:\s*0[^}]*padding:\s*0/);
   assert.doesNotMatch(css, /\.terminal-workbench\s*\{[^}]*max-width:/);
+  assert.match(css, /--workbench-surface-height:\s*clamp\(260px, 48vw, 460px\)/);
   assert.match(css, /\.terminal-shell\s*\{[\s\S]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto/);
-  assert.match(css, /\.terminal-shell\s*\{[\s\S]*height:\s*clamp\(260px, 36vw, 360px\)/);
+  assert.match(css, /\.terminal-shell\s*\{[\s\S]*height:\s*var\(--workbench-surface-height\)/);
   assert.match(css, /\.terminal-shell\s*\{[\s\S]*min-height:\s*260px/);
-  assert.match(css, /\.terminal-shell\s*\{[\s\S]*max-height:\s*360px/);
+  assert.match(css, /\.terminal-shell\s*\{[\s\S]*max-height:\s*460px/);
+  assert.match(css, /\.browser-shell\s*\{[\s\S]*height:\s*var\(--workbench-surface-height\)/);
   assert.match(css, /\.terminal-shell\s*\{[\s\S]*border-radius:\s*20px/);
   assert.match(css, /\.terminal-output\s*\{[\s\S]*min-height:\s*134px/);
   assert.match(css, /\.terminal-output\s*\{[\s\S]*font-size:\s*12px/);
@@ -237,7 +239,9 @@ test("terminal CSS preserves the reference desktop and mobile geometry", () => {
   assert.match(css, /\.terminal-output\s*\{[\s\S]*overscroll-behavior:\s*contain/);
   assert.match(css, /\.terminal-latest\s*\{/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto/);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]*height:\s*clamp\(300px, 76vw, 340px\)/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*--workbench-surface-height:\s*clamp\(300px, 76vw, 340px\)/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.terminal-shell\s*\{[\s\S]*height:\s*var\(--workbench-surface-height\)/);
+  assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.browser-shell\s*\{[\s\S]*height:\s*var\(--workbench-surface-height\)/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*min-height:\s*300px/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*max-height:\s*340px/);
   assert.match(css, /@media \(max-width: 390px\)[\s\S]*height:\s*clamp\(280px, 78vw, 320px\)/);
