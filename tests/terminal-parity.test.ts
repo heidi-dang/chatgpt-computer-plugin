@@ -53,6 +53,7 @@ test("exposes PTY command controls without a model-visible LSP lifecycle", async
   assert.equal(seen.length, 4);
   assert.deepEqual(seen[0].body, {
     command: "cat", cwd: ".", wait_seconds: 0, allow_network: false,
+    allow_package_install: false, root_prompt_approved: false,
     pty: true, rows: 40, cols: 132, stdin: "hello\n",
   });
   assert.deepEqual(seen[1].body, { data: "world\n" });

@@ -106,6 +106,29 @@ test("fetches bounded runtime lifecycle metrics through the scoped Control API",
   assert.equal(result.version, 1);
 });
 
+test("fetches the read-only Guard Controls projection through the existing coding-read bearer", async () => {
+  let seenUrl = "";
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (input) => {
+      seenUrl = String(input);
+      return new Response(JSON.stringify({
+        guards: [{ id: "delegation_prompt_approval", enabled: true }],
+        mutable_count: 10,
+        enabled_mutable_count: 10,
+        locked_count: 12,
+      }), { status: 200 });
+    },
+  });
+
+  const result = await client.getGuardControls();
+
+  assert.equal(seenUrl, "http://cptr.test/api/control/v1/guards");
+  assert.equal(result.guards[0]?.id, "delegation_prompt_approval");
+  assert.equal(result.guards[0]?.enabled, true);
+});
+
 test("caches workspace discovery for 10 seconds and model discovery for 60 seconds", async () => {
   const calls: string[] = [];
   const client = new ComputerClient({
@@ -783,6 +806,8 @@ test("routes direct ChatGPT coding operations only through scoped workspace endp
   ]);
   const commandBody = JSON.parse(String(seen[5].init?.body));
   assert.equal(commandBody.model_id, undefined);
+  assert.equal(commandBody.allow_package_install, false);
+  assert.equal(commandBody.root_prompt_approved, false);
   assert.equal(commandBody.workbench_session_id, "wbs_1234567890abcdef");
   assert.equal((seen[5].init?.headers as Record<string, string>).Authorization, "Bearer secret-token");
 });

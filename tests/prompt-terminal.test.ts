@@ -227,6 +227,17 @@ test("secret-write authorization is prompt-scoped and resets on the next resumed
   assert.equal(store.allowsSecretWrite(first.ticket), false);
 });
 
+test("root authorization is prompt-scoped and resets on the next resumed turn", () => {
+  const store = new PromptTerminalStore({ streamingEnabled: true });
+  const first = store.open({ allowRoot: true, workbenchSessionId: "wbs-root-scope" });
+  assert.equal(store.allowsRoot(first.ticket), true);
+
+  const resumed = store.resumeWorkbenchSession("wbs-root-scope", { allowRoot: false });
+  assert.ok(resumed);
+  assert.equal(resumed.ticket, first.ticket);
+  assert.equal(store.allowsRoot(first.ticket), false);
+});
+
 test("reuses and renews a workbench prompt stream while resetting per-turn delegation", () => {
   let now = 1_000;
   const store = new PromptTerminalStore({ streamingEnabled: true, ttlMs: 60_000, now: () => now });
