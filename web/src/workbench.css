@@ -11,6 +11,9 @@
   --tc: #76e3ea;
   --tw: #f0f6fc;
   --tk: #484f58;
+  /* Keep both Live Workbench surfaces the same intrinsic height so ChatGPT
+     does not resize its card when the user switches between Terminal and Browser. */
+  --workbench-surface-height: clamp(260px, 48vw, 460px);
 }
 :root[data-theme="light"] { color-scheme: light; color:#172230; --tr:#cf222e; --tg:#1a7f37; --ty:#9a6700; --tb:#0969da; --tm:#8250df; --tc:#1b7c83; --tw:#24292f; --tk:#57606a; }
 :root[data-theme="dark"] { color-scheme: dark; }
@@ -43,9 +46,9 @@ button:focus-visible, .terminal-output:focus-visible { outline: 2px solid #7fb8f
   grid-template-rows: auto minmax(0, 1fr) auto;
   width: 100%;
   max-width: 100%;
-  height: clamp(260px, 36vw, 360px);
+  height: var(--workbench-surface-height);
   min-height: 260px;
-  max-height: 360px;
+  max-height: 460px;
   overflow: hidden;
   isolation: isolate;
   color: #f0f6fc;
@@ -250,7 +253,7 @@ button.danger { border-color: #65404a; color: #efc2c2; background: #28181e; }
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   width: 100%;
-  height: clamp(260px, 48vw, 460px);
+  height: var(--workbench-surface-height);
   min-height: 260px;
   max-height: 460px;
   overflow: hidden;
@@ -454,6 +457,7 @@ button.danger { border-color: #65404a; color: #efc2c2; background: #28181e; }
 }
 
 @media (max-width: 560px) {
+  :root { --workbench-surface-height: clamp(300px, 76vw, 340px); }
   .surface-switch {
     display: flex;
     width: 100%;
@@ -466,9 +470,9 @@ button.danger { border-color: #65404a; color: #efc2c2; background: #28181e; }
     padding: 7px 10px;
   }
   .browser-shell {
-    height: clamp(230px, 72vw, 320px);
-    min-height: 230px;
-    max-height: 320px;
+    height: var(--workbench-surface-height);
+    min-height: 300px;
+    max-height: 340px;
     border-radius: 16px;
   }
   .browser-header { padding: 10px 11px; }
@@ -478,7 +482,7 @@ button.danger { border-color: #65404a; color: #efc2c2; background: #28181e; }
   .browser-footer { gap: 7px; padding-inline: 9px; font-size: 8px; }
   .terminal-shell {
     grid-template-rows: auto minmax(0, 1fr) auto;
-    height: clamp(300px, 76vw, 340px);
+    height: var(--workbench-surface-height);
     min-height: 300px;
     max-height: 340px;
     border-radius: 16px;
