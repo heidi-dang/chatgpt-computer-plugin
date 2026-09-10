@@ -19,7 +19,6 @@ test("deployed contract verifier supports exact compact production and legacy ro
     "cptr_command",
     "cptr_factory",
     "cptr_fdx_intelligence",
-    "cptr_lsp",
     "cptr_memory",
     "cptr_open_live_workbench",
     "cptr_plugin_update",
@@ -31,8 +30,9 @@ test("deployed contract verifier supports exact compact production and legacy ro
   ].sort();
 
   assert.deepEqual(compactTools, expectedCompact);
-  assert.equal(legacyTools.length, 91);
+  assert.equal(legacyTools.length, 87);
   assert.equal(legacyTools.includes("cptr_memory"), true);
+  assert.equal(legacyTools.some((name) => name.startsWith("cptr_lsp")), false);
   assert.equal(legacyTools.includes("cptr_factory_start"), true);
   assert.equal(legacyTools.includes("cptr_direct_worker_create"), true);
   assert.match(source, /CPTR_EXPECTED_TOOL_SURFACE/);

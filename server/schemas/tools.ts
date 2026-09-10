@@ -507,33 +507,6 @@ export const codingCommandSignalSchema = {
   signal: z.enum(["interrupt", "terminate", "kill"]),
 };
 
-export const lspDiscoverSchema = {
-  workspace_id: z.string().min(1).max(200),
-  ...optionalWorkerTargetSchema,
-};
-
-export const lspStartSchema = {
-  workspace_id: z.string().min(1).max(200),
-  ...optionalWorkerTargetSchema,
-  server_id: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
-  root: z.string().min(1).max(1_000).default("."),
-};
-
-export const lspRequestSchema = {
-  workspace_id: z.string().min(1).max(200),
-  ...optionalWorkerTargetSchema,
-  lsp_id: z.string().min(1).max(80),
-  method: z.string().min(1).max(256),
-  params: z.unknown().optional(),
-  timeout_seconds: z.number().min(0.1).max(60).default(15),
-};
-
-export const lspStopSchema = {
-  workspace_id: z.string().min(1).max(200),
-  ...optionalWorkerTargetSchema,
-  lsp_id: z.string().min(1).max(80),
-};
-
 export const sshHostsSchema = {
   workspace_id: z.string().min(1).max(200),
 };

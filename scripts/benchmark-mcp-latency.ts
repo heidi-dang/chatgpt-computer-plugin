@@ -117,7 +117,7 @@ const surface = profileToolSurface();
 assert.equal(legacy.dropped, 0);
 assert.equal(current.dropped, 0);
 assert.ok(current.total_deliveries < legacy.total_deliveries, "1s batching must reduce delivery/write pressure");
-assert.equal(surface.registered_tools, 91);
+assert.equal(surface.registered_tools, 87);
 assert.equal(surface.pool_hit_rate, 1);
 assert.ok(surface.pooled_take_p95_ms < surface.registration_p95_ms || surface.registration_p95_ms === 0);
 

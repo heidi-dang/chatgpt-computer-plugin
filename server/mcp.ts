@@ -108,10 +108,6 @@ import {
   taskReviewSchema,
   gitStatusSchema,
   gitDiffSchema,
-  lspDiscoverSchema,
-  lspStartSchema,
-  lspRequestSchema,
-  lspStopSchema,
   readManyFilesSchema,
   applyEditsSchema,
 } from "./schemas/tools.js";
@@ -503,7 +499,6 @@ const COMPACT_DOMAIN_TOOL_NAMES = new Set([
   "cptr_code",
   "cptr_command",
   "cptr_worker",
-  "cptr_lsp",
   "cptr_ssh",
   "cptr_factory",
   "cptr_benchmark",
@@ -544,7 +539,7 @@ const RESUMABLE_COMMAND_TOOL_NAMES = new Set([
 ]);
 const RUN_STATUS_RESUMABLE_TOOL_NAMES = new Set(["cptr_factory_stop"]);
 
-export const MCP_REGISTERED_TOOL_BUDGET = 91;
+export const MCP_REGISTERED_TOOL_BUDGET = 87;
 export type McpToolSurfaceProfile = {
   registered_tools: number;
   direct_tools: number;
@@ -2691,86 +2686,6 @@ export function createMcpServer(
 
   /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
   server.registerTool(
-    "cptr_lsp_discover",
-    {
-      title: "Discover configured language servers",
-      description:
-        "Discover administrator-configured language servers that are installed for the selected workspace. This never executes project code.",
-      inputSchema: lspDiscoverSchema,
-      outputSchema: z.object({
-              workspace_id: z.string(),
-              servers: z.array(z.object({ server_id: z.string(), available: z.boolean(), executable: z.string() })),
-            }),
-      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-      _meta: oauthToolMetadata,
-    },
-    async (input) => activityResult(await client.discoverLsp(input), "cptr_lsp_discover"),
-  );
-
-  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
-  server.registerTool(
-    "cptr_lsp_start",
-    {
-      title: "Start a workspace language server",
-      description:
-        "Start one administrator-configured LSP server inside the authorized workspace root. CPTR initializes it and returns an owned opaque lsp_id.",
-      inputSchema: lspStartSchema,
-      outputSchema: z.object({
-              workspace_id: z.string(),
-              lsp_id: z.string(),
-              server_id: z.string(),
-              root: z.string(),
-              status: z.string(),
-              pid: z.number().int(),
-              capabilities: z.record(z.string(), z.unknown()),
-            }),
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-      _meta: oauthToolMetadata,
-    },
-    async (input) => activityResult(await client.startLsp(input), "cptr_lsp_start"),
-  );
-
-  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
-  server.registerTool(
-    "cptr_lsp_request",
-    {
-      title: "Send a JSON-RPC request to an owned language server",
-      description:
-        "Send one bounded LSP JSON-RPC request to an owned workspace-scoped language server, including hover, definition, references, symbols, completion, or rename-capability requests supported by that server.",
-      inputSchema: lspRequestSchema,
-      outputSchema: z.object({
-              workspace_id: z.string(),
-              lsp_id: z.string(),
-              response: z.record(z.string(), z.unknown()),
-            }),
-      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
-      _meta: oauthToolMetadata,
-    },
-    async (input) => activityResult(await client.requestLsp(input), "cptr_lsp_request"),
-  );
-
-  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
-  server.registerTool(
-    "cptr_lsp_stop",
-    {
-      title: "Stop an owned workspace language server",
-      description:
-        "Gracefully shut down and dispose an owned LSP process inside the selected workspace.",
-      inputSchema: lspStopSchema,
-      outputSchema: z.object({
-              workspace_id: z.string(),
-              lsp_id: z.string(),
-              server_id: z.string(),
-              status: z.string(),
-            }),
-      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
-      _meta: oauthToolMetadata,
-    },
-    async (input) => activityResult(await client.stopLsp(input), "cptr_lsp_stop"),
-  );
-
-  /* @mcp-codemod-error Could not verify `inputSchema` is a schema object. Raw shapes are deprecated in v2 — pass a Standard Schema object (e.g. z.object({ … })); no change is needed if it already is one. */
-  server.registerTool(
     "cptr_ssh_list_hosts",
     {
       title: "List configured SSH host aliases",
@@ -3539,7 +3454,6 @@ export function createMcpServer(
       cptr_code: "list(workspace_id,path?,recursive?,worker_id?), read(workspace_id,path,lines?,worker_id?), read_many(workspace_id,files,max_chars?,worker_id?), search(workspace_id,query,path?,worker_id?), write(workspace_id,path,content,...), materialize_secret(workspace_id,path,secret,overwrite?,worker_id?; requires prompt-scoped secret_write_authorization='allow:secret-write' on cptr_open_live_workbench; workspace .env reads stay blocked; absolute host paths also require an active local-root Workbench grant), edit(workspace_id,path,target,replacement,...), apply_edits(workspace_id,path,edits,...), mkdir(workspace_id,path,worker_id?), move(workspace_id,source,destination,...), delete(workspace_id,path,worker_id?), git_status(workspace_id,worker_id?), diff(workspace_id,paths?,max_bytes?,worker_id?)",
       cptr_command: "run(workspace_id,command,cwd?,wait_seconds?,allow_network?,pty?,worker_id?; explicit root only when user says use root and host operator enabled it: first line '# cptr-root: use root', optional next line '# cptr-root-ttl-seconds: <seconds>', same Workbench session inherits, '# cptr-root: revoke' revokes; root does not bypass allow_network/command:external/dedicated SSH), status(workspace_id,command_id,offset?,wait_seconds?,worker_id?), cancel(workspace_id,command_id,worker_id?), input(workspace_id,command_id,data,worker_id?), resize(workspace_id,command_id,rows,cols,worker_id?), signal(workspace_id,command_id,signal,worker_id?), run_test(workspace_id,target,path?,test_path?,worker_id?)",
       cptr_worker: "create(workspace_id,name,responsibility?,repo_path?), list(workspace_id), get(workspace_id,worker_id), overview(workspace_id), integrate(workspace_id,worker_ids), close(workspace_id,worker_id,discard_changes?)",
-      cptr_lsp: "discover(workspace_id,worker_id?), start(workspace_id,server_id,root?,worker_id?), request(workspace_id,lsp_id,method,params?,timeout_seconds?,worker_id?), stop(workspace_id,lsp_id,worker_id?)",
       cptr_ssh: "list_hosts(workspace_id), run(workspace_id,alias,command,wait_seconds?), status(workspace_id,command_id,offset?,wait_seconds?), cancel(workspace_id,command_id)",
       cptr_factory: "Capability OS kernel: cptr_open_live_workbench is the task bootstrap; omitted task_id defaults to the current authoritative Workbench session and an explicit owned task_id is preserved. inspect(task_id?,artifact_digest?,limit?), resolve(task_id?,required,optional?,forbidden?), forge(task_id?,operation,payload) where payload.contentDigest is the content-addressed Tool identity for lifecycle operations, execute(task_id?,capability_digest,lease_id?,spec?,inputs?,approval_id?) where capability_digest is the Capability artifact content digest, acquire(task_id?,operation,payload) including invoke with payload.mountId, payload.tool, payload.inputs?, payload.timeoutMs?, payload.leaseId?, payload.approvalId?, reflect(task_id?,kind,claims,artifact_digest?,lease_id?,comparison?,change_class?,promotion_target_state?,owner_approval_id?). Dark Factory compatibility: start(workspace_id,mission,acceptance_criteria,policy,budget?,model_id?,idempotency_key?), status(run_id), events(run_id,cursor?,limit?), evidence(run_id,cursor?,limit?), message(run_id,content,idempotency_key?), pause(run_id,idempotency_key), resume(run_id,idempotency_key), approve(run_id,approval_id,approved,note?,idempotency_key?), stop(run_id,idempotency_key,timeout_ms?)",
       cptr_benchmark: "start(suite_id?), submit(run_id), get(run_id), leaderboard(suite_id?)",
@@ -3580,7 +3494,7 @@ export function createMcpServer(
     const c = client as any;
     // Bind the already-instrumented registration wrapper once for compact-mode
     // declarations. This preserves activity/traffic instrumentation while keeping
-    // the legacy source-level registerTool declaration count stable at 91.
+    // the legacy source-level registerTool declaration count stable at 87.
     const registerCompactTool = server.registerTool.bind(server);
     const registerCompactDomain = (
       name: string,
@@ -3788,22 +3702,6 @@ export function createMcpServer(
         }
         publishWorkerResult(payload, value, `ChatGPT used cptr_worker.${action}.`);
         return value;
-      },
-    );
-
-    registerCompactDomain(
-      "cptr_lsp",
-      "Manage workspace language servers",
-      ["discover", "start", "request", "stop"],
-      { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
-      async (action, payload) => {
-        switch (action) {
-          case "discover": return c.discoverLsp(payload);
-          case "start": return c.startLsp(payload);
-          case "request": return c.requestLsp(payload);
-          case "stop": return c.stopLsp(payload);
-          default: throw new Error(`unsupported cptr_lsp action: ${action}`);
-        }
       },
     );
 

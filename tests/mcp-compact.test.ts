@@ -15,7 +15,6 @@ const COMPACT_TOOL_NAMES = [
   "cptr_command",
   "cptr_factory",
   "cptr_fdx_intelligence",
-  "cptr_lsp",
   "cptr_memory",
   "cptr_open_live_workbench",
   "cptr_plugin_update",
@@ -41,7 +40,7 @@ async function connectedServer(computer: ComputerClient, toolSurface: "legacy" |
   return { server, client };
 }
 
-test("compact MCP surface exposes 17 backend-owned Workbench tools under 100 KB while legacy stays intact", async () => {
+test("compact MCP surface exposes 16 backend-owned Workbench tools under 100 KB while legacy stays intact", async () => {
   const computer = new ComputerClient({
     baseUrl: "http://cptr.test",
     token: "test-token",
@@ -52,7 +51,7 @@ test("compact MCP surface exposes 17 backend-owned Workbench tools under 100 KB 
   const compactListed = await compact.client.listTools();
   assert.deepEqual(compactListed.tools.map((tool) => tool.name).sort(), COMPACT_TOOL_NAMES);
   assert.ok(Buffer.byteLength(JSON.stringify(compactListed)) < 100_000);
-  assert.equal(getMcpToolSurfaceProfile(compact.server)?.registered_tools, 17);
+  assert.equal(getMcpToolSurfaceProfile(compact.server)?.registered_tools, 16);
   assert.equal(getMcpToolSurfaceProfile(compact.server)?.delegated_tools, 2);
   for (const tool of compactListed.tools) {
     const input = tool.inputSchema as {
@@ -86,24 +85,24 @@ test("compact MCP surface exposes 17 backend-owned Workbench tools under 100 KB 
     arguments: {
       action: "verify_server",
       expected_contract_version: "2026-07-28",
-      expected_tool_count: 17,
+      expected_tool_count: 16,
     },
   });
   const updateValue = update.structuredContent as Record<string, unknown> | undefined;
   assert.equal(update.isError, undefined);
   assert.equal(updateValue?.tool_surface, "compact");
   assert.equal(updateValue?.contract_version, "2026-07-28");
-  assert.equal(updateValue?.tool_count, 17);
-  assert.equal(updateValue?.registered_tool_count, 17);
-  assert.equal(updateValue?.core_tool_count, 84);
-  assert.equal(updateValue?.legacy_registered_tool_count, 91);
+  assert.equal(updateValue?.tool_count, 16);
+  assert.equal(updateValue?.registered_tool_count, 16);
+  assert.equal(updateValue?.core_tool_count, 80);
+  assert.equal(updateValue?.legacy_registered_tool_count, 87);
   assert.equal(updateValue?.tool_count_matches, true);
   await compact.client.close();
   await compact.server.close();
 
   const legacy = await connectedServer(computer, "legacy");
-  assert.equal((await legacy.client.listTools()).tools.length, 91);
-  assert.equal(getMcpToolSurfaceProfile(legacy.server)?.registered_tools, 91);
+  assert.equal((await legacy.client.listTools()).tools.length, 87);
+  assert.equal(getMcpToolSurfaceProfile(legacy.server)?.registered_tools, 87);
   await legacy.client.close();
   await legacy.server.close();
 });

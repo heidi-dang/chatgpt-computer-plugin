@@ -481,9 +481,6 @@ function mcpOperationMetadata(body: unknown): McpOperationMetadata {
   } else if (toolName === "cptr_user_chrome" && args.action === "command") {
     requestedWaitMs = Math.max(0, Number(args.wait_seconds ?? 15) * 1000);
     intentionalWait = true;
-  } else if (toolName === "cptr_lsp_request") {
-    requestedWaitMs = Math.max(0, Number(args.timeout_seconds ?? 15) * 1000);
-    intentionalWait = true;
   } else if (toolName === "cptr_factory_stop") {
     requestedWaitMs = Math.max(0, Number(args.timeout_ms ?? 15_000));
     intentionalWait = true;
@@ -878,7 +875,7 @@ async function handleModernMcp2026Request(
   } finally {
     // The modern 2026 handler consumes a fresh unconnected server from the
     // bounded single-use pool. Replenish only after this request completes so
-    // expensive 91-tool registration work cannot block the same request.
+    // expensive 87-tool registration work cannot block the same request.
     statelessServerPool.scheduleReplenish();
   }
 }
