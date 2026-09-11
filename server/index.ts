@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   createServer,
   type IncomingMessage,
@@ -53,6 +53,7 @@ import { StatelessServerPool } from "./stateless-server-pool.js";
 import { CPTR_APP_VERSION } from "./version.js";
 import { LiveGateway } from "./live-gateway.js";
 import { LiveTicketStore } from "./live-tickets.js";
+import { NativeSubagentCoordinator } from "./native-subagents.js";
 import {
   PromptTerminalGateway,
   PromptTerminalStore,
@@ -185,6 +186,15 @@ const advertisedOauthScopes = nativeOAuthServer
   : oauthScopes;
 
 const client = clientFromEnvironment();
+const nativeSubagents = new NativeSubagentCoordinator(client, {
+  stateDbPath: liveTicketStateDb,
+  signingKey: liveTicketSecret
+    ? createHash("sha256")
+        .update("cptr.native-subagents.request-state.v1\0", "utf8")
+        .update(liveTicketSecret, "utf8")
+        .digest()
+    : undefined,
+});
 const mcpDiagnostics = new McpDiagnosticsEmitter({
   deliver: (events) => client.ingestMcpDiagnostics(events),
 });
@@ -836,6 +846,7 @@ function createSessionServer() {
     traffic: mcpTraffic,
     activityTelemetry: mcpActivity,
     diagnostics: mcpDiagnostics,
+    nativeSubagents,
     toolSurface: mcpToolSurface,
   });
 }
@@ -1634,6 +1645,7 @@ async function shutdown(signal: string) {
   await modernMcpHandler.close().catch(() => undefined);
   liveTickets.close();
   promptSessions.close();
+  nativeSubagents.close();
   nativeOAuthServer?.close();
   const telemetryDeadline = new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, 1_000);
