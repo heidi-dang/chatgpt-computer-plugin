@@ -3468,7 +3468,7 @@ export function createMcpServer(
     const compactOutputSchema = z.object({ action: z.string(), result: z.unknown() });
     const compactActionSignatures: Record<string, string> = {
       cptr_workbench: "list(include_archived?,limit?), get(workbench_session_id), events(workbench_session_id,after_sequence?,limit?), bind(workbench_session_id,target_type,target_id,workspace_id?), rename(workbench_session_id,name), archive(workbench_session_id), request_delete(workbench_session_id), confirm_delete(confirmation_id)",
-      cptr_workspace: "create(path,name?,create_directory?,initialize_git?,idempotency_key?), list(include_unavailable?), get(workspace_id), detect_project(workspace_id,worker_id?), tree(workspace_id,path?,depth?,worker_id?), metadata(workspace_id,path,worker_id?), read_many(workspace_id,paths,worker_id?), search_symbols(workspace_id,query,path?,worker_id?), discover_tests(workspace_id,path?,depth?,worker_id?), dependency_summary(workspace_id,worker_id?), package_scripts(workspace_id,worker_id?), release_readiness(workspace_id,worker_id?)",
+      cptr_workspace: "create(path,name?,create_directory?,initialize_git?,idempotency_key?), list(include_unavailable?), get(workspace_id), detect_project(workspace_id,worker_id?), tree(workspace_id,path?,depth?,worker_id?), metadata(workspace_id,path,worker_id?), read_many(workspace_id,paths,worker_id?), search_symbols(workspace_id,query,path?,worker_id?), discover_tests(workspace_id,path?,depth?,worker_id?), dependency_summary(workspace_id,worker_id?), package_scripts(workspace_id,worker_id?), release_readiness(workspace_id,worker_id?), resolve(reference,destructive?,allow_fuzzy?,include_archived?), context(workspace_id?,reference?,workbench_session_id?,current_message?,max_chars?,memory_max_chars?), health(workspace_id|reference), groups(group_ref?,group_type?,limit?), reconcile(workspace_id|reference), group_create(name,slug?,description?,group_type?,config?,members?), group_update(group_ref,name?,slug?,description?,group_type?,config?), group_add_member(group_ref,workspace_ref,role?,is_primary?,sort_order?,enabled?,config?), group_remove_member(group_ref,workspace_ref), group_update_member(group_ref,workspace_ref,role?,is_primary?,sort_order?,enabled?,config?), group_reorder(group_ref,workspace_refs)",
       cptr_code: "list(workspace_id,path?,recursive?,worker_id?), read(workspace_id,path,lines?,worker_id?), read_many(workspace_id,files,max_chars?,worker_id?), search(workspace_id,query,path?,worker_id?), write(workspace_id,path,content,...), materialize_secret(workspace_id,path,secret,overwrite?,worker_id?; requires prompt-scoped secret_write_authorization='allow:secret-write' on cptr_open_live_workbench; workspace .env reads stay blocked; absolute host paths also require an active local-root Workbench grant), edit(workspace_id,path,target,replacement,...), apply_edits(workspace_id,path,edits,...), mkdir(workspace_id,path,worker_id?), move(workspace_id,source,destination,...), delete(workspace_id,path,worker_id?), git_status(workspace_id,worker_id?), diff(workspace_id,paths?,max_bytes?,worker_id?)",
       cptr_command: "run(workspace_id,command,cwd?,wait_seconds?,allow_network?,allow_package_install?,pty?,worker_id?; when the root prompt guard is enabled, explicit root requires current-prompt root_authorization='use root' on cptr_open_live_workbench; first command line '# cptr-root: use root', optional next line '# cptr-root-ttl-seconds: <seconds>', same Workbench session inherits, '# cptr-root: revoke' revokes; host root enablement, command:external, allow_network and dedicated SSH remain independent), status(workspace_id,command_id,offset?,wait_seconds?,worker_id?), cancel(workspace_id,command_id,worker_id?), input(workspace_id,command_id,data,worker_id?), resize(workspace_id,command_id,rows,cols,worker_id?), signal(workspace_id,command_id,signal,worker_id?), run_test(workspace_id,target,path?,test_path?,worker_id?)",
       cptr_worker: "create(workspace_id,name,responsibility?,repo_path?), list(workspace_id), get(workspace_id,worker_id), overview(workspace_id), integrate(workspace_id,worker_ids), close(workspace_id,worker_id,discard_changes?)",
@@ -3575,12 +3575,50 @@ export function createMcpServer(
     registerCompactDomain(
       "cptr_workspace",
       "Manage CPTR workspaces",
-      ["create", "list", "get", "detect_project", "tree", "metadata", "read_many", "search_symbols", "discover_tests", "dependency_summary", "package_scripts", "release_readiness"],
+      [
+        "create",
+        "list",
+        "get",
+        "detect_project",
+        "tree",
+        "metadata",
+        "read_many",
+        "search_symbols",
+        "discover_tests",
+        "dependency_summary",
+        "package_scripts",
+        "release_readiness",
+        "resolve",
+        "context",
+        "health",
+        "groups",
+        "reconcile",
+        "group_create",
+        "group_update",
+        "group_add_member",
+        "group_remove_member",
+        "group_update_member",
+        "group_reorder",
+      ],
       { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       async (action, payload) => {
         if (action === "create") return c.createWorkspace(payload);
         if (action === "list") return c.listWorkspaces(payload.include_unavailable === true);
         if (action === "get") return c.getWorkspace(compactText(payload, "workspace_id"));
+        const workspaceOsActions = new Set([
+          "resolve",
+          "context",
+          "health",
+          "groups",
+          "reconcile",
+          "group_create",
+          "group_update",
+          "group_add_member",
+          "group_remove_member",
+          "group_update_member",
+          "group_reorder",
+        ]);
+        if (workspaceOsActions.has(action)) return c.workspaceOs(action, payload);
         const kindByAction: Record<string, string> = {
           detect_project: "project",
           tree: "tree",
