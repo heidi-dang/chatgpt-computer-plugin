@@ -244,8 +244,13 @@ test("terminal and browser CSS share the responsive workbench geometry", () => {
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.browser-shell\s*\{[\s\S]*height:\s*var\(--workbench-surface-height\)/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*min-height:\s*300px/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*max-height:\s*340px/);
-  assert.match(css, /@media \(max-width: 390px\)[\s\S]*height:\s*clamp\(280px, 78vw, 320px\)/);
-  assert.match(css, /@media \(max-width: 390px\)[\s\S]*min-height:\s*280px/);
+  const narrowCardCss = css.slice(
+    css.indexOf("@media (max-width: 390px)"),
+    css.indexOf("@media (max-width: 560px) and (orientation: landscape)"),
+  );
+  assert.doesNotMatch(narrowCardCss, /\.browser-shell\s*\{[^}]*\b(?:height|min-height|max-height):/);
+  assert.doesNotMatch(narrowCardCss, /\.terminal-shell\s*\{[^}]*\b(?:height|min-height|max-height):/);
+  assert.doesNotMatch(css, /\.browser-shell\[data-released="true"\]\s*\{[^}]*\b(?:height|min-height|max-height):/);
   assert.equal(css.includes("82vh"), false);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.terminal-output\s*\{[\s\S]*font-size:\s*11\.5px/);
   assert.match(css, /@media \(max-width: 390px\)[\s\S]*\.terminal-output\s*\{\s*font-size:\s*11px/);
@@ -255,7 +260,12 @@ test("terminal and browser CSS share the responsive workbench geometry", () => {
   assert.match(css, /:root\[data-theme="light"\][^{]*\{[^}]*color-scheme:\s*light/);
   assert.match(css, /:root\[data-theme="dark"\][^{]*\{[^}]*color-scheme:\s*dark/);
   assert.match(css, /@media \(prefers-color-scheme: light\)[\s\S]*:root:not\(\[data-theme\]\)/);
-  assert.match(css, /@media \(max-width: 560px\) and \(orientation: landscape\)/);
+  const landscapeCss = css.slice(
+    css.indexOf("@media (max-width: 560px) and (orientation: landscape)"),
+    css.indexOf("@media (prefers-reduced-motion: reduce)"),
+  );
+  assert.doesNotMatch(landscapeCss, /\.terminal-shell\s*\{[^}]*\b(?:height|min-height|max-height):/);
+  assert.doesNotMatch(landscapeCss, /\.browser-shell\s*\{[^}]*\b(?:height|min-height|max-height):/);
   assert.equal(css.includes(".terminal-toolbar"), false);
   assert.equal(css.includes(".terminal-seq"), false);
   for (const obsoleteSelector of [".terminal-card", ".terminal-meta", ".terminal-actions", ".terminal-mark", ".terminal-target", ".terminal-viewport"]) {
@@ -390,7 +400,7 @@ test("Workbench switches terminal and browser inside one persistent root", () =>
   assert.doesNotMatch(browserSource, /frame:\s*BrowserFrame/);
   assert.match(css, /\.browser-canvas\s*\{[^}]*touch-action:\s*none/);
   assert.match(css, /\.browser-status\[data-state="connecting"\]/);
-  assert.match(css, /\.browser-shell\[data-released="true"\]/);
+  assert.match(css, /\.browser-empty\[data-state="released"\] strong/);
   assert.match(css, /@media \(max-width: 560px\)[\s\S]*\.browser-shell/);
 });
 
