@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import {
   CLIENT_CAPABILITIES_META_KEY,
+  MissingRequiredClientCapabilityError,
   isInputRequiredResult,
   type ServerContext,
 } from "@modelcontextprotocol/server";
@@ -219,28 +220,75 @@ test("native subagent state survives a store reopen", () => {
 });
 
 test("native fan-out rejects clients without sampling tools before allocating resources", async () => {
-  const fake = new FakeComputer();
-  const coordinator = new NativeSubagentCoordinator(
-    fake as unknown as ComputerClient,
-    { signingKey: Buffer.alloc(32, 5) },
-  );
-
-  await assert.rejects(
-    coordinator.run(
-      {
-        task_id: "parent",
-        tasks: ["audit auth", "audit runtime"],
-        coding: true,
-        workspace_id: "ws-1",
+  const cases = [
+    {
+      name: "missing per-request capability envelope",
+      createContext: () => {
+        const ctx = context();
+        delete (ctx.mcpReq as { envelope?: unknown }).envelope;
+        return ctx;
       },
-      context(undefined, undefined, new AbortController().signal, { sampling: {} }),
-      "GPT-5.6 Sol",
-    ),
-    /sampling\.tools/,
-  );
-  assert.equal(fake.spawnCalls, 0);
-  assert.equal(fake.workerCreates.length, 0);
-  coordinator.close();
+    },
+    {
+      name: "empty per-request capabilities",
+      createContext: () =>
+        context(undefined, undefined, new AbortController().signal, {}),
+    },
+    {
+      name: "sampling without tools",
+      createContext: () =>
+        context(
+          undefined,
+          undefined,
+          new AbortController().signal,
+          { sampling: {} },
+        ),
+    },
+    {
+      name: "non-object sampling tools capability",
+      createContext: () =>
+        context(
+          undefined,
+          undefined,
+          new AbortController().signal,
+          { sampling: { tools: null } },
+        ),
+    },
+  ];
+
+  for (const testCase of cases) {
+    const fake = new FakeComputer();
+    const coordinator = new NativeSubagentCoordinator(
+      fake as unknown as ComputerClient,
+      { signingKey: Buffer.alloc(32, 5) },
+    );
+
+    await assert.rejects(
+      coordinator.run(
+        {
+          task_id: "parent",
+          tasks: ["audit auth", "audit runtime"],
+          coding: true,
+          workspace_id: "ws-1",
+        },
+        testCase.createContext(),
+        "GPT-5.6 Sol",
+      ),
+      (error: unknown) => {
+        assert.ok(
+          error instanceof MissingRequiredClientCapabilityError,
+          testCase.name,
+        );
+        assert.deepEqual(error.requiredCapabilities, {
+          sampling: { tools: {} },
+        });
+        return true;
+      },
+    );
+    assert.equal(fake.spawnCalls, 0, testCase.name);
+    assert.equal(fake.workerCreates.length, 0, testCase.name);
+    coordinator.close();
+  }
 });
 
 test("native fan-out accepts legacy negotiated sampling tools when no per-request capability envelope exists", async () => {
