@@ -1213,3 +1213,53 @@ test("cptr_workspace compact create dispatches to the authoritative workspace cl
   await client.close();
   await server.close();
 });
+
+
+test("compact cptr_workspace forwards Workspace OS actions without adding top-level tools", async () => {
+  const computer = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async () => new Response(JSON.stringify({}), { status: 200 }),
+  });
+  const calls: Array<{ action: string; payload: Record<string, unknown> }> = [];
+  (computer as any).workspaceOs = async (action: string, payload: Record<string, unknown>) => {
+    calls.push({ action, payload: structuredClone(payload) });
+    return { ok: true, action };
+  };
+
+  const { server, client } = await connectedServer(computer, "compact");
+  const beforeTools = await client.listTools();
+
+  for (const [action, payload] of [
+    ["resolve", { reference: "cross-repo", allow_fuzzy: false }],
+    ["context", { workspace_id: "ws-1", workbench_session_id: "wbs-1" }],
+    ["health", { workspace_id: "ws-1" }],
+    ["groups", { group_ref: "cross-repo" }],
+    ["reconcile", { workspace_id: "ws-1" }],
+    ["group_update_member", { group_ref: "cross-repo", workspace_ref: "plugin", role: "plugin" }],
+  ] as const) {
+    const response = await client.callTool({
+      name: "cptr_workspace",
+      arguments: { action, payload },
+    });
+    assert.equal(response.isError, undefined, action + " should remain inside cptr_workspace");
+  }
+
+  assert.deepEqual(calls, [
+    { action: "resolve", payload: { reference: "cross-repo", allow_fuzzy: false } },
+    { action: "context", payload: { workspace_id: "ws-1", workbench_session_id: "wbs-1" } },
+    { action: "health", payload: { workspace_id: "ws-1" } },
+    { action: "groups", payload: { group_ref: "cross-repo" } },
+    { action: "reconcile", payload: { workspace_id: "ws-1" } },
+    {
+      action: "group_update_member",
+      payload: { group_ref: "cross-repo", workspace_ref: "plugin", role: "plugin" },
+    },
+  ]);
+
+  const afterTools = await client.listTools();
+  assert.equal(afterTools.tools.length, beforeTools.tools.length, "Workspace OS must not add top-level MCP tools");
+
+  await client.close();
+  await server.close();
+});

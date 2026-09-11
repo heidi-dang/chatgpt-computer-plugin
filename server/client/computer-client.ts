@@ -441,6 +441,27 @@ export class ComputerClient {
     }
   }
 
+  async workspaceOs(
+    action:
+      | "resolve"
+      | "context"
+      | "health"
+      | "groups"
+      | "reconcile"
+      | "group_create"
+      | "group_update"
+      | "group_add_member"
+      | "group_remove_member"
+      | "group_update_member"
+      | "group_reorder",
+    payload: Record<string, unknown> = {},
+  ): Promise<Record<string, unknown>> {
+    return this.request("/workspace-os/action", {
+      method: "POST",
+      body: { action, payload },
+    });
+  }
+
   async getRuntimeMetrics(): Promise<Record<string, unknown>> {
     return this.request("/runtime/metrics");
   }

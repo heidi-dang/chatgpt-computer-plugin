@@ -897,3 +897,39 @@ test("routes command live snapshot and stream through the workspace/worker-owned
     "http://cptr.test/api/control/v1/workspaces/ws-1/coding/commands/cmd-1/stream?after=8&worker_id=dcw-1",
   ]);
 });
+
+
+test("Workspace OS actions post the compact action envelope to the authoritative Control API route", async () => {
+  let seenUrl = "";
+  let seenBody: Record<string, unknown> = {};
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "test-token",
+    fetchImpl: async (input, init) => {
+      seenUrl = String(input);
+      seenBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({ workspace: { workspace_id: "ws-1" }, matched_by: "slug" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  });
+
+  const result = await client.workspaceOs("resolve", {
+    reference: "cross-repo",
+    allow_fuzzy: false,
+  });
+
+  assert.equal(seenUrl, "http://cptr.test/api/control/v1/workspace-os/action");
+  assert.deepEqual(seenBody, {
+    action: "resolve",
+    payload: {
+      reference: "cross-repo",
+      allow_fuzzy: false,
+    },
+  });
+  assert.deepEqual(result, {
+    workspace: { workspace_id: "ws-1" },
+    matched_by: "slug",
+  });
+});
