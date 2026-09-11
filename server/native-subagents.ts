@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
   CLIENT_CAPABILITIES_META_KEY,
+  MissingRequiredClientCapabilityError,
   createRequestStateCodec,
   inputRequired,
   inputResponse,
@@ -307,8 +308,10 @@ export class NativeSubagentCoordinator {
       ? record(envelope[CLIENT_CAPABILITIES_META_KEY])
       : record(negotiatedCapabilities);
     const sampling = record(capabilities.sampling);
-    if (!("sampling" in capabilities) || !("tools" in sampling)) {
-      throw new Error(
+    const tools = sampling.tools;
+    if (!tools || typeof tools !== "object" || Array.isArray(tools)) {
+      throw new MissingRequiredClientCapabilityError(
+        { requiredCapabilities: { sampling: { tools: {} } } },
         "native ChatGPT subagent fan-out requires the MCP client capability sampling.tools before resources can be allocated",
       );
     }
