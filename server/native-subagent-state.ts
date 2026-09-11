@@ -53,7 +53,15 @@ export type NativeSubagentState = {
   dispatch: Record<string, unknown> | null;
   branches: NativeSubagentBranch[];
   processingUntil: number | null;
-  cleanup: { attempted: number; released: number; failed: number } | null;
+  cleanup: {
+    attempted: number;
+    released: number;
+    failed: number;
+    workerAttempted?: number;
+    workerClosed?: number;
+    workerPreserved?: number;
+    workerFailed?: number;
+  } | null;
   createdAt: number;
   updatedAt: number;
   expiresAt: number;
@@ -237,6 +245,13 @@ export class NativeSubagentStateStore {
       expectedVersion,
     );
     return Number(changed.changes) === 1 ? next : null;
+  }
+
+  remove(id: string, expectedVersion: number): boolean {
+    const changed = this.db.prepare(
+      "DELETE FROM native_subagent_fanouts WHERE id = ? AND version = ?",
+    ).run(id, expectedVersion);
+    return Number(changed.changes) === 1;
   }
 
   claim(id: string, expectedVersion: number): NativeSubagentState | null {

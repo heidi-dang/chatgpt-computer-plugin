@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  CLIENT_CAPABILITIES_META_KEY,
   isInputRequiredResult,
   type ServerContext,
 } from "@modelcontextprotocol/server";
@@ -18,12 +19,16 @@ function context(
   requestState: unknown = undefined,
   inputResponses: Record<string, unknown> | undefined = undefined,
   signal: AbortSignal = new AbortController().signal,
+  clientCapabilities: Record<string, unknown> = { sampling: { tools: {} } },
 ): ServerContext {
   return {
     sessionId: "test-session",
     mcpReq: {
       id: 1,
       method: "tools/call",
+      envelope: {
+        [CLIENT_CAPABILITIES_META_KEY]: clientCapabilities,
+      },
       requestState: () => requestState,
       inputResponses,
       signal,
@@ -71,6 +76,9 @@ function samplingTools(tools: Array<{
 class FakeComputer {
   spawnCalls = 0;
   workerCreates: Array<Record<string, unknown>> = [];
+  workerCloses: Array<Record<string, unknown>> = [];
+  workerChanges = new Map<string, number>();
+  failWorkerCreateAt: number | null = null;
   archives: string[] = [];
   codingCalls: Array<{ method: string; input: Record<string, unknown> }> = [];
   active = 0;
@@ -95,11 +103,30 @@ class FakeComputer {
   }
 
   async createDirectWorker(input: Record<string, unknown>) {
+    const attempt = this.workerCreates.length + 1;
+    if (this.failWorkerCreateAt === attempt) {
+      throw new Error("simulated worker creation failure");
+    }
     this.workerCreates.push(structuredClone(input));
     return {
       worker_id: `worker-${this.workerCreates.length}`,
       workspace_id: input.workspace_id,
     };
+  }
+
+  async getDirectWorker(input: Record<string, unknown>) {
+    const workerId = String(input.worker_id ?? "");
+    return {
+      worker_id: workerId,
+      workspace_id: String(input.workspace_id ?? ""),
+      changed_file_count: this.workerChanges.get(workerId) ?? 0,
+      integrated_at: null,
+    };
+  }
+
+  async closeDirectWorker(input: Record<string, unknown>) {
+    this.workerCloses.push(structuredClone(input));
+    return { status: "CLOSED" };
   }
 
   async archiveWorkbenchSession(id: string) {
@@ -189,6 +216,54 @@ test("native subagent state survives a store reopen", () => {
   assert.equal(recovered?.id, created.id);
   assert.equal(recovered?.fingerprint, "fingerprint");
   assert.equal(recovered?.requestedModel, "GPT-5.6 Sol");
+});
+
+test("native fan-out rejects clients without sampling tools before allocating resources", async () => {
+  const fake = new FakeComputer();
+  const coordinator = new NativeSubagentCoordinator(
+    fake as unknown as ComputerClient,
+    { signingKey: Buffer.alloc(32, 5) },
+  );
+
+  await assert.rejects(
+    coordinator.run(
+      {
+        task_id: "parent",
+        tasks: ["audit auth", "audit runtime"],
+        coding: true,
+        workspace_id: "ws-1",
+      },
+      context(undefined, undefined, new AbortController().signal, { sampling: {} }),
+      "GPT-5.6 Sol",
+    ),
+    /sampling\.tools/,
+  );
+  assert.equal(fake.spawnCalls, 0);
+  assert.equal(fake.workerCreates.length, 0);
+  coordinator.close();
+});
+
+test("native fan-out accepts legacy negotiated sampling tools when no per-request capability envelope exists", async () => {
+  const fake = new FakeComputer();
+  const coordinator = new NativeSubagentCoordinator(
+    fake as unknown as ComputerClient,
+    { signingKey: Buffer.alloc(32, 6) },
+  );
+  const legacyContext = context();
+  delete (legacyContext.mcpReq as { envelope?: unknown }).envelope;
+
+  const result = await coordinator.run(
+    {
+      task_id: "parent",
+      tasks: ["audit auth", "audit runtime"],
+    },
+    legacyContext,
+    "GPT-5.6 Sol",
+    { sampling: { tools: {} } },
+  );
+  assert.equal(isInputRequiredResult(result), true);
+  assert.equal(fake.spawnCalls, 1);
+  coordinator.close();
 });
 
 test("native fan-out batches ChatGPT sampling, is idempotent, and rejects truncation as success", async () => {
@@ -349,6 +424,75 @@ test("coding fan-out isolates workers, runs branches concurrently, and preserves
   assert.equal(final.completed, 2);
   assert.deepEqual(final.results.map((item: any) => item.worker_id), ["worker-1", "worker-2"]);
   assert.equal(final.dispatch.codingIsolation, "direct-coding-worker-per-branch");
+  assert.equal(final.cleanup.workerClosed, 2);
+  assert.equal(final.cleanup.workerPreserved, 0);
+  assert.deepEqual(
+    fake.workerCloses.map((item) => item.worker_id).sort(),
+    ["worker-1", "worker-2"],
+  );
+  coordinator.close();
+});
+
+test("coding cleanup preserves dirty unintegrated workers for parent review", async () => {
+  const fake = new FakeComputer();
+  const coordinator = new NativeSubagentCoordinator(
+    fake as unknown as ComputerClient,
+    { signingKey: Buffer.alloc(32, 10) },
+  );
+  const payload = {
+    task_id: "parent",
+    tasks: ["change parser", "inspect API"],
+    coding: true,
+    workspace_id: "ws-1",
+    idempotency_key: "dirty-preservation",
+  };
+  const first = await coordinator.run(payload, context(), "GPT-5.6 Sol");
+  const firstState = await decodedRetryState(
+    coordinator,
+    first as unknown as Record<string, unknown>,
+  );
+  fake.workerChanges.set("worker-1", 2);
+  const final = await coordinator.run(
+    payload,
+    context(firstState, {
+      "branch-1": samplingText("parser changed"),
+      "branch-2": samplingText("API inspected"),
+    }),
+    "GPT-5.6 Sol",
+  ) as Record<string, any>;
+
+  assert.equal(final.cleanup.workerAttempted, 2);
+  assert.equal(final.cleanup.workerClosed, 1);
+  assert.equal(final.cleanup.workerPreserved, 1);
+  assert.deepEqual(fake.workerCloses.map((item) => item.worker_id), ["worker-2"]);
+  coordinator.close();
+});
+
+test("partial coding initialization rolls back resources and permits a clean retry", async () => {
+  const fake = new FakeComputer();
+  const coordinator = new NativeSubagentCoordinator(
+    fake as unknown as ComputerClient,
+    { signingKey: Buffer.alloc(32, 12) },
+  );
+  const payload = {
+    task_id: "parent",
+    tasks: ["inspect parser", "inspect API"],
+    coding: true,
+    workspace_id: "ws-1",
+    idempotency_key: "partial-init",
+  };
+  fake.failWorkerCreateAt = 2;
+  await assert.rejects(
+    coordinator.run(payload, context(), "GPT-5.6 Sol"),
+    /simulated worker creation failure/,
+  );
+  assert.deepEqual(fake.archives.sort(), ["child-1", "child-2"]);
+  assert.deepEqual(fake.workerCloses.map((item) => item.worker_id), ["worker-1"]);
+
+  fake.failWorkerCreateAt = null;
+  const retry = await coordinator.run(payload, context(), "GPT-5.6 Sol");
+  assert.equal(isInputRequiredResult(retry), true);
+  assert.equal(fake.spawnCalls, 2, "failed initialization must release its idempotent state");
   coordinator.close();
 });
 
