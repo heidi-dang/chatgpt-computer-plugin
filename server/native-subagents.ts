@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import {
+  CLIENT_CAPABILITIES_META_KEY,
   createRequestStateCodec,
   inputRequired,
   inputResponse,
@@ -293,6 +294,26 @@ export class NativeSubagentCoordinator {
   readonly verifyRequestState = (state: string, ctx: ServerContext) =>
     this.stateCodec.verify(state, ctx);
 
+  private assertSamplingToolsCapability(
+    ctx: ServerContext,
+    negotiatedCapabilities?: Record<string, unknown>,
+  ): void {
+    const envelope = record(ctx.mcpReq.envelope);
+    const hasPerRequestCapabilities = Object.prototype.hasOwnProperty.call(
+      envelope,
+      CLIENT_CAPABILITIES_META_KEY,
+    );
+    const capabilities = hasPerRequestCapabilities
+      ? record(envelope[CLIENT_CAPABILITIES_META_KEY])
+      : record(negotiatedCapabilities);
+    const sampling = record(capabilities.sampling);
+    if (!("sampling" in capabilities) || !("tools" in sampling)) {
+      throw new Error(
+        "native ChatGPT subagent fan-out requires the MCP client capability sampling.tools before resources can be allocated",
+      );
+    }
+  }
+
   private normalize(
     payload: Record<string, unknown>,
     requestedModel: string | null,
@@ -413,15 +434,35 @@ export class NativeSubagentCoordinator {
     state: NativeSubagentState,
   ): Promise<NativeSubagentState> {
     const ids = state.branches.map((branch) => branch.taskId).filter(Boolean);
-    if (!ids.length) {
-      return {
-        ...state,
-        cleanup: { attempted: 0, released: 0, failed: 0 },
-      };
-    }
-    const settled = await Promise.allSettled(
-      ids.map((id) => this.client.archiveWorkbenchSession(id)),
+    const workers = state.branches.filter(
+      (branch) => branch.workspaceId && branch.workerId,
     );
+    const [settled, workerOutcomes] = await Promise.all([
+      Promise.allSettled(
+        ids.map((id) => this.client.archiveWorkbenchSession(id)),
+      ),
+      Promise.all(
+        workers.map(async (branch) => {
+          try {
+            const worker = await this.client.getDirectWorker({
+              workspace_id: branch.workspaceId!,
+              worker_id: branch.workerId!,
+            });
+            if (worker.changed_file_count > 0 && worker.integrated_at == null) {
+              return "preserved" as const;
+            }
+            await this.client.closeDirectWorker({
+              workspace_id: branch.workspaceId!,
+              worker_id: branch.workerId!,
+              discard_changes: false,
+            });
+            return "closed" as const;
+          } catch {
+            return "failed" as const;
+          }
+        }),
+      ),
+    ]);
     const released = settled.filter((item) => item.status === "fulfilled").length;
     return {
       ...state,
@@ -429,6 +470,10 @@ export class NativeSubagentCoordinator {
         attempted: ids.length,
         released,
         failed: ids.length - released,
+        workerAttempted: workers.length,
+        workerClosed: workerOutcomes.filter((item) => item === "closed").length,
+        workerPreserved: workerOutcomes.filter((item) => item === "preserved").length,
+        workerFailed: workerOutcomes.filter((item) => item === "failed").length,
       },
     };
   }
@@ -638,17 +683,35 @@ export class NativeSubagentCoordinator {
     }
 
     const workerIds: Array<string | null> = state.objectives.map(() => null);
-    if (state.coding && workspaceId) {
-      for (let index = 0; index < state.objectives.length; index += 1) {
-        const worker = await this.client.createDirectWorker({
-          workspace_id: workspaceId,
-          name: `Native ChatGPT Subagent ${String(index + 1).padStart(2, "0")}`,
-          responsibility: state.objectives[index].slice(0, 500),
-          repo_path: state.repoPath ?? ".",
-          idempotency_key: `${state.id}:branch-${index + 1}`,
-        });
-        workerIds[index] = worker.worker_id;
+    try {
+      if (state.coding && workspaceId) {
+        for (let index = 0; index < state.objectives.length; index += 1) {
+          const worker = await this.client.createDirectWorker({
+            workspace_id: workspaceId,
+            name: `Native ChatGPT Subagent ${String(index + 1).padStart(2, "0")}`,
+            responsibility: state.objectives[index].slice(0, 500),
+            repo_path: state.repoPath ?? ".",
+            idempotency_key: `${state.id}:branch-${index + 1}`,
+          });
+          workerIds[index] = worker.worker_id;
+        }
       }
+    } catch (error) {
+      await Promise.allSettled(
+        workerIds.flatMap((workerId) =>
+          workerId && workspaceId
+            ? [this.client.closeDirectWorker({
+                workspace_id: workspaceId,
+                worker_id: workerId,
+                discard_changes: false,
+              })]
+            : [],
+        ),
+      );
+      await Promise.allSettled(
+        childIds.map((id) => this.client.archiveWorkbenchSession(id)),
+      );
+      throw error;
     }
 
     return {
@@ -819,8 +882,10 @@ export class NativeSubagentCoordinator {
     payload: Record<string, unknown>,
     ctx: ServerContext,
     requestedModel: string | null,
+    negotiatedCapabilities?: Record<string, unknown>,
   ): Promise<Record<string, unknown> | InputRequiredResult> {
     const input = this.normalize(payload, requestedModel);
+    this.assertSamplingToolsCapability(ctx, negotiatedCapabilities);
     const stateRef = ctx.mcpReq.requestState<StateRef>();
     let state: NativeSubagentState;
 
@@ -870,12 +935,41 @@ export class NativeSubagentCoordinator {
     if (state.status === "terminal") return this.finalResult(state);
 
     if (!state.branches.length) {
-      const expectedVersion = state.version;
-      const initialized = await this.initialize(state);
-      state =
-        this.store.save(initialized, expectedVersion)
-        ?? this.store.get(state.id)
-        ?? initialized;
+      const claimed = this.store.claim(state.id, state.version);
+      if (!claimed) {
+        const latest = this.store.get(state.id);
+        if (!latest) {
+          throw new Error(
+            "native subagent fan-out state expired during initialization",
+          );
+        }
+        if (latest.status === "terminal") return this.finalResult(latest);
+        if (!latest.branches.length) {
+          throw new Error(
+            "native subagent fan-out initialization is already in progress; retry",
+          );
+        }
+        state = latest;
+      } else {
+        state = claimed;
+        let initialized: NativeSubagentState | null = null;
+        try {
+          initialized = await this.initialize(state);
+          const saved = this.store.save(initialized, state.version);
+          if (!saved) {
+            throw new Error(
+              "native subagent fan-out state changed during initialization",
+            );
+          }
+          state = saved;
+        } catch (error) {
+          if (initialized) {
+            await this.cleanupChildren(initialized);
+          }
+          this.store.remove(state.id, state.version);
+          throw error;
+        }
+      }
     }
 
     if (ctx.mcpReq.signal.aborted) {

@@ -3800,6 +3800,7 @@ export function createMcpServer(
               payload,
               ctx,
               clientModelContext.getStore() ?? null,
+              server.server.getClientCapabilities() as Record<string, unknown> | undefined,
             );
           case "start": return c.startFactoryRun(payload);
           case "status": return c.getFactoryRun(compactText(payload, "run_id"));
