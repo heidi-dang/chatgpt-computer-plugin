@@ -418,7 +418,7 @@ export class ComputerClient {
   }
 
   async capabilityOs(
-    action: "inspect" | "resolve" | "forge" | "execute" | "acquire" | "reflect",
+    action: "inspect" | "resolve" | "forge" | "execute" | "acquire" | "reflect" | "spawn_multiple_subagents",
     payload: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     switch (action) {
@@ -432,6 +432,11 @@ export class ComputerClient {
         if (payload.limit !== undefined) query.set("limit", String(payload.limit));
         return this.request(`/capability-os/inspect?${query}`);
       }
+      case "spawn_multiple_subagents":
+        return this.request("/capability-os/spawn-multiple-subagents", {
+          method: "POST",
+          body: payload,
+        });
       case "resolve":
       case "forge":
       case "execute":
@@ -605,6 +610,7 @@ export class ComputerClient {
     name: string;
     responsibility?: string;
     repo_path?: string;
+    idempotency_key?: string;
   }): Promise<DirectCodingWorker> {
     const { workspace_id, ...body } = input;
     return this.request(`/workspaces/${encodeURIComponent(workspace_id)}/coding/workers`, {

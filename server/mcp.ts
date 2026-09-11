@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { McpServer } from "@modelcontextprotocol/server";
+import { McpServer, isInputRequiredResult, type ServerContext } from "@modelcontextprotocol/server";
 import { ComputerApiError, ComputerClient } from "./client/computer-client.js";
 import { telemetryInputForTool } from "./browser-telemetry.js";
 import { McpActivityEmitter } from "./mcp-activity.js";
@@ -21,6 +21,7 @@ import {
 } from "./mcp-traffic.js";
 import { LiveTicketStore, type LiveTarget } from "./live-tickets.js";
 import { PromptTerminalStore } from "./prompt-terminal.js";
+import { NativeSubagentCoordinator } from "./native-subagents.js";
 import { WORKBENCH_RESOURCE_URI, createWorkbenchResource } from "./ui/workbench-resource.js";
 import { z } from "zod";
 import {
@@ -632,6 +633,7 @@ const COMPACT_CAPABILITY_OS_ACTIONS = new Set([
   "execute",
   "acquire",
   "reflect",
+  "spawn_multiple_subagents",
 ]);
 
 const COMPACT_BACKEND_WORKBENCH_ROUTE_ACTIONS: Readonly<Record<string, ReadonlySet<string>>> = {
@@ -752,6 +754,7 @@ export function createMcpServer(
     traffic?: McpTrafficEmitter;
     activityTelemetry?: McpActivityEmitter;
     diagnostics?: McpDiagnosticsEmitter;
+    nativeSubagents?: NativeSubagentCoordinator;
     toolSurface?: McpToolSurface;
   } = {},
 ): McpServer {
@@ -761,7 +764,15 @@ export function createMcpServer(
   let delegatedToolCount = 0;
   const server = new McpServer(
     { name: "chatgpt-computer-plugin", version: MCP_CONTRACT_VERSION },
-    { instructions: MCP_SERVER_INSTRUCTIONS },
+    {
+      instructions: MCP_SERVER_INSTRUCTIONS,
+      ...(options.nativeSubagents
+        ? {
+            inputRequired: { maxRounds: 8, roundTimeoutMs: 10 * 60_000 },
+            requestState: { verify: options.nativeSubagents.verifyRequestState },
+          }
+        : {}),
+    },
   );
   const tickets = options.tickets ?? new LiveTicketStore();
   const promptSessions = options.promptSessions ?? new PromptTerminalStore();
@@ -1165,6 +1176,10 @@ export function createMcpServer(
             async () => handler(...(args.length ? [input, ...args.slice(1)] : args)),
           );
           const activityDurationMs = Date.now() - trafficStartedAt;
+          if (isInputRequiredResult(value)) {
+            options.traffic?.toolFinished(name, trafficContext, activityDurationMs);
+            return value as never;
+          }
           const terminalValue = terminalToolResult(value);
           await applyTrafficIdentity(trafficContext, name, input, normalizedModel.reported, terminalValue);
           activityClient = trafficContext?.client ?? activityClient;
@@ -3447,12 +3462,24 @@ export function createMcpServer(
       owner_approval_id: z.string().optional(),
       experiment: z.record(z.string(), z.unknown()).optional(),
       workspace_id: z.string().min(1).optional(),
+      coding: z.boolean().optional().describe(
+        "For spawn_multiple_subagents, attach one isolated CPTR Direct Coding Worker per ChatGPT continuation. Maximum 8 coding branches.",
+      ),
+      repo_path: z.string().min(1).max(1_000).optional().describe(
+        "Workspace-relative Git repository used for coding fan-out. Defaults to '.'.",
+      ),
       mission: z.string().min(1).optional(),
       acceptance_criteria: z.array(z.string()).optional(),
       policy: z.record(z.string(), z.unknown()).optional(),
       budget: z.record(z.string(), z.unknown()).optional(),
       model_id: z.string().optional(),
-      idempotency_key: z.string().optional(),
+      idempotency_key: z.string().max(200).optional(),
+      tasks: z.array(z.string().min(1).max(20_000)).min(2).max(10).optional().describe(
+        "Native ChatGPT subagent objectives for spawn_multiple_subagents.",
+      ),
+      max_tokens: z.number().int().min(128).max(4_096).optional().describe(
+        "Maximum generated tokens per native subagent sampling turn. Default: 2048; maximum: 4096.",
+      ),
       run_id: z.string().min(1).optional(),
       cursor: z.string().optional(),
       content: z.string().optional(),
@@ -3473,7 +3500,7 @@ export function createMcpServer(
       cptr_command: "run(workspace_id,command,cwd?,wait_seconds?,allow_network?,allow_package_install?,pty?,worker_id?; when the root prompt guard is enabled, explicit root requires current-prompt root_authorization='use root' on cptr_open_live_workbench; first command line '# cptr-root: use root', optional next line '# cptr-root-ttl-seconds: <seconds>', same Workbench session inherits, '# cptr-root: revoke' revokes; host root enablement, command:external, allow_network and dedicated SSH remain independent), status(workspace_id,command_id,offset?,wait_seconds?,worker_id?), cancel(workspace_id,command_id,worker_id?), input(workspace_id,command_id,data,worker_id?), resize(workspace_id,command_id,rows,cols,worker_id?), signal(workspace_id,command_id,signal,worker_id?), run_test(workspace_id,target,path?,test_path?,worker_id?)",
       cptr_worker: "create(workspace_id,name,responsibility?,repo_path?), list(workspace_id), get(workspace_id,worker_id), overview(workspace_id), integrate(workspace_id,worker_ids), close(workspace_id,worker_id,discard_changes?)",
       cptr_ssh: "list_hosts(workspace_id), run(workspace_id,alias,command,wait_seconds?), status(workspace_id,command_id,offset?,wait_seconds?), cancel(workspace_id,command_id)",
-      cptr_factory: "Capability OS kernel: cptr_open_live_workbench is the task bootstrap; omitted task_id defaults to the current authoritative Workbench session and an explicit owned task_id is preserved. inspect(task_id?,artifact_digest?,limit?), resolve(task_id?,required,optional?,forbidden?), forge(task_id?,operation,payload) where payload.contentDigest is the content-addressed Tool identity for lifecycle operations, execute(task_id?,capability_digest,lease_id?,spec?,inputs?,approval_id?) where capability_digest is the Capability artifact content digest, acquire(task_id?,operation,payload) including invoke with payload.mountId, payload.tool, payload.inputs?, payload.timeoutMs?, payload.leaseId?, payload.approvalId?, reflect(task_id?,kind,claims,artifact_digest?,lease_id?,comparison?,change_class?,promotion_target_state?,owner_approval_id?). Dark Factory compatibility: start(workspace_id,mission,acceptance_criteria,policy,budget?,model_id?,idempotency_key?), status(run_id), events(run_id,cursor?,limit?), evidence(run_id,cursor?,limit?), message(run_id,content,idempotency_key?), pause(run_id,idempotency_key), resume(run_id,idempotency_key), approve(run_id,approval_id,approved,note?,idempotency_key?), stop(run_id,idempotency_key,timeout_ms?)",
+      cptr_factory: "Capability OS kernel: cptr_open_live_workbench is the task bootstrap; omitted task_id defaults to the current authoritative Workbench session and an explicit owned task_id is preserved. inspect(task_id?,artifact_digest?,limit?), resolve(task_id?,required,optional?,forbidden?), forge(task_id?,operation,payload) where payload.contentDigest is the content-addressed Tool identity for lifecycle operations, execute(task_id?,capability_digest,lease_id?,spec?,inputs?,approval_id?) where capability_digest is the Capability artifact content digest, acquire(task_id?,operation,payload) including invoke with payload.mountId, payload.tool, payload.inputs?, payload.timeoutMs?, payload.leaseId?, payload.approvalId?, reflect(task_id?,kind,claims,artifact_digest?,lease_id?,comparison?,change_class?,promotion_target_state?,owner_approval_id?), spawn_multiple_subagents(task_id?,tasks,coding?,workspace_id?,repo_path?,max_tokens?,idempotency_key?) creates 2-10 isolated native ChatGPT client-sampling continuations without CPTR delegated agents; coding=true attaches up to 8 model-free Direct Coding Worker worktrees. Dark Factory compatibility: start(workspace_id,mission,acceptance_criteria,policy,budget?,model_id?,idempotency_key?), status(run_id), events(run_id,cursor?,limit?), evidence(run_id,cursor?,limit?), message(run_id,content,idempotency_key?), pause(run_id,idempotency_key), resume(run_id,idempotency_key), approve(run_id,approval_id,approved,note?,idempotency_key?), stop(run_id,idempotency_key,timeout_ms?)",
       cptr_benchmark: "start(suite_id?), submit(run_id), get(run_id), leaderboard(suite_id?)",
       cptr_agent_task: "models(), list(workspace_id?,status?,limit?), start(workspace_id,prompt,model_id?,execution_policy?), execute(workspace_id,prompt,model_id?,wait_seconds?,execution_policy?), events(task_id,after_sequence?,max_events?), get(task_id), output(task_id,offset?,max_chars?), review(task_id,max_diff_bytes?), review_decision(task_id,decision,note?,idempotency_key?), message(task_id,content,idempotency_key?), cancel(task_id)",
       cptr_agent_monitor: "list(workspace_id?,status?,limit?), start(workspace_id,goal,acceptance_criteria,model_id?,execution_policy?), get(monitor_id), events(monitor_id,after_sequence?,max_events?), evidence(monitor_id,scope_id?), steer(monitor_id,content,idempotency_key?), approve(monitor_id,approval_id,approved,note?), cancel(monitor_id)",
@@ -3519,7 +3546,7 @@ export function createMcpServer(
       title: string,
       actions: readonly string[],
       annotations: { readOnlyHint: boolean; destructiveHint: boolean; openWorldHint: boolean },
-      handler: (action: string, payload: Record<string, any>) => Promise<unknown>,
+      handler: (action: string, payload: Record<string, any>, ctx: ServerContext) => Promise<unknown>,
       meta: Record<string, unknown> = oauthToolMetadata,
       resultAdapter?: (
         action: string,
@@ -3530,9 +3557,10 @@ export function createMcpServer(
     ) => registerCompactTool(
       name as never,
       compactConfig(name, title, actions, annotations, meta) as never,
-      (async (input: { action: string; payload?: Record<string, unknown> }) => {
+      (async (input: { action: string; payload?: Record<string, unknown> }, ctx: ServerContext) => {
         const payload = compactPayload(input);
-        const value = await handler(input.action, payload);
+        const value = await handler(input.action, payload, ctx);
+        if (isInputRequiredResult(value)) return value;
         const wrapped = { action: input.action, result: value };
         return resultAdapter
           ? resultAdapter(input.action, payload, value, wrapped)
@@ -3753,9 +3781,9 @@ export function createMcpServer(
     registerCompactDomain(
       "cptr_factory",
       "Operate the CPTR Capability OS and Dark Factory compatibility surface",
-      ["inspect", "resolve", "forge", "execute", "acquire", "reflect", "start", "status", "events", "evidence", "message", "pause", "resume", "approve", "stop"],
+      ["inspect", "resolve", "forge", "execute", "acquire", "reflect", "spawn_multiple_subagents", "start", "status", "events", "evidence", "message", "pause", "resume", "approve", "stop"],
       { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
-      async (action, payload) => {
+      async (action, payload, ctx) => {
         switch (action) {
           case "inspect":
           case "resolve":
@@ -3764,6 +3792,15 @@ export function createMcpServer(
           case "acquire":
           case "reflect":
             return c.capabilityOs(action, payload);
+          case "spawn_multiple_subagents":
+            if (!options.nativeSubagents) {
+              throw new Error("native ChatGPT subagent sampling is unavailable");
+            }
+            return options.nativeSubagents.run(
+              payload,
+              ctx,
+              clientModelContext.getStore() ?? null,
+            );
           case "start": return c.startFactoryRun(payload);
           case "status": return c.getFactoryRun(compactText(payload, "run_id"));
           case "events": return c.getFactoryEvents(payload);
