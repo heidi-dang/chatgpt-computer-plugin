@@ -1073,8 +1073,10 @@ test("mounts exactly one prompt terminal through open and keeps later target bin
   if (startedEvent?.type === "mcp.tool") {
     assert.match(startedEvent.payload.arguments_json ?? "", /\"workspace_id\": \"ws-1\"/);
     assert.match(startedEvent.payload.arguments_json ?? "", /\"model_id\": \"provider\/model-1\"/);
-    assert.match(startedEvent.payload.arguments_json ?? "", /Bearer \[REDACTED\]/);
-    assert.equal((startedEvent.payload.arguments_json ?? "").includes("top-secret-value"), false);
+    const argumentsJson = startedEvent.payload.arguments_json ?? "";
+    assert.match(argumentsJson, /REDACTED_ACTIVITY_INPUT/);
+    assert.equal(argumentsJson.includes("Bearer"), false);
+    assert.equal(argumentsJson.includes("top-secret-value"), false);
   }
   if (completedEvent?.type === "mcp.tool") {
     assert.match(completedEvent.payload.result_json ?? "", /\"id\": \"task-1\"/);

@@ -8,10 +8,18 @@ import {
   isAllowedOAuthConsentOrigin,
   isAllowedWorkbenchBrowserOrigin,
   mcpCorsHeaders,
+  requestLogTarget,
   resolveAllowedOrigins,
   resolvePublicOrigin,
   workbenchCorsHeaders,
 } from "../server/http-security.js";
+
+test("request logging strips OAuth tickets and all query or fragment data", () => {
+  assert.equal(requestLogTarget("/oauth/login?ticket=signed-secret&state=opaque"), "/oauth/login");
+  assert.equal(requestLogTarget("/mcp?authorization=Bearer%20secret#fragment"), "/mcp");
+  assert.equal(requestLogTarget("/health"), "/health");
+  assert.equal(requestLogTarget(undefined), "/");
+});
 
 test("requires explicit public and browser origins in production", () => {
   assert.throws(() => resolvePublicOrigin({ NODE_ENV: "production" }, "127.0.0.1", 8787), /PUBLIC_ORIGIN/);

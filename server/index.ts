@@ -79,6 +79,7 @@ import {
   isAllowedOAuthConsentOrigin,
   isAllowedWorkbenchBrowserOrigin,
   mcpCorsHeaders,
+  requestLogTarget,
   resolveAllowedOrigins,
   resolvePublicOrigin,
   workbenchCorsHeaders,
@@ -195,6 +196,24 @@ const nativeSubagents = new NativeSubagentCoordinator(client, {
         .digest()
     : undefined,
 });
+
+function reconcileExpiredNativeSubagents(): void {
+  void nativeSubagents.reconcileExpired().then((result) => {
+    if (!result.examined) return;
+    console.log(
+      `Native subagent reconciliation: examined=${result.examined} removed=${result.removed} retained=${result.retained} workers_closed=${result.workerClosed} workers_preserved=${result.workerPreserved} workers_failed=${result.workerFailed}`,
+    );
+  }).catch(() => {
+    console.warn("Native subagent reconciliation failed");
+  });
+}
+
+reconcileExpiredNativeSubagents();
+const nativeSubagentReconciler = setInterval(
+  reconcileExpiredNativeSubagents,
+  60_000,
+);
+nativeSubagentReconciler.unref();
 const mcpDiagnostics = new McpDiagnosticsEmitter({
   deliver: (events) => client.ingestMcpDiagnostics(events),
 });
@@ -1036,7 +1055,7 @@ const httpServer = createServer(async (req, res) => {
   const ua = req.headers["user-agent"];
   const ip = req.headers["cf-connecting-ip"] || req.socket.remoteAddress;
   console.log(
-    `[${new Date().toISOString()}] ${req.method} ${req.url} - UA: ${ua} - IP: ${ip}`,
+    `[${new Date().toISOString()}] ${req.method} ${requestLogTarget(req.url)} - UA: ${ua} - IP: ${ip}`,
   );
   const requestStartedAt = Date.now();
   const url = new URL(
@@ -1639,12 +1658,16 @@ sessionPruner.unref();
 async function shutdown(signal: string) {
   console.log(`Shutting down ChatGPT Computer MCP server (${signal})`);
   clearInterval(sessionPruner);
+  clearInterval(nativeSubagentReconciler);
   await Promise.all(
     [...mcpSessions.keys()].map((sessionId) => closeMcpSession(sessionId)),
   );
   await modernMcpHandler.close().catch(() => undefined);
   liveTickets.close();
   promptSessions.close();
+  await nativeSubagents.waitForReconciliation().catch(() => {
+    console.warn("Native subagent reconciliation did not finish before shutdown");
+  });
   nativeSubagents.close();
   nativeOAuthServer?.close();
   const telemetryDeadline = new Promise<void>((resolve) => {

@@ -219,6 +219,122 @@ test("native subagent state survives a store reopen", () => {
   assert.equal(recovered?.requestedModel, "GPT-5.6 Sol");
 });
 
+test("expired native state remains recoverable for cleanup while normal lookup permits a fresh idempotent retry", () => {
+  const root = mkdtempSync(join(tmpdir(), "cptr-native-subagents-expired-"));
+  const path = join(root, "state.sqlite");
+  let now = 1;
+  const store = new NativeSubagentStateStore(path, {
+    now: () => now,
+    ttlMs: 60_000,
+  });
+  const input: NewNativeSubagentState = {
+    status: "running",
+    parentTaskId: "parent",
+    fingerprint: "expired-fingerprint",
+    idempotencyKey: "reusable-key",
+    objectives: ["one", "two"],
+    maxTokens: 2048,
+    requestedModel: "GPT-5.6 Sol",
+    coding: false,
+    workspaceId: null,
+    repoPath: null,
+    task: null,
+    dispatch: null,
+    branches: [],
+    processingUntil: null,
+    cleanup: null,
+  };
+  const expired = store.begin(input).state;
+  now = 70_000;
+
+  assert.equal(store.get(expired.id), null);
+  assert.deepEqual(store.listExpired().map((state) => state.id), [expired.id]);
+
+  const retry = store.begin({ ...input, fingerprint: "retry-fingerprint" });
+  assert.equal(retry.created, true);
+  assert.notEqual(retry.state.id, expired.id);
+  assert.equal(store.deleteExpired(expired.id, expired.version), true);
+  assert.equal(store.listExpired().length, 0);
+
+  store.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("expired fan-out reconciliation closes clean workers and preserves dirty work", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cptr-native-subagents-reconcile-"));
+  const path = join(root, "state.sqlite");
+  const makeState = (
+    suffix: string,
+    workerId: string,
+  ): NewNativeSubagentState => ({
+    status: "running",
+    parentTaskId: `parent-${suffix}`,
+    fingerprint: `fingerprint-${suffix}`,
+    idempotencyKey: `idempotency-${suffix}`,
+    objectives: [`objective-${suffix}`],
+    maxTokens: 2048,
+    requestedModel: "GPT-5.6 Sol",
+    coding: true,
+    workspaceId: "ws-1",
+    repoPath: ".",
+    task: null,
+    dispatch: null,
+    branches: [{
+      key: "branch-1",
+      index: 0,
+      taskId: `child-${suffix}`,
+      workspaceId: "ws-1",
+      workerId,
+      objective: `objective-${suffix}`,
+      status: "pending",
+      rounds: 0,
+      toolCalls: 0,
+      messages: [],
+      output: "",
+      error: "",
+      model: null,
+    }],
+    processingUntil: null,
+    cleanup: null,
+  });
+  const store = new NativeSubagentStateStore(path, {
+    now: () => 1,
+    ttlMs: 60_000,
+  });
+  store.begin(makeState("clean", "worker-clean"));
+  store.begin(makeState("dirty", "worker-dirty"));
+  store.close();
+
+  const fake = new FakeComputer();
+  fake.workerChanges.set("worker-dirty", 2);
+  const coordinator = new NativeSubagentCoordinator(
+    fake as unknown as ComputerClient,
+    {
+      stateDbPath: path,
+      signingKey: Buffer.alloc(32, 4),
+      ttlMs: 60_000,
+    },
+  );
+  const result = await coordinator.reconcileExpired();
+
+  assert.deepEqual(result, {
+    examined: 2,
+    removed: 2,
+    retained: 0,
+    workerClosed: 1,
+    workerPreserved: 1,
+    workerFailed: 0,
+  });
+  assert.deepEqual(fake.archives.sort(), ["child-clean", "child-dirty"]);
+  assert.deepEqual(fake.workerCloses.map((item) => item.worker_id), ["worker-clean"]);
+  coordinator.close();
+
+  const reopened = new NativeSubagentStateStore(path);
+  assert.equal(reopened.listExpired().length, 0);
+  reopened.close();
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("native fan-out rejects clients without sampling tools before allocating resources", async () => {
   const cases = [
     {
