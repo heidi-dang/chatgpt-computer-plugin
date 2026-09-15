@@ -9,7 +9,7 @@ import {
   type ServerContext,
   type Tool,
 } from "@modelcontextprotocol/server";
-import type { ComputerClient } from "./client/computer-client.js";
+import { ComputerApiError, type ComputerClient } from "./client/computer-client.js";
 import {
   NativeSubagentStateStore,
   type NativeSubagentBranch,
@@ -42,6 +42,15 @@ type NormalizedSpawn = {
   workspaceId: string | null;
   repoPath: string | null;
   fingerprint: string;
+};
+
+export type NativeSubagentReconcileResult = {
+  examined: number;
+  removed: number;
+  retained: number;
+  workerClosed: number;
+  workerPreserved: number;
+  workerFailed: number;
 };
 
 function record(value: unknown): Record<string, unknown> {
@@ -263,6 +272,7 @@ export class NativeSubagentCoordinator {
   private readonly client: ComputerClient;
   private readonly store: NativeSubagentStateStore;
   private readonly stateCodec;
+  private reconcilePromise: Promise<NativeSubagentReconcileResult> | null = null;
 
   constructor(
     client: ComputerClient,
@@ -290,6 +300,48 @@ export class NativeSubagentCoordinator {
 
   close(): void {
     this.store.close();
+  }
+
+  async waitForReconciliation(): Promise<void> {
+    await this.reconcilePromise;
+  }
+
+  reconcileExpired(limit = 100): Promise<NativeSubagentReconcileResult> {
+    if (this.reconcilePromise) return this.reconcilePromise;
+    const pending = this.reconcileExpiredBatch(limit).finally(() => {
+      if (this.reconcilePromise === pending) this.reconcilePromise = null;
+    });
+    this.reconcilePromise = pending;
+    return pending;
+  }
+
+  private async reconcileExpiredBatch(
+    limit: number,
+  ): Promise<NativeSubagentReconcileResult> {
+    const states = this.store.listExpired(limit);
+    const totals: NativeSubagentReconcileResult = {
+      examined: states.length,
+      removed: 0,
+      retained: 0,
+      workerClosed: 0,
+      workerPreserved: 0,
+      workerFailed: 0,
+    };
+    for (const state of states) {
+      const cleaned = await this.cleanupChildren(state);
+      totals.workerClosed += cleaned.cleanup?.workerClosed ?? 0;
+      totals.workerPreserved += cleaned.cleanup?.workerPreserved ?? 0;
+      totals.workerFailed += cleaned.cleanup?.workerFailed ?? 0;
+      const failed =
+        (cleaned.cleanup?.failed ?? 0) + (cleaned.cleanup?.workerFailed ?? 0);
+      if (failed > 0) {
+        totals.retained += 1;
+        continue;
+      }
+      if (this.store.deleteExpired(state.id, state.version)) totals.removed += 1;
+      else totals.retained += 1;
+    }
+    return totals;
   }
 
   readonly verifyRequestState = (state: string, ctx: ServerContext) =>
@@ -440,9 +492,22 @@ export class NativeSubagentCoordinator {
     const workers = state.branches.filter(
       (branch) => branch.workspaceId && branch.workerId,
     );
-    const [settled, workerOutcomes] = await Promise.all([
-      Promise.allSettled(
-        ids.map((id) => this.client.archiveWorkbenchSession(id)),
+    const [childOutcomes, workerOutcomes] = await Promise.all([
+      Promise.all(
+        ids.map(async (id) => {
+          try {
+            await this.client.archiveWorkbenchSession(id);
+            return "released" as const;
+          } catch (error) {
+            if (
+              error instanceof ComputerApiError
+              && (error.status === 404 || error.status === 410)
+            ) {
+              return "released" as const;
+            }
+            return "failed" as const;
+          }
+        }),
       ),
       Promise.all(
         workers.map(async (branch) => {
@@ -460,13 +525,19 @@ export class NativeSubagentCoordinator {
               discard_changes: false,
             });
             return "closed" as const;
-          } catch {
+          } catch (error) {
+            if (
+              error instanceof ComputerApiError
+              && (error.status === 404 || error.status === 410)
+            ) {
+              return "closed" as const;
+            }
             return "failed" as const;
           }
         }),
       ),
     ]);
-    const released = settled.filter((item) => item.status === "fulfilled").length;
+    const released = childOutcomes.filter((item) => item === "released").length;
     return {
       ...state,
       cleanup: {

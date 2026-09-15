@@ -1,34 +1,47 @@
+const SENSITIVE_ACTIVITY_KEY =
+  /(?:^|_)(?:authorization|token|secret|password|passwd|credential|cookie|api[_-]?key|access[_-]?key|identityfile)(?:$|_)|^(?:content|command|stdin|data|prompt|goal|mission|expression|text|value|replacement|target|files|inputs|acceptance_criteria|note|query|pairing_code)$/i;
+
+function redactionLabel(toolName: string, key: string): string {
+  if (key === "pairing_code") return "[REDACTED_PAIRING_CODE]";
+  if (toolName === "cptr_user_chrome" && key === "expression") {
+    return "[REDACTED_BROWSER_EXPRESSION]";
+  }
+  if (
+    toolName === "cptr_user_chrome"
+    && /^(?:text|expression|value|password|prompt_text|approval_token)$/i.test(key)
+  ) {
+    return "[REDACTED_BROWSER_INPUT]";
+  }
+  if (toolName === "cptr_code" && key === "secret") {
+    return "[REDACTED_SECRET_INPUT]";
+  }
+  return "[REDACTED_ACTIVITY_INPUT]";
+}
+
+function projectActivityValue(
+  toolName: string,
+  value: unknown,
+  depth = 0,
+): unknown {
+  if (depth >= 6) return "[REDACTED_ACTIVITY_DEPTH]";
+  if (Array.isArray(value)) {
+    return value.slice(0, 100).map((entry) =>
+      projectActivityValue(toolName, entry, depth + 1)
+    );
+  }
+  if (!value || typeof value !== "object") return value;
+
+  const projected: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 100)) {
+    if (SENSITIVE_ACTIVITY_KEY.test(key)) {
+      projected[key] = redactionLabel(toolName, key);
+      continue;
+    }
+    projected[key] = projectActivityValue(toolName, item, depth + 1);
+  }
+  return projected;
+}
+
 export function telemetryInputForTool(toolName: string, value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
-  const input = value as Record<string, unknown>;
-  if (toolName === "cptr_code" && input.action === "materialize_secret") {
-    const safe: Record<string, unknown> = { ...input };
-    const payload = input.payload;
-    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-      const projected = { ...(payload as Record<string, unknown>) };
-      if (Object.prototype.hasOwnProperty.call(projected, "secret")) {
-        projected.secret = "[REDACTED_SECRET_INPUT]";
-      }
-      safe.payload = projected;
-    }
-    return safe;
-  }
-  if (toolName !== "cptr_user_chrome") return value;
-  const safe: Record<string, unknown> = { ...input };
-  if (typeof safe.pairing_code === "string") safe.pairing_code = "[REDACTED_PAIRING_CODE]";
-  if (typeof safe.expression === "string") safe.expression = "[REDACTED_BROWSER_EXPRESSION]";
-  const payload = input.payload;
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const source = payload as Record<string, unknown>;
-    const projected: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(source).slice(0, 100)) {
-      if (/^(?:text|expression|value|password|prompt_text|approval_token)$/i.test(key)) {
-        projected[key] = "[REDACTED_BROWSER_INPUT]";
-      } else {
-        projected[key] = item;
-      }
-    }
-    safe.payload = projected;
-  }
-  return safe;
+  return projectActivityValue(toolName, value);
 }

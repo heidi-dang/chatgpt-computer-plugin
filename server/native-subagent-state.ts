@@ -105,8 +105,9 @@ export class NativeSubagentStateStore {
       );
       CREATE INDEX IF NOT EXISTS native_subagent_fanouts_pending
         ON native_subagent_fanouts(parent_task_id, fingerprint, status, expires_at);
-      CREATE UNIQUE INDEX IF NOT EXISTS native_subagent_fanouts_idempotency
-        ON native_subagent_fanouts(parent_task_id, idempotency_key)
+      DROP INDEX IF EXISTS native_subagent_fanouts_idempotency;
+      CREATE INDEX IF NOT EXISTS native_subagent_fanouts_idempotency_lookup
+        ON native_subagent_fanouts(parent_task_id, idempotency_key, expires_at)
         WHERE idempotency_key IS NOT NULL;
     `);
     this.now = options.now ?? Date.now;
@@ -117,8 +118,30 @@ export class NativeSubagentStateStore {
     this.db.close();
   }
 
-  private prune(now = this.now()): void {
-    this.db.prepare("DELETE FROM native_subagent_fanouts WHERE expires_at <= ?").run(now);
+  listExpired(limit = 100, now = this.now()): NativeSubagentState[] {
+    const boundedLimit = Math.max(1, Math.min(1_000, Math.floor(limit)));
+    const rows = this.db.prepare(`
+      SELECT state_json, version, processing_until
+      FROM native_subagent_fanouts
+      WHERE expires_at <= ?
+      ORDER BY expires_at ASC
+      LIMIT ?
+    `).all(now, boundedLimit) as StoredRow[];
+    return rows
+      .map((row) => this.parse(row))
+      .filter((state): state is NativeSubagentState => state !== null);
+  }
+
+  deleteExpired(
+    id: string,
+    expectedVersion: number,
+    now = this.now(),
+  ): boolean {
+    const changed = this.db.prepare(`
+      DELETE FROM native_subagent_fanouts
+      WHERE id = ? AND version = ? AND expires_at <= ?
+    `).run(id, expectedVersion, now);
+    return Number(changed.changes) === 1;
   }
 
   private parse(row: StoredRow | undefined): NativeSubagentState | null {
@@ -136,7 +159,6 @@ export class NativeSubagentStateStore {
 
   get(id: string): NativeSubagentState | null {
     const now = this.now();
-    this.prune(now);
     return this.parse(this.db.prepare(`
       SELECT state_json, version, processing_until
       FROM native_subagent_fanouts
@@ -149,7 +171,6 @@ export class NativeSubagentStateStore {
     created: boolean;
   } {
     const now = this.now();
-    this.prune(now);
     this.db.exec("BEGIN IMMEDIATE");
     try {
       const existing = input.idempotencyKey

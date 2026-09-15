@@ -40,6 +40,20 @@ function normalizedAllowedOrigin(value: string, name: string): string {
   return normalizedHttpOrigin(trimmed, name);
 }
 
+export function requestLogTarget(requestUrl: string | undefined): string {
+  const raw = requestUrl ?? "/";
+  try {
+    return new URL(raw, "http://localhost").pathname;
+  } catch {
+    const queryIndex = raw.indexOf("?");
+    const fragmentIndex = raw.indexOf("#");
+    const cutAt = [queryIndex, fragmentIndex]
+      .filter((index) => index >= 0)
+      .reduce((minimum, index) => Math.min(minimum, index), raw.length);
+    return raw.slice(0, cutAt) || "/";
+  }
+}
+
 export function resolvePublicOrigin(env: Environment, host: string, port: number): string {
   const configured = env.PUBLIC_ORIGIN?.trim();
   if (configured) {
