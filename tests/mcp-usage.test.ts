@@ -38,6 +38,8 @@ test("MCP server asks ChatGPT to report the current model on every CPTR call", a
   assert.match(instructions, /every CPTR/i);
   assert.match(instructions, /client_model/);
   assert.match(instructions, /omit .* rather than guessing/i);
+  assert.match(instructions, /GPT-6/);
+  assert.match(instructions, /diagnostics only and never grants permissions/);
 
   const listed = await client.listTools();
   assert.ok(listed.tools.length > 0);
@@ -104,6 +106,13 @@ test("reported model normalization is exact and never fuzzy-prices unknown names
     reported: "GPT-5.6 Sol",
     canonical: "gpt-5.6-sol",
   });
+  for (const model of ["GPT-6", "gpt-6", "gpt_6", " GPT 6 "]) {
+    assert.equal(normalize(model).canonical, "gpt-6", `normalization of ${model}`);
+  }
+  assert.deepEqual(normalize("GPT-6"), { reported: "GPT-6", canonical: "gpt-6" });
+  for (const unknown of ["GPT-6.1", "GPT-6 Pro", "unverified-gpt-6", "GPT-6-custom"]) {
+    assert.equal(normalize(unknown).canonical, null, `unknown variants must not be guessed: ${unknown}`);
+  }
   assert.equal(normalize("gpt-5.6").canonical, "gpt-5.6-sol");
   assert.equal(normalize("GPT-5.6 Sol Pro").canonical, "gpt-5.6-sol-pro");
   assert.equal(normalize("GPT-5.6 Terra").canonical, "gpt-5.6-terra");
@@ -128,6 +137,11 @@ test("MCP-visible token estimation is deterministic and discloses byte fallback"
   assert.deepEqual(first, second);
   assert.ok(first.tokens > 0);
   assert.equal(first.exact_for_model, false);
+  const current = estimate("gpt-6", envelope);
+  assert.ok(current.tokens > 0);
+  if (current.method.includes("fallback")) {
+    assert.equal(current.exact_for_model, false, "fallback encodings must not be treated as exact GPT-6 accounting");
+  }
 
   const previousMaxExactBytes = process.env.CPTR_MCP_USAGE_MAX_EXACT_BYTES;
   delete process.env.CPTR_MCP_USAGE_MAX_EXACT_BYTES;
@@ -208,7 +222,7 @@ test("one terminal Usage event counts original tool arguments but Activity stays
   const originalArguments = {
     workspace_id: "workspace-1",
     path: "README.md",
-    client_model: "GPT-5.6 Sol",
+    client_model: "GPT-6",
   };
   const callResult = await mcpRequestContext.run({
     requestId: "request-usage",
@@ -230,8 +244,8 @@ test("one terminal Usage event counts original tool arguments but Activity stays
 
   const usage = diagnostics.filter((event) => event.kind === "usage");
   assert.equal(usage.length, 1);
-  assert.equal(usage[0].model_reported, "GPT-5.6 Sol");
-  assert.equal(usage[0].model_canonical, "gpt-5.6-sol");
+  assert.equal(usage[0].model_reported, "GPT-6");
+  assert.equal(usage[0].model_canonical, "gpt-6");
   const estimate = usageModule.estimateModelTokens as (
     modelId: string | null,
     text: string,
@@ -239,10 +253,10 @@ test("one terminal Usage event counts original tool arguments but Activity stays
   const callEnvelope = usageModule.canonicalToolCallEnvelope as (name: string, args: unknown) => string;
   const resultEnvelope = usageModule.canonicalMcpResultEnvelope as (value: unknown) => string;
   const expectedOutput = estimate(
-    "gpt-5.6-sol",
+    "gpt-6",
     callEnvelope("cptr_code_read_file", originalArguments),
   );
-  const expectedInput = estimate("gpt-5.6-sol", resultEnvelope(callResult));
+  const expectedInput = estimate("gpt-6", resultEnvelope(callResult));
   assert.equal(
     usage[0].input_tokens_estimated,
     expectedInput.tokens,

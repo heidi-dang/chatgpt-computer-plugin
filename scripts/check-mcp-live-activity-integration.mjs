@@ -357,7 +357,7 @@ try {
 
   const call = await successClient.client.callTool({
     name: toolName,
-    arguments: { client_model: "GPT-5.6 Sol" },
+    arguments: { client_model: "GPT-6" },
   });
   assert.notEqual(call.isError, true, "real MCP tool call must succeed");
 
@@ -426,13 +426,13 @@ try {
     (event) => event.kind === "usage" && event.tool_name === toolName,
   );
   assert.equal(usage.length, 1, "the correlated tool call must emit exactly one Usage diagnostic");
-  assert.equal(usage[0].model_reported, "GPT-5.6 Sol");
-  assert.equal(usage[0].model_canonical, "gpt-5.6-sol");
+  assert.equal(usage[0].model_reported, "GPT-6");
+  assert.equal(usage[0].model_canonical, "gpt-6");
   assert.equal(usage[0].model_source, "self_reported");
   assert.ok(usage[0].input_tokens_estimated > 0);
   assert.ok(usage[0].output_tokens_estimated > 0);
   const expectedRawOutputEnvelope =
-    '{"arguments":{"client_model":"GPT-5.6 Sol"},"name":"cptr_list_workspaces"}';
+    '{"arguments":{"client_model":"GPT-6"},"name":"cptr_list_workspaces"}';
   const expectedRawOutputTokens = getEncoding("o200k_base").encode(expectedRawOutputEnvelope).length;
   assert.equal(
     usage[0].output_tokens_estimated,
@@ -474,7 +474,7 @@ try {
   );
   const failureCall = await failureClient.client.callTool({
     name: toolName,
-    arguments: { client_model: "GPT-5.6 Sol" },
+    arguments: { client_model: "GPT-6" },
   });
   assert.notEqual(
     failureCall.isError,

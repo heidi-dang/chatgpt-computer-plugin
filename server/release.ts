@@ -49,9 +49,11 @@ export function currentPluginUpdateManifest(
     core_tool_count: MCP_CONTRACT_TOOL_COUNT,
     legacy_registered_tool_count: MCP_LEGACY_REGISTERED_TOOL_COUNT,
     release_sha: env.GIT_COMMIT_SHA ?? env.RAILWAY_GIT_COMMIT_SHA ?? env.CPTR_WORKBENCH_BUILD_ID ?? null,
-    released_at: env.CPTR_RELEASED_AT?.trim() || "2026-09-08",
-    summary: `CPTR Computer v${CPTR_APP_VERSION} restores Live Workbench activity routing across compact stateless MCP requests while preserving the Capability OS security and execution boundaries.`,
+    released_at: env.CPTR_RELEASED_AT?.trim() || "2026-10-08",
+    summary: `CPTR Computer v${CPTR_APP_VERSION} adds GPT-6-aware model diagnostics and guidance while preserving Capability OS authorization, Live Workbench routing, and MCP tool contracts.`,
     changes: [
+      "Recognizes self-reported GPT-6 model names in canonical usage diagnostics without guessing unknown variants, model token precision, host inference concurrency, or permissions.",
+      "Updates ChatGPT model guidance and verifies GPT-6 usage telemetry end to end while retaining older model aliases and the 16-tool compact MCP surface.",
       "Restores the ChatGPT Official Live Terminal across fresh compact stateless MCP servers by routing every supported call through the owning Workbench session, recognizing nested compact payload target identities, and stripping route-only metadata before backend dispatch.",
       "Completes the compact 16-tool Capability OS edge by removing explicit Live Terminal rendering from the normal ChatGPT surface while keeping execution, persistence, authority, recovery, MCP acquisition, and artifact ownership server-authoritative in CPTR.",
       "Makes Live Workbench restart-safe with sealed capabilities and durable generation/revocation state backed by the configured production state database.",

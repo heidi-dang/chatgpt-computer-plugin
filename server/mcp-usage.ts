@@ -18,6 +18,7 @@ const DEFAULT_USAGE_QUEUE_MAX = 256;
 const MAX_USAGE_QUEUE_MAX = 4_096;
 
 const MODEL_ALIASES = new Map<string, string>([
+  ["gpt-6", "gpt-6"],
   ["gpt-5.6-sol", "gpt-5.6-sol"],
   ["gpt-5.6", "gpt-5.6-sol"],
   ["gpt-5.6-sol-pro", "gpt-5.6-sol-pro"],
