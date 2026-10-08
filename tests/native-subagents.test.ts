@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -403,6 +404,97 @@ test("native fan-out rejects clients without sampling tools before allocating re
     );
     assert.equal(fake.spawnCalls, 0, testCase.name);
     assert.equal(fake.workerCreates.length, 0, testCase.name);
+    coordinator.close();
+  }
+});
+
+test("five-way ChatGPT fan-out fails closed without host sampling.tools and persists no cohort", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cptr-phase2-sampling-unsupported-"));
+  const path = join(root, "subagents.sqlite");
+  const fake = new FakeComputer();
+  const coordinator = new NativeSubagentCoordinator(fake as unknown as ComputerClient, {
+    stateDbPath: path,
+    signingKey: Buffer.alloc(32, 19),
+  });
+  const request = {
+    task_id: "parent",
+    tasks: Array.from({ length: 5 }, (_, i) => `read-only audit ${i + 1}`),
+    coding: false,
+    idempotency_key: "official-chatgpt-five-way",
+  };
+  try {
+    for (let retry = 0; retry < 2; retry += 1) {
+      await assert.rejects(
+        coordinator.run(request, context(undefined, undefined, new AbortController().signal, {
+          sampling: {},
+        }), "GPT-6"),
+        (error: unknown) => {
+          assert.ok(error instanceof MissingRequiredClientCapabilityError);
+          assert.deepEqual(error.requiredCapabilities, { sampling: { tools: {} } });
+          return true;
+        },
+      );
+    }
+    assert.equal(fake.spawnCalls, 0, "the backend must not allocate child tasks");
+    assert.equal(fake.workerCreates.length, 0, "the request must not allocate coding workers");
+    coordinator.close();
+    const db = new DatabaseSync(path);
+    try {
+      const row = db.prepare("SELECT count(*) as n FROM native_subagent_fanouts").get() as { n: number };
+      assert.equal(row.n, 0, "a rejected request must not persist idempotency/cohort state");
+    } finally {
+      db.close();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("native ChatGPT five-way sampling requests are batched in one input-required round", async () => {
+  const fake = new FakeComputer();
+  const coordinator = new NativeSubagentCoordinator(
+    fake as unknown as ComputerClient,
+    { signingKey: Buffer.alloc(32, 20) },
+  );
+  const request = {
+    task_id: "parent",
+    tasks: Array.from({ length: 5 }, (_, i) => `read-only audit ${i + 1}`),
+    coding: false,
+    idempotency_key: "five-way-batch",
+  };
+  try {
+    const first = await coordinator.run(request, context(), "GPT-6");
+    assert.equal(isInputRequiredResult(first), true);
+    const inputRequests = (first as { inputRequests: Record<string, any> }).inputRequests;
+    assert.deepEqual(Object.keys(inputRequests), [
+      "branch-1", "branch-2", "branch-3", "branch-4", "branch-5",
+    ]);
+    for (const value of Object.values(inputRequests)) {
+      assert.equal(value.method, "sampling/createMessage");
+      assert.equal(value.params.modelPreferences.hints[0].name, "GPT-6");
+    }
+    assert.equal(fake.spawnCalls, 1);
+    assert.equal(fake.workerCreates.length, 0, "reasoning-only continuations must not allocate workers");
+    const retryState = await decodedRetryState(
+      coordinator,
+      first as unknown as Record<string, unknown>,
+    );
+    const responses = Object.fromEntries(
+      request.tasks.map((_, i) => [`branch-${i + 1}`, samplingText(`audit ${i + 1} complete`)]),
+    );
+    const final = await coordinator.run(
+      request, context(retryState, responses), "GPT-6",
+    ) as Record<string, any>;
+    assert.equal(final.completed, 5);
+    assert.equal(final.failed, 0);
+    assert.equal(fake.spawnCalls, 1);
+    assert.deepEqual(fake.archives.sort(), [
+      "child-1", "child-2", "child-3", "child-4", "child-5",
+    ]);
+    const replay = await coordinator.run(request, context(), "GPT-6") as Record<string, any>;
+    assert.equal(replay.completed, 5);
+    assert.equal(fake.spawnCalls, 1, "idempotent replay must not allocate a duplicate cohort");
+  } finally {
     coordinator.close();
   }
 });
