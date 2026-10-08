@@ -187,6 +187,9 @@ const TerminalLine = React.memo(function TerminalLine({ row }: { row: TerminalRo
 function transportState(connection: string): TerminalTransportState {
   const normalizedConnection = connection.toLowerCase();
   if (normalizedConnection.includes("reconnect")) return "reconnecting";
+  // A disconnected transport contains the substring "connect", but must not
+  // be presented as actively connecting after a cancelled or closed stream.
+  if (normalizedConnection.includes("disconnect")) return "offline";
   if (normalizedConnection.includes("live") && !normalizedConnection.includes("disabled")) return "live";
   if (
     normalizedConnection.includes("connect") ||

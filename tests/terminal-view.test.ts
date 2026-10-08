@@ -58,6 +58,29 @@ test("default widget matches the ChatGPT Terminal live surface", () => {
   assert.equal(html.includes("›_"), false);
 });
 
+test("terminal does not mistake disconnected SSE for a pending reconnection", () => {
+  for (const connection of ["disconnected", "transport disconnected", "SSE disconnected"]) {
+    const html = renderToStaticMarkup(React.createElement(TerminalView, {
+      rows: [],
+      status: "DISCONNECTED",
+      connection,
+      machineLabel: "CPTR Computer",
+      targetLabel: "No active terminal",
+    }));
+    assert.match(html, />DISCONNECTED</, "an unbound terminal must remain disconnected");
+    assert.match(html, /SSE OFFLINE/, "a disconnected transport must be offline");
+    assert.doesNotMatch(html, /SSE CONNECTING/);
+  }
+
+  const recovering = renderToStaticMarkup(React.createElement(TerminalView, {
+    rows: [],
+    status: "READY",
+    connection: "reconnecting prompt activity",
+    targetLabel: "Waiting for terminal session",
+  }));
+  assert.match(recovering, /SSE RECONNECTING/, "real reconnection must remain visible");
+});
+
 test("terminal text normalization matches the ChatGPT Terminal control-byte contract", () => {
   assert.equal(normalizeTerminalText("\u001b[32mgreen\u001b[0m\r\nnext\b!"), "green\nnex!");
   assert.equal(normalizeTerminalText("\u001b]0;title\u0007prompt\rprogress"), "prompt\nprogress");
