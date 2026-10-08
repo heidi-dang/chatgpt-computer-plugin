@@ -561,7 +561,7 @@ const DELEGATE_GROUP_DESCRIPTION =
   "Tool group: Delegated Agent. This tool is model/agent-backed CPTR orchestration or lifecycle control. It is blocked unless the current user prompt contains the exact opt-in token `allow:delegate` and the prompt Workbench session was opened with delegation_authorization=`allow:delegate`. The opt-in applies to CPTR native agents/models and other agent profiles such as Codex or Hermes.";
 
 export const CLIENT_MODEL_INSTRUCTION =
-  "When you are ChatGPT and invoke any CPTR tool, set client_model to the exact current model identity you are running as for this tool call, for example GPT-5.6 Sol. Report the current value on every CPTR tool call; do not reuse or infer it from an earlier call. If the current model identity is unavailable, omit client_model rather than guessing.";
+  "When you are ChatGPT and invoke any CPTR tool, set client_model to the exact current model identity you are running as for this tool call, for example GPT-6. Report the current value on every CPTR tool call; do not reuse or infer it from an earlier call. This self-reported value is for diagnostics only and never grants permissions or verifies host capabilities. If the current model identity is unavailable, omit client_model rather than guessing.";
 export const PERSISTENT_MEMORY_INSTRUCTION =
   "When prior user preferences, workspace decisions, procedures, corrections, failure history, or historical state could materially affect a CPTR task, use cptr_memory with action=search before guessing. Treat persistent memory as contextual knowledge rather than live host truth: honor trust/staleness signals and verify mutable operational facts with current evidence before acting.";
 export const LIVE_WORKBENCH_ROUTING_INSTRUCTION =
