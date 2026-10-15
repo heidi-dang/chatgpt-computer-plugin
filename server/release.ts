@@ -49,9 +49,10 @@ export function currentPluginUpdateManifest(
     core_tool_count: MCP_CONTRACT_TOOL_COUNT,
     legacy_registered_tool_count: MCP_LEGACY_REGISTERED_TOOL_COUNT,
     release_sha: env.GIT_COMMIT_SHA ?? env.RAILWAY_GIT_COMMIT_SHA ?? env.CPTR_WORKBENCH_BUILD_ID ?? null,
-    released_at: env.CPTR_RELEASED_AT?.trim() || "2026-10-08",
-    summary: `CPTR Computer v${CPTR_APP_VERSION} adds GPT-6-aware model diagnostics and guidance while preserving Capability OS authorization, Live Workbench routing, and MCP tool contracts.`,
+    released_at: env.CPTR_RELEASED_AT?.trim() || "2026-10-15",
+    summary: `CPTR Computer v${CPTR_APP_VERSION} fixes the FDX impact default depth while preserving GPT-6 diagnostics, Capability OS authorization, and Live Workbench routing.`,
     changes: [
+      "Uses one-hop default depth for FDX impact v1 while preserving three-hop defaults for other operations and explicitly requested depths.",
       "Recognizes self-reported GPT-6 model names in canonical usage diagnostics without guessing unknown variants, model token precision, host inference concurrency, or permissions.",
       "Updates ChatGPT model guidance and verifies GPT-6 usage telemetry end to end while retaining older model aliases and the 16-tool compact MCP surface.",
       "Restores the ChatGPT Official Live Terminal across fresh compact stateless MCP servers by routing every supported call through the owning Workbench session, recognizing nested compact payload target identities, and stripping route-only metadata before backend dispatch.",
