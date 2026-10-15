@@ -148,6 +148,10 @@ test("advertises dedicated autonomous tools with accurate annotations", async ()
   assert.match(tools.get("cptr_fdx_intelligence")?.title ?? "", /^\[ChatGPT Direct Coding\]/);
   assert.match(tools.get("cptr_fdx_intelligence")?.description ?? "", /preferred first repository-intelligence/i);
   assert.notEqual(tools.get("cptr_fdx_intelligence")?.inputSchema.properties?.action, undefined);
+  // Omitted depth must reach the action-specific default logic, not Zod's old depth=3.
+  const fdxDepthProperty = tools.get("cptr_fdx_intelligence")?.inputSchema.properties?.depth;
+  assert.ok(fdxDepthProperty && typeof fdxDepthProperty === "object" && !Array.isArray(fdxDepthProperty));
+  assert.equal(Object.hasOwn(fdxDepthProperty, "default"), false);
   assert.notEqual(tools.get("cptr_fdx_intelligence")?.inputSchema.properties?.worker_id, undefined);
   assert.equal(tools.get("cptr_fdx_intelligence")?.inputSchema.properties?.model_id, undefined);
   assert.equal(tools.get("cptr_code_write_file")?.annotations?.destructiveHint, true);

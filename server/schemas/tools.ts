@@ -341,7 +341,7 @@ export const fdxIntelligenceSchema = {
   mode: z.enum(["auto", "raw", "prototype", "deep"]).default("auto"),
   kind: z.string().max(120).optional(),
   direction: z.enum(["in", "out", "both"]).default("both"),
-  depth: z.number().int().min(1).max(20).default(3),
+  depth: z.number().int().min(1).max(20).optional(),
   base: z.string().max(300).optional(),
   head: z.string().max(300).optional(),
   limit: z.number().int().min(1).max(20_000).optional(),

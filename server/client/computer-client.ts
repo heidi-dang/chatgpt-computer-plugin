@@ -892,6 +892,11 @@ export class ComputerClient {
     [key: string]: unknown;
   }): Promise<Record<string, unknown>> {
     const { workspace_id, ...body } = input;
+    // Impact v1 supports one hop only; keep the existing 3-hop default elsewhere.
+    // Preserve an explicitly requested depth so unsupported requests fail honestly.
+    if (body.depth === undefined) {
+      body.depth = body.action === "impact" ? 1 : 3;
+    }
     return this.request(`/workspaces/${encodeURIComponent(workspace_id)}/coding/fdx`, {
       method: "POST",
       body,

@@ -358,6 +358,25 @@ test("routes the single FDX intelligence gateway with repository and worker scop
   });
 });
 
+test("uses the supported default depth for FDX impact without changing other actions", async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const client = new ComputerClient({
+    baseUrl: "http://cptr.test",
+    token: "secret-token",
+    fetchImpl: async (_input, init) => {
+      requests.push(JSON.parse(String(init?.body ?? "{}")));
+      return new Response(JSON.stringify({ status: "ok", data: {} }), { status: 200 });
+    },
+  });
+  await client.runFdxIntelligence({ workspace_id: "ws-1", action: "impact", path: "src/a.ts" });
+  await client.runFdxIntelligence({ workspace_id: "ws-1", action: "impact_v2", base: "HEAD" });
+  await client.runFdxIntelligence({ workspace_id: "ws-1", action: "why", target: "src/a.ts" });
+  await client.runFdxIntelligence({ workspace_id: "ws-1", action: "impact", depth: 2 });
+
+  assert.deepEqual(requests.map((request) => request.depth), [1, 3, 3, 2]);
+  assert.equal(requests[0]?.workspace_id, undefined);
+});
+
 test("normalizes CPTR errors without exposing credentials", async () => {
   const client = new ComputerClient({
     baseUrl: "http://cptr.test",
