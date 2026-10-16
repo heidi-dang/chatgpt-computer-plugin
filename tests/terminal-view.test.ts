@@ -354,6 +354,22 @@ test("follow-tail stays enabled near the bottom and pauses when the user scrolls
   assert.equal(isNearTerminalTail(1000, 800, 200), true);
 });
 
+test("terminal freezes the rendered row window while reading earlier output", () => {
+  const terminal = readFileSync(new URL("../web/src/terminal-view.tsx", import.meta.url), "utf8");
+  const workbench = readFileSync(new URL("../web/src/workbench.tsx", import.meta.url), "utf8");
+
+  assert.match(terminal, /const activePausedWindow = !follow && pausedWindow\?\.targetLabel === targetLabel/);
+  assert.match(terminal, /const visibleRows = activePausedWindow\?\.rows \?\? latestRows/);
+  assert.match(terminal, /setPausedWindow\(value \? null : visibleWindowRef\.current\)/);
+  assert.match(terminal, /onWheel=\{\(event\) => \{ if \(event\.deltaY < 0\) setFollow\(false\)/);
+  assert.match(terminal, /onTouchMove=\{onTouchMove\}/);
+  assert.match(terminal, /onKeyDown=\{onKeyDown\}/);
+  assert.match(workbench, /const terminalScrollTop = useRef\(0\)/);
+  assert.match(workbench, /terminalScrollTop\.current = scrollTop/);
+  assert.doesNotMatch(workbench, /setTerminalViewState/, "scroll updates must not rerender the Workbench");
+  assert.doesNotMatch(terminal, /\[follow, scrollTop\]/, "streaming rows must not override a paused touch viewport");
+});
+
 test("terminal follow-tail disables browser scroll anchoring and smooth-scroll lag", () => {
   const css = readFileSync(new URL("../web/src/workbench.css", import.meta.url), "utf8");
   assert.match(css, /\.terminal-output\s*\{[\s\S]*overflow-anchor:\s*none/);
@@ -453,7 +469,8 @@ test("Workbench recovery contract survives iOS suspension, replay, and browser l
   assert.match(browserSource, /response\.status\s*===\s*409/);
   assert.match(browserSource, /consecutiveNoFrames/);
   assert.match(browserSource, /viewer_id/);
-  assert.match(source, /terminalViewState/);
+  assert.match(source, /const \[terminalFollow, setTerminalFollowState\]/);
+  assert.match(source, /const terminalScrollTop = useRef\(0\)/);
   assert.match(readFileSync(new URL("../web/src/terminal-view.tsx", import.meta.url), "utf8"), /onScrollTopChange/);
 });
 

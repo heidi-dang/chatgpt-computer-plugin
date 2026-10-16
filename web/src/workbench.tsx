@@ -921,10 +921,13 @@ function OwnedWorkbench() {
   const liveStreamingEnabled = promptMetadata?.streamingEnabled === true;
   const [surfaceMode, setSurfaceMode] = useState<"terminal" | "browser">(restoredUiState.current.surfaceMode ?? "terminal");
   const [browserSurface, setBrowserSurface] = useState<BrowserSurfaceState | null>(null);
-  const [terminalViewState, setTerminalViewState] = useState({
-    follow: restoredUiState.current.terminalFollow ?? true,
-    scrollTop: 0,
-  });
+  const [terminalFollow, setTerminalFollowState] = useState(restoredUiState.current.terminalFollow ?? true);
+  // Scroll coordinates are high-frequency, nonvisual bookkeeping. Updating
+  // React state on every scroll frame needlessly rerenders the whole Workbench.
+  const terminalScrollTop = useRef(0);
+  const trackTerminalScrollTop = useCallback((scrollTop: number) => {
+    terminalScrollTop.current = scrollTop;
+  }, []);
   const promptActivity = usePromptActivity(
     promptMetadata,
     setPromptMetadata,
@@ -973,10 +976,10 @@ function OwnedWorkbench() {
     setSurfaceMode(next);
     persistWorkbenchUiState(persistedUiState, { surfaceMode: next });
   };
-  const setTerminalFollow = (follow: boolean) => {
-    setTerminalViewState((current) => ({ ...current, follow }));
+  const setTerminalFollow = useCallback((follow: boolean) => {
+    setTerminalFollowState(follow);
     persistWorkbenchUiState(persistedUiState, { terminalFollow: follow });
-  };
+  }, []);
 
   return <main className={`terminal-workbench${isSuperseded ? " is-superseded" : ""}`} aria-label="CPTR live computer">
     <div className="surface-switch" role="group" aria-label="Live computer surface">
@@ -1003,10 +1006,10 @@ function OwnedWorkbench() {
           connection={connection}
           machineLabel="CPTR Computer"
           targetLabel={targetLabel(meta)}
-          follow={terminalViewState.follow}
-          scrollTop={terminalViewState.scrollTop}
+          follow={terminalFollow}
+          scrollTop={terminalScrollTop.current}
           onFollowChange={setTerminalFollow}
-          onScrollTopChange={(scrollTop) => setTerminalViewState((current) => ({ ...current, scrollTop }))}
+          onScrollTopChange={trackTerminalScrollTop}
         />}
   </main>;
 }

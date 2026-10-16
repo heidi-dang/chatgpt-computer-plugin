@@ -27,6 +27,12 @@ type RichToken = {
   className?: string;
 };
 
+type PausedTerminalWindow = {
+  targetLabel: string;
+  rows: TerminalRow[];
+  hiddenRowCount: number;
+};
+
 const TERM_RE = /(^.*?[$#>]\s)([\w./:+-]+)?|(^\s*(?:\/\/|#\s)[^\n]*)|\b(ERROR|FAIL|FATAL|EXCEPTION)\b|\b(WARN(?:ING)?)\b|\b(PASS|SUCCESS|DONE|OK)\b|("[^"\n]*"|'[^'\n]*')|(--?[\w-]+)|((?:~|\.{1,2})?\/[^\s"';|&]+)|(\b\d+(?:\.\d+)?\b)|\b(const|let|var|function|class|if|else|for|while|return|import|from|export|async|await|new|true|false|null|undefined)\b/gim;
 const TERM_KIND = ["", "prompt", "command", "comment", "error", "warning", "success", "string", "option", "path", "number", "keyword"];
 const ANSI_SGR_RE = /\u001b\[([0-9;]*)m/g;
@@ -242,21 +248,30 @@ export function TerminalView({
   const follow = controlledFollow ?? localFollow;
   const followRef = useRef(follow);
   followRef.current = follow;
-  const setFollow = (value: boolean) => {
-    if (value === followRef.current) return;
-    followRef.current = value;
-    setLocalFollow(value);
-    onFollowChange?.(value);
-  };
   const [renderedRowLimit, setRenderedRowLimit] = useState(initialRenderedRowLimit);
+  const [pausedWindow, setPausedWindow] = useState<PausedTerminalWindow | null>(null);
   const state = displayState(status, connection);
   const transport = transportState(connection);
   const exitCode = useMemo(() => exitCodeFromRows(rows), [rows]);
-  const hiddenRowCount = Math.max(0, rows.length - renderedRowLimit);
-  const visibleRows = useMemo(
-    () => hiddenRowCount ? rows.slice(rows.length - renderedRowLimit) : rows,
-    [hiddenRowCount, renderedRowLimit, rows],
+  const latestHiddenRowCount = Math.max(0, rows.length - renderedRowLimit);
+  const latestRows = useMemo(
+    () => latestHiddenRowCount ? rows.slice(rows.length - renderedRowLimit) : rows,
+    [latestHiddenRowCount, renderedRowLimit, rows],
   );
+  // Freeze the exact DOM window while someone reads earlier output. Otherwise
+  // each new row evicts an old node at the top, shifting the scroll viewport.
+  const activePausedWindow = !follow && pausedWindow?.targetLabel === targetLabel ? pausedWindow : null;
+  const hiddenRowCount = activePausedWindow?.hiddenRowCount ?? latestHiddenRowCount;
+  const visibleRows = activePausedWindow?.rows ?? latestRows;
+  const visibleWindowRef = useRef<PausedTerminalWindow>({ targetLabel, rows: visibleRows, hiddenRowCount });
+  visibleWindowRef.current = { targetLabel, rows: visibleRows, hiddenRowCount };
+  const setFollow = (value: boolean) => {
+    if (value === followRef.current) return;
+    followRef.current = value;
+    setPausedWindow(value ? null : visibleWindowRef.current);
+    setLocalFollow(value);
+    onFollowChange?.(value);
+  };
 
   useEffect(() => {
     const media = window.matchMedia(MOBILE_RENDER_QUERY);
@@ -284,13 +299,11 @@ export function TerminalView({
     if (follow) pinToTail();
   }, [visibleRows, follow, pinToTail]);
 
-  // When follow-tail is paused, preserve the user's viewport while new rows
-  // continue streaming underneath it.
+  // Restore a paused viewport only on remount (e.g. Browser -> Terminal).
+  // Re-applying scrollTop during every streamed update fights touch momentum.
   useEffect(() => {
-    if (follow) return;
-    const element = output.current;
-    if (element) element.scrollTop = scrollTop;
-  }, [follow, scrollTop]);
+    if (!followRef.current && output.current) output.current.scrollTop = scrollTop;
+  }, []);
 
   useEffect(() => () => {
     if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
@@ -308,12 +321,25 @@ export function TerminalView({
     });
   }, [onScrollTopChange]);
 
-  const resumeFollowTail = useCallback(() => {
+  const resumeFollowTail = () => {
     setFollow(true);
     const element = output.current;
     if (element) element.scrollTop = element.scrollHeight;
     pinToTail();
-  }, [pinToTail]);
+  };
+  const touchStartY = useRef<number | null>(null);
+  const onTouchStart = (event: React.TouchEvent<HTMLPreElement>) => {
+    touchStartY.current = event.touches.length === 1 ? event.touches[0].clientY : null;
+  };
+  const onTouchMove = (event: React.TouchEvent<HTMLPreElement>) => {
+    if (touchStartY.current !== null && event.touches.length === 1 && event.touches[0].clientY > touchStartY.current + 5) {
+      setFollow(false);
+      touchStartY.current = null;
+    }
+  };
+  const onKeyDown = (event: React.KeyboardEvent<HTMLPreElement>) => {
+    if (["ArrowUp", "PageUp", "Home"].includes(event.key)) setFollow(false);
+  };
 
   return <section className="terminal-shell" data-state={state} data-transport={transport} aria-label="CPTR live terminal">
     <header className="terminal-header">
@@ -335,6 +361,12 @@ export function TerminalView({
         className="terminal-output"
         ref={output}
         onScroll={onScroll}
+        onWheel={(event) => { if (event.deltaY < 0) setFollow(false); }}
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={() => { touchStartY.current = null; }}
+        onTouchCancel={() => { touchStartY.current = null; }}
+        onKeyDown={onKeyDown}
         tabIndex={0}
         aria-label="Live terminal output"
         aria-live="off"
