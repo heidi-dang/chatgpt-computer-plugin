@@ -7,6 +7,14 @@ on:
         description: Full 40-character Git SHA expected to be live
         required: true
         type: string
+      backend_release_sha:
+        description: Full 40-character backend commit to qualify with the plugin
+        required: true
+        type: string
+      extension_release_sha:
+        description: Full 40-character browser extension commit to qualify with the plugin
+        required: true
+        type: string
       run_managed_oauth_contract:
         description: Run the authenticated MCP contract with a short-lived Managed OAuth client token
         required: false
@@ -143,6 +151,81 @@ jobs:
             echo '- expected tool surface: compact'
           } >> "$GITHUB_STEP_SUMMARY"
 
+  release-guardian:
+    name: Immutable cross-repo and session-recovery acceptance
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      EXPECTED_PLUGIN_SHA: ${{ inputs.expected_release_sha }}
+      EXPECTED_BACKEND_SHA: ${{ inputs.backend_release_sha }}
+      EXPECTED_EXTENSION_SHA: ${{ inputs.extension_release_sha }}
+    steps:
+      - name: Require exact three-member release tuple
+        run: |
+          for sha in "$EXPECTED_PLUGIN_SHA" "$EXPECTED_BACKEND_SHA" "$EXPECTED_EXTENSION_SHA"; do
+            printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'
+          done
+
+      - name: Checkout Guardian verifier from current main
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+
+      - name: Checkout exact plugin release
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.expected_release_sha }}
+          path: release/plugin
+
+      - name: Checkout exact backend release
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: heidi-dang/computer
+          ref: ${{ inputs.backend_release_sha }}
+          path: release/backend
+          token: ${{ secrets.CPTR_CROSS_REPO_TOKEN || github.token }}
+
+      - name: Checkout exact browser extension release
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: heidi-dang/chatgpt-chrome-extension
+          ref: ${{ inputs.extension_release_sha }}
+          path: release/extension
+          token: ${{ secrets.CPTR_CROSS_REPO_TOKEN || github.token }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: release/plugin/package-lock.json
+
+      - name: Install pinned plugin dependencies
+        working-directory: release/plugin
+        run: npm ci
+
+      - name: Run evidence-gated Release Guardian
+        run: |
+          node scripts/release-guardian.mjs \
+            --plugin=release/plugin \
+            --backend=release/backend \
+            --extension=release/extension \
+            --plugin-sha="$EXPECTED_PLUGIN_SHA" \
+            --backend-sha="$EXPECTED_BACKEND_SHA" \
+            --extension-sha="$EXPECTED_EXTENSION_SHA" \
+            --output="$RUNNER_TEMP/release-guardian-evidence.json" \
+            --require-clean=true
+
+      - name: Preserve Release Guardian evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-guardian-${{ github.run_id }}
+          path: ${{ runner.temp }}/release-guardian-evidence.json
+          if-no-files-found: warn
+          retention-days: 30
+
   manual-release-acceptance:
     name: Manual exact-SHA release acceptance
     if: ${{ always() && github.event_name == 'workflow_dispatch' }}
@@ -150,9 +233,14 @@ jobs:
       - public-edge
       - authenticated-contract
       - managed-oauth-authenticated-contract
+      - release-guardian
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      - name: Require cross-repo and session-recovery qualification
+        run: |
+          test "${{ needs['release-guardian'].result }}" = "success"
+
       - name: Require public-edge qualification
         run: |
           test "${{ needs['public-edge'].result }}" = "success"
