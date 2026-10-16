@@ -46,13 +46,17 @@ test("Release Guardian rejects mismatched and nested repository roots", () => {
   assert.throws(() => verifyCheckout("plugin", new URL("../scripts/", import.meta.url).pathname, sha.stdout.trim()), /Git worktree root/);
 });
 
-test("manual release acceptance requires guardian and authenticated production evidence", () => {
+test("source/edge readiness retains Guardian and separate manual acceptance requires authentication", () => {
   const workflow = readFileSync(new URL("../.github/workflows/production-qualification.yml", import.meta.url), "utf8");
   assert.match(workflow, /backend_release_sha:[\s\S]*?required: true/);
   assert.match(workflow, /extension_release_sha:[\s\S]*?required: true/);
   assert.match(workflow, /release-guardian:[\s\S]*?--require-clean=true/);
   assert.match(workflow, /needs\['release-guardian'\]\.result/);
   assert.match(workflow, /needs\['authenticated-contract'\]\.result/);
-  assert.match(workflow, /needs\['managed-oauth-authenticated-contract'\]\.result/);
+  assert.match(workflow, /source-edge-readiness:/);
+  assert.doesNotMatch(workflow, /managed-oauth-authenticated-contract:/);
+  const manual = readFileSync(new URL("../.github/workflows/managed-oauth-release-acceptance.yml", import.meta.url), "utf8");
+  assert.match(manual, /needs\['managed-oauth-authenticated-contract'\]\.result/);
+  assert.match(manual, /needs\['release-guardian'\]\.result/);
   assert.match(workflow, /actions\/upload-artifact@/);
 });

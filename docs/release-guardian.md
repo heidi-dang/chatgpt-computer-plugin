@@ -16,9 +16,11 @@ All five checks must pass. Failed, missing and skipped checks are not acceptable
 
 ## Release acceptance
 
-The production-qualification workflow requires a successful Release Guardian job, public-edge canary, and the authenticated deployed MCP contract check for the configured Cloudflare auth mode. Managed OAuth acceptance must use the intended short-lived Managed OAuth token; do not substitute an origin bypass token.
+The routine production-qualification workflow runs the Release Guardian and public-edge canary, retaining authenticated contract checks for native OAuth. For Cloudflare Managed OAuth, its success means source/edge readiness ONLY, not fully authenticated release acceptance.
 
-Manual workflow_dispatch requires expected_release_sha, backend_release_sha, and extension_release_sha. Scheduled canaries check the public edge but are not release acceptance.
+Cloudflare Managed OAuth authentication is checked in the separate, explicitly dispatched `managed-oauth-release-acceptance.yml` workflow. It repeats the exact-SHA Guardian/public-edge checks and requires a fresh genuine Cloudflare Managed OAuth client token for the authenticated MCP contract. Missing or failed authenticated checks must still reject full release acceptance; never substitute an origin-bypass bearer.
+
+Both manual workflows require `expected_release_sha`, `backend_release_sha`, and `extension_release_sha`. Scheduled canaries check the public edge but never establish release acceptance. Routine source/edge CI must not be reported as authenticated Managed OAuth acceptance.
 
 The plugin/backend/extension Git checkouts use the declared immutable revisions. Private sibling repositories may require the existing CPTR_CROSS_REPO_TOKEN repository secret. Guardian uploads a JSON artifact retained 30 days and records a job summary.
 

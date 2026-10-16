@@ -15,11 +15,6 @@ on:
         description: Full 40-character browser extension commit to qualify with the plugin
         required: true
         type: string
-      run_managed_oauth_contract:
-        description: Run the authenticated MCP contract with a short-lived Managed OAuth client token
-        required: false
-        default: true
-        type: boolean
   schedule:
     - cron: "43 3 * * *"
 
@@ -102,55 +97,6 @@ jobs:
       - name: Verify deployed MCP 2026 contract and exact release SHA
         run: npm run check:deployed-contract
 
-  managed-oauth-authenticated-contract:
-    name: Managed OAuth authenticated MCP 2026 contract
-    if: ${{ github.event_name == 'workflow_dispatch' && vars.CPTR_EDGE_AUTH_MODE == 'cloudflare-managed' && inputs.run_managed_oauth_contract }}
-    needs: public-edge
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      CPTR_DEPLOYED_MCP_URL: ${{ vars.CPTR_DEPLOYED_MCP_URL }}
-      # This must be a short-lived access token obtained through the intended
-      # Cloudflare Managed OAuth client flow. It is not an origin bypass token.
-      CPTR_DEPLOYED_MCP_TOKEN: ${{ secrets.CPTR_MANAGED_OAUTH_ACCESS_TOKEN }}
-      CPTR_EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
-      CPTR_EXPECTED_TOOL_SURFACE: compact
-    steps:
-      - name: Require Managed OAuth acceptance credentials and immutable release
-        run: |
-          test -n "$CPTR_DEPLOYED_MCP_URL"
-          test -n "$CPTR_DEPLOYED_MCP_TOKEN"
-          printf '%s' "$CPTR_EXPECTED_RELEASE_SHA" | grep -Eq '^[0-9a-f]{40}$'
-
-      - name: Checkout exact release under test
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ inputs.expected_release_sha }}
-
-      - name: Set up Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: "22"
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Verify authenticated MCP through Managed OAuth and exact release SHA
-        run: npm run check:deployed-contract
-
-      - name: Record authenticated Managed OAuth acceptance evidence
-        if: ${{ success() }}
-        run: |
-          {
-            echo '### Managed OAuth authenticated acceptance'
-            echo
-            echo "- release: \`$CPTR_EXPECTED_RELEASE_SHA\`"
-            echo '- auth path: Cloudflare Managed OAuth client token'
-            echo '- MCP contract: passed'
-            echo '- expected tool surface: compact'
-          } >> "$GITHUB_STEP_SUMMARY"
-
   release-guardian:
     name: Immutable cross-repo and session-recovery acceptance
     if: ${{ github.event_name == 'workflow_dispatch' }}
@@ -226,13 +172,12 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  manual-release-acceptance:
-    name: Manual exact-SHA release acceptance
+  source-edge-readiness:
+    name: Manual source/edge readiness (not authenticated release acceptance)
     if: ${{ always() && github.event_name == 'workflow_dispatch' }}
     needs:
       - public-edge
       - authenticated-contract
-      - managed-oauth-authenticated-contract
       - release-guardian
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -245,20 +190,18 @@ jobs:
         run: |
           test "${{ needs['public-edge'].result }}" = "success"
 
-      - name: Require auth-mode-specific authenticated contract
+      - name: Require supported edge mode and native authentication where applicable
         env:
           EDGE_AUTH_MODE: ${{ vars.CPTR_EDGE_AUTH_MODE }}
-          RUN_MANAGED_OAUTH_CONTRACT: ${{ inputs.run_managed_oauth_contract }}
           NATIVE_CONTRACT_RESULT: ${{ needs['authenticated-contract'].result }}
-          MANAGED_CONTRACT_RESULT: ${{ needs['managed-oauth-authenticated-contract'].result }}
         run: |
           case "$EDGE_AUTH_MODE" in
             native)
               test "$NATIVE_CONTRACT_RESULT" = "success"
               ;;
             cloudflare-managed)
-              test "$RUN_MANAGED_OAUTH_CONTRACT" = "true"
-              test "$MANAGED_CONTRACT_RESULT" = "success"
+              test "$NATIVE_CONTRACT_RESULT" = "skipped"
+              echo "::notice::Managed OAuth authentication is not tested by source/edge CI. Run dedicated manual acceptance."
               ;;
             *)
               echo "Unsupported production edge auth mode: $EDGE_AUTH_MODE" >&2
@@ -266,13 +209,21 @@ jobs:
               ;;
           esac
 
-      - name: Record manual release acceptance
+      - name: Record source/edge readiness without claiming authenticated acceptance
+        env:
+          EDGE_AUTH_MODE: ${{ vars.CPTR_EDGE_AUTH_MODE }}
         run: |
           {
-            echo '### Manual exact-SHA release acceptance'
+            echo '### Source and public-edge readiness (NOT authenticated release acceptance)'
             echo
-            echo "- release: \`${{ inputs.expected_release_sha }}\`"
-            echo "- edge auth mode: \`${{ vars.CPTR_EDGE_AUTH_MODE }}\`"
+            echo "- release: ${{ inputs.expected_release_sha }}"
+            echo "- edge auth mode: $EDGE_AUTH_MODE"
+            echo '- Release Guardian: passed'
             echo '- public edge: passed'
-            echo '- authenticated MCP contract: passed'
+            if [ "$EDGE_AUTH_MODE" = "native" ]; then
+              echo '- Native authenticated MCP contract: passed'
+            else
+              echo '- Managed OAuth authenticated MCP contract: NOT TESTED'
+              echo '- Full release acceptance requires separate manual Managed OAuth qualification using a fresh legitimate client token'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

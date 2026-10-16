@@ -79,11 +79,12 @@ Generated `release-*` and `hotfix-*` directories are ignored and are not source 
 
 ## CI gates
 
-The plugin repository has three independent workflows:
+The plugin repository has three routine qualification workflows and one separate manual Managed OAuth acceptance workflow:
 
 - **Plugin CI** — typecheck, test, production build.
 - **Cross-repo contract** — pull/push/scheduled runs keep the moving-`main` drift detector, while manual release qualification requires exact 40-character plugin/backend/extension SHAs, checks out that immutable tuple, verifies every checkout SHA, and records the qualified tuple in the workflow summary before comparing the manifests.
-- **Production qualification** — runs a daily unauthenticated public-edge canary through Cloudflare and supports manual exact-SHA authenticated MCP `2026-07-28` qualification for both native OAuth and Cloudflare Managed OAuth. Managed mode uses a short-lived client access token obtained through the intended Managed OAuth flow; it is never an origin-token bypass.
+- **Production qualification** — runs the public-edge canary and manual exact-SHA Release Guardian/source-edge readiness checks. Native-mode authentication remains required. Cloudflare Managed OAuth bearer authentication is not part of routine CI, and source/edge readiness is NOT full authenticated release acceptance.
+- **Managed OAuth release acceptance (manual)** — an independent, explicitly dispatched workflow. It repeats the pinned Guardian and public-edge checks and requires a valid short-lived Cloudflare Managed OAuth client token for the authenticated MCP `2026-07-28` contract. All three gates must pass.
 
 The Chrome extension has its own CI workflow running `npm run check` on pull requests and `main`.
 
@@ -183,7 +184,7 @@ A connector being able to open is not a substitute for this gate, and a successf
 
 ## Deployed MCP contract qualification
 
-The contract verifier accepts whichever access token legitimately reaches the deployed `/mcp`; it must never be used to bypass the selected edge architecture. In native mode, `CPTR_DEPLOYED_MCP_TOKEN` is valid only where direct bearer authentication is part of the qualified topology. In `cloudflare-managed` mode, the origin bearer remains invalid at the public edge; the manual `managed-oauth-authenticated-contract` workflow instead supplies `CPTR_MANAGED_OAUTH_ACCESS_TOKEN`, a short-lived token obtained through the intended Managed OAuth client flow, and runs the same exact-SHA MCP contract through Cloudflare.
+The contract verifier accepts whichever access token legitimately reaches the deployed `/mcp`; it must never be used to bypass the selected edge architecture. In native mode, `CPTR_DEPLOYED_MCP_TOKEN` is valid only where direct bearer authentication is part of the qualified topology. In `cloudflare-managed` mode, the origin bearer remains invalid at the public edge; the separate manual `managed-oauth-release-acceptance.yml` workflow instead supplies `CPTR_MANAGED_OAUTH_ACCESS_TOKEN`, a short-lived token obtained through the intended Managed OAuth client flow, and runs the same exact-SHA MCP contract through Cloudflare.
 
 For a deployment where direct bearer authentication is valid, run:
 
@@ -294,7 +295,7 @@ The production plugin deployment is accepted only in this order:
 7. Run `npm run check:host-release` and require exactly one release-authority systemd drop-in.
 8. Verify systemd reports active/running and the expected release directory.
 9. Run `npm run check:public-edge` through Cloudflare with `CPTR_EXPECTED_RELEASE_SHA` and require exact release convergence.
-10. Run the authenticated exact-SHA contract for the selected edge mode: native mode uses the legitimate direct bearer; Cloudflare Managed OAuth uses the manual `managed-oauth-authenticated-contract` job with a fresh Managed OAuth client token and must not use the origin bearer as a bypass.
+10. Run the authenticated exact-SHA contract for the selected edge mode: native mode uses the legitimate direct bearer; Cloudflare Managed OAuth requires the separate `managed-oauth-release-acceptance.yml` manual workflow with a fresh Managed OAuth client token and must not use the origin bearer as a bypass.
 11. Verify an already-authorized MCP client reports the expected contract/release (for ChatGPT, `cptr_plugin_update verify_server`).
 12. If MCP action schemas changed, perform ChatGPT's native app Refresh/review and verify again.
 
